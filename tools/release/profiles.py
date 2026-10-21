@@ -50,6 +50,20 @@ class ProfileRuntime:
     checksum_verifier: OpenPgpVerifier
     checksum_home: Path
     checksum_fingerprint: str
+    # `prepare --reprove`: run each Web Host's complete local proof (tests and
+    # browser journeys) again instead of only the reproducible build. The
+    # default relies on the exact-target complete batch evidence `prepare`
+    # already requires (#2422 item 4).
+    reprove: bool = False
+
+
+# The Web Host script legs `prepare` runs per host. The candidate batch already
+# proved the exact target's tests and browser journeys on CI, and `prepare`
+# refuses an intent without that complete evidence, so the default leg only
+# re-establishes that two clean builds are byte-identical and leaves the built
+# distribution in place. `--reprove` runs the complete local proof.
+WEB_HOST_BUILD_COMMANDS = ("reproducible",)
+WEB_HOST_REPROVE_COMMANDS = ("configure", "build", "test", "proof")
 
 
 CREATOR_WEB_SPEC = WebHostReleaseSpec(
@@ -195,7 +209,8 @@ def _build_web_host(
     intent: ReleaseIntent,
     runtime: ProfileRuntime,
 ) -> ProfileBuild:
-    for command in ("configure", "build", "test", "proof"):
+    commands = WEB_HOST_REPROVE_COMMANDS if runtime.reprove else WEB_HOST_BUILD_COMMANDS
+    for command in commands:
         runtime.runner.run(["bash", spec.script, command], cwd=worktree)
     dist = _require_directory(
         worktree / spec.dist_relative,

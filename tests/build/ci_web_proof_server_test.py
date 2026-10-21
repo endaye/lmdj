@@ -162,6 +162,42 @@ fixture_source_root=/fixtures
                 self.assertNotIn("Quick: PASS", result.stdout)
                 self.assertNotIn("Proof: PASS", result.stdout)
 
+    def test_reproducible_builds_twice_and_runs_no_tests_or_journeys(self):
+        # The release `prepare` leg: the candidate batch proved the tests and
+        # journeys for this exact revision, so prepare only re-establishes
+        # that two clean builds are the same bytes (#2422 item 4).
+        for host, suffix in (("creator", "creator"), ("runtime", "host")):
+            with self.subTest(host=host):
+                result, calls = self.invoke(host, "reproducible")
+                self.assertEqual(result.returncode, 0, result.stderr)
+                names = [call.split()[0] for call in calls]
+                build_calls = [name for name in names
+                               if name in {"clean_" + suffix, "configure_" + suffix,
+                                           "build_" + suffix, "diff"}]
+                self.assertEqual(build_calls, ["clean_" + suffix, "configure_" + suffix,
+                                              "build_" + suffix] * 2 + ["diff"])
+                for skipped in ("run_browser_gate", "test_creator", "test_creator_ui",
+                                "run_nonbrowser_tests", "run_audio_worklet_conformance",
+                                "generate_project_fixture", "generate_sample_editor_fixture",
+                                "generate_browser_fixtures", "require_playwright"):
+                    self.assertNotIn(skipped, names, skipped)
+                self.assertIn("reproducibility: PASS", result.stdout)
+                self.assertIn("Reproducible: PASS", result.stdout)
+                self.assertNotIn("Proof: PASS", result.stdout)
+                self.assertNotIn("Quick: PASS", result.stdout)
+
+    def test_reproducible_failure_is_not_a_pass_and_needs_no_audio_wrapper(self):
+        for host, filename in (("creator", "creator-web.sh"), ("runtime", "web-runtime-host.sh")):
+            with self.subTest(host=host):
+                result, _ = self.invoke(host, "reproducible", diff_status=1)
+                self.assertEqual(result.returncode, 2, result.stderr)
+                self.assertNotIn("Reproducible: PASS", result.stdout)
+                text = (REPO_ROOT / "scripts" / filename).read_text()
+                dispatch = re.search(r"^  reproducible\)\n(.*?)^    ;;$", text, re.DOTALL | re.MULTILINE)
+                self.assertIsNotNone(dispatch, "reproducible command is dispatched")
+                self.assertNotIn("local-audio-output.py", dispatch.group(1))
+                self.assertIn("reproducible", dispatch.group(1))
+
     def test_full_reproducibility_failure_stops_before_browser_journeys(self):
         for host in ("creator", "runtime"):
             result, calls = self.invoke(host, "proof", diff_status=1)

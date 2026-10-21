@@ -79,12 +79,18 @@ from tools.release.transitions import (  # noqa: E402
 )
 
 
+_REPROVE_HELP = ("run each Web Host's complete local proof (tests and browser journeys) "
+                 "during prepare instead of only the reproducible build; the default "
+                 "relies on the exact-target complete batch evidence prepare already requires")
+
+
 def parse_arguments(argv: list[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(prog="scripts/release.sh")
     parser.add_argument("--repo-root", required=True, type=Path)
     commands = parser.add_subparsers(dest="command", required=True)
     prepared = commands.add_parser("prepare")
     prepared.add_argument("tag")
+    prepared.add_argument("--reprove", action="store_true", help=_REPROVE_HELP)
     pushed = commands.add_parser("push-tag")
     pushed.add_argument("tag")
     drafted = commands.add_parser("create-draft")
@@ -136,8 +142,10 @@ def parse_arguments(argv: list[str]) -> argparse.Namespace:
         "--base-revision", metavar="SHA",
         help="frozen main input revision; defaults to the canonical main revision",
     )
+    started.add_argument("--reprove", action="store_true", help=_REPROVE_HELP)
     continued = commands.add_parser("resume")
     continued.add_argument("request_id")
+    continued.add_argument("--reprove", action="store_true", help=_REPROVE_HELP)
     retired = commands.add_parser("retire")
     retired.add_argument("request_id")
     superseded = retired.add_mutually_exclusive_group(required=True)
@@ -172,8 +180,13 @@ def build_context(
     git: GitRepository | object | None = None,
     github: GitHubClient | object | None = None,
     authority_reader: Callable | None = None,
+    reprove: bool = False,
 ) -> PrepareContext:
-    """Build the shipped prepare context from freshly fetched canonical state."""
+    """Build the shipped prepare context from freshly fetched canonical state.
+
+    `reprove` selects the complete local Web Host proof for `prepare`; the
+    default builds reproducibly and relies on the candidate batch evidence.
+    """
     selected_git = git or GitRepository(root)
     runner = getattr(selected_git, "runner", CommandRunner())
     selected_github = github or _authenticated_github_client(runner)
@@ -186,6 +199,7 @@ def build_context(
         checksum_verifier=OpenPgpVerifier(),
         checksum_home=home,
         checksum_fingerprint=policy.checksum_fingerprint,
+        reprove=reprove,
     )
     return PrepareContext(
         repo_root=root,
@@ -711,7 +725,7 @@ def main(argv: list[str] | None = None) -> int:
         if options.command == "status":
             print(format_request_status(root, GitRepository(root), options.request_id), end="")
             return 0
-        context = build_context(root)
+        context = build_context(root, reprove=bool(getattr(options, "reprove", False)))
         if options.command in ("run", "resume"):
             policy = build_orchestration_policy(root, context)
             request = (

@@ -5,6 +5,7 @@ from __future__ import annotations
 
 from contextlib import contextmanager, redirect_stderr
 from dataclasses import dataclass, replace
+import dataclasses
 import hashlib
 import io
 import json
@@ -801,16 +802,18 @@ class ReleasePrepareTest(unittest.TestCase):
 
         def executor(vector, **kwargs):
             calls.append(vector)
-            if vector[:2] == ("bash", "scripts/creator-web.sh") and vector[2] == "proof":
+            # The distribution exists once the build leg ran: `reproducible`
+            # by default, `proof` under --reprove.
+            if vector[:2] == ("bash", "scripts/creator-web.sh") and vector[2] in ("reproducible", "proof"):
                 dist = self.root / "build/web/creator/dist"
-                dist.mkdir(parents=True)
+                dist.mkdir(parents=True, exist_ok=True)
                 (dist / "host-manifest.json").write_text(
                     '{"host_version":"2.1.1","product_build":"1.0.21.0"}',
                     encoding="utf-8",
                 )
-            if vector[:2] == ("bash", "scripts/web-runtime-host.sh") and vector[2] == "proof":
+            if vector[:2] == ("bash", "scripts/web-runtime-host.sh") and vector[2] in ("reproducible", "proof"):
                 dist = self.root / "build/web/host/dist"
-                dist.mkdir(parents=True)
+                dist.mkdir(parents=True, exist_ok=True)
                 (dist / "host-manifest.json").write_text(
                     '{"host_version":"2.1.1","product_build":"1.0.21.0"}',
                     encoding="utf-8",
@@ -862,6 +865,33 @@ class ReleasePrepareTest(unittest.TestCase):
                 ("npm", "--prefix", "apps/creator-web", "ci"),
             ],
         )
+        # Default prepare: each Host builds reproducibly and runs no tests or
+        # browser journeys locally; the candidate batch proved those (#2422).
+        scripted = [vector for vector in calls if vector[:1] == ("bash",)]
+        self.assertEqual(scripted, [
+            ("bash", "scripts/creator-web.sh", "reproducible"),
+            ("bash", "scripts/web-runtime-host.sh", "reproducible"),
+        ])
+        self.reprove_calls = []
+
+        def reproving(vector, **kwargs):
+            self.reprove_calls.append(vector)
+            return executor(vector, **kwargs)
+
+        build_profile(
+            "web-hosts",
+            self.root,
+            self.root / "release-assets-reprove",
+            intent,
+            runtime=dataclasses.replace(
+                runtime, runner=CommandRunner(executor=reproving), reprove=True),
+        )
+        # --reprove: the complete local proof, in the order the lanes run it.
+        self.assertEqual(
+            [vector for vector in self.reprove_calls if vector[:1] == ("bash",)],
+            [("bash", script, command)
+             for script in ("scripts/creator-web.sh", "scripts/web-runtime-host.sh")
+             for command in ("configure", "build", "test", "proof")])
         verify_existing_profile(
             "web-hosts",
             self.root,
@@ -891,7 +921,7 @@ class ReleasePrepareTest(unittest.TestCase):
                     == "/locked/node/bin"
                 )
                 return subprocess.CompletedProcess(vector, 0, stdout="", stderr="")
-            if vector == ("bash", "scripts/web-runtime-host.sh", "configure"):
+            if vector == ("bash", "scripts/web-runtime-host.sh", "reproducible"):
                 detail = (
                     "diagnostic stop after dependency bootstrap"
                     if dependencies_ready

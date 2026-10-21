@@ -666,6 +666,45 @@ class ReleaseEntryPointTest(unittest.TestCase):
         for backend in seen:
             self.assertIs(backend._recheck, recheck)
 
+    def test_reprove_reaches_the_prepare_context_and_defaults_off(self):
+        # `prepare --reprove`, `run --reprove` and `resume --reprove` select the
+        # complete local Web Host proof; without the flag prepare relies on the
+        # candidate batch evidence and builds reproducibly only (#2422 item 4).
+        from tools.release.profiles import ProfileRuntime
+
+        seen = []
+        real_runtime = ProfileRuntime
+
+        def recording_runtime(**fields):
+            seen.append(fields.get("reprove", "absent"))
+            return real_runtime(**fields)
+
+        git, github = self.context.git, self.context.github
+        fake_git = type("FetchingGit", (), {
+            "runner": git.runner, "main_revision": git.main_revision,
+            "is_main_ancestor": git.is_main_ancestor,
+            "fetch_authority": lambda self, repository, branch: None,
+            "detached_worktree": lambda self, revision: contextlib.nullcontext(self_root),
+        })()
+        self_root = self.root
+        reader = lambda tree: (self.context.policy.selected, type("Ledger", (), {})())
+        for arguments, expected in ((["prepare", "lmdj-v1.0.61.0"], False),
+                                    (["prepare", "lmdj-v1.0.61.0", "--reprove"], True),
+                                    (["run", "--authority", "issue:1301", "--reprove"], True),
+                                    (["resume", "release-" + "0" * 16], False),
+                                    (["resume", "release-" + "0" * 16, "--reprove"], True)):
+            with self.subTest(arguments=arguments):
+                seen.clear()
+                with patch.object(cli, "ProfileRuntime", recording_runtime), \
+                        patch.object(cli, "GitRepository", return_value=fake_git), \
+                        patch.object(cli, "_authenticated_github_client", return_value=github), \
+                        patch.object(cli, "load_authority_documents", reader), \
+                        patch.object(cli, "prepare", side_effect=CommandError("stop after context")), \
+                        patch.object(cli, "build_orchestration_policy", side_effect=CommandError("stop after context")), \
+                        contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+                    cli.main(["--repo-root", str(self.root), *arguments])
+                self.assertEqual(seen, [expected])
+
     def test_resume_of_an_unknown_request_fails_closed(self):
         output = io.StringIO()
         self.assertEqual(self.run_cli(["resume", "release-" + "0" * 16], capture=output), 2)

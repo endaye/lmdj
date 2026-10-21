@@ -33,6 +33,7 @@ usage:
   scripts/creator-web.sh proof
   scripts/creator-web.sh quick
   scripts/creator-web.sh smoke
+  scripts/creator-web.sh reproducible
   scripts/creator-web.sh package
   scripts/creator-web.sh serve [--port PORT] [--catalog-upstream URL]
   scripts/creator-web.sh clean
@@ -584,7 +585,7 @@ proof_creator() {
   unset NODE_PATH || true
   unset PYTHONPATH || true
   proof_root="$(mktemp -d "${TMPDIR:-/tmp}/lmdj-creator-proof.XXXXXX")"
-  if [[ "$mode" != smoke ]]; then
+  if [[ "$mode" != smoke && "$mode" != reproducible ]]; then
   generate_project_fixture "$proof_root/creator-proof-bundle.lmdj"
   export LMDJ_CREATOR_WEB_OVERVIEW_BUNDLE="$proof_root/overview/creator-overview-bundle.lmdj"
   generate_project_fixture "$LMDJ_CREATOR_WEB_OVERVIEW_BUNDLE" overview
@@ -594,11 +595,11 @@ proof_creator() {
     "$repo_root/products/lmdj/assembly.json" \
     "$proof_root/creator-candidate-proof-bundle.lmdj"
   fi
-  if [[ "$mode" == proof ]]; then clean_creator; fi
+  if [[ "$mode" == proof || "$mode" == reproducible ]]; then clean_creator; fi
   configure_creator
   build_creator
   package_creator
-  if [[ "$mode" == proof ]]; then
+  if [[ "$mode" == proof || "$mode" == reproducible ]]; then
     cmake -E copy_directory "$dist_root" "$proof_root/first-dist"
     clean_creator
     configure_creator
@@ -609,6 +610,13 @@ proof_creator() {
       return 2
     }
     echo "Creator Web distribution reproducibility: PASS"
+  fi
+  if [[ "$mode" == reproducible ]]; then
+    # The release `prepare` leg (#2422 item 4): the candidate batch already
+    # proved this exact revision's tests and browser journeys on CI, so the
+    # local build only has to be the same bytes twice.
+    echo "Creator Web Reproducible: PASS (two clean distributions byte-identical; tests and browser journeys not run)"
+    return
   fi
   if [[ "$mode" == smoke ]]; then
     test_creator_ui
@@ -653,6 +661,11 @@ case "$command_name" in
         bash "$script_dir/creator-web.sh" "$command_name"
     fi
     proof_creator "$command_name"
+    ;;
+  reproducible)
+    # No browser runs, so no audio-output wrapper.
+    [[ $# -eq 0 ]] || { usage; exit 64; }
+    proof_creator reproducible
     ;;
   package)
     [[ $# -eq 0 ]] || { usage; exit 64; }
