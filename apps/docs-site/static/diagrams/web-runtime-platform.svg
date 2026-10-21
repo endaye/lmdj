@@ -1,4 +1,4 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1560 820" role="img" aria-labelledby="title description" data-source-sha256="309af0e2056604e3f5b8484c41ddbb61161f6fc329b2885c8b078d0ecb9a57d4">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1560 820" role="img" aria-labelledby="title description" data-source-sha256="24aeb79b3f141c3a856bb719b6a40726740736cc9cdb7fe977e99326a3b8ad01">
   <title id="title">Web Runtime Platform Module</title><desc id="description">同一 Session、S3 lease 与 tempo source/turn；精确 Native clock，设备验收独立</desc>
   <defs><marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z"/></marker></defs>
   <style>
@@ -103,5 +103,5 @@
   <g class="card"><rect x="40" y="638" width="356" height="132" rx="14"/><text class="card-title" x="58" y="670">身份与兼容</text><foreignObject x="58" y="684" width="320" height="70"><div xmlns="http://www.w3.org/1999/xhtml" class="card-body">清单投影身份；envelope1/ordinary/单输出保留。完整 startup tuple，恢复不加路由；未分配 Build。</div></foreignObject></g>
 <g class="card"><rect x="414" y="638" width="356" height="132" rx="14"/><text class="card-title" x="432" y="670">同一 Session owner</text><foreignObject x="432" y="684" width="320" height="70"><div xmlns="http://www.w3.org/1999/xhtml" class="card-body">S3 两 lease/耐久 ACK，claimed 忙。tempo 保留同材料 source/实际 clock；未知保存只用原命令，物理回执后退役。</div></foreignObject></g>
 <g class="card"><rect x="788" y="638" width="356" height="132" rx="14"/><text class="card-title" x="806" y="670">双输出与严格 tap ACK</text><foreignObject x="806" y="684" width="320" height="70"><div xmlns="http://www.w3.org/1999/xhtml" class="card-body">product→capture；cue→monitor。start binding/ACK 严格匹配；旧/重复/提前 batch 拒绝。PCM 后 ACK；gain 不改 capture。</div></foreignObject></g>
-<g class="card"><rect x="1162" y="638" width="356" height="132" rx="14"/><text class="card-title" x="1180" y="670">producer 与验收边界</text><foreignObject x="1180" y="684" width="320" height="70"><div xmlns="http://www.w3.org/1999/xhtml" class="card-body">Host 分段/Truth/reopen 证明独立；S6 held I/O/raw PCM 原验收债不因本 Task 清除。Creator C4、候选/设备/听感仍待验收。</div></foreignObject></g>
+<g class="card"><rect x="1162" y="638" width="356" height="132" rx="14"/><text class="card-title" x="1180" y="670">producer 与验收边界</text><foreignObject x="1180" y="684" width="320" height="70"><div xmlns="http://www.w3.org/1999/xhtml" class="card-body">Host 分段与 Creator 普通录音选择分别证明。COUNT-IN UI 仍撤回，恢复/验收债保留；S6 held I/O/raw PCM、组合候选/设备/听感债保留。</div></foreignObject></g>
 </svg>

@@ -545,15 +545,21 @@ test("the touch picker directly selects a Pattern and preserves its identity/cou
   expect(stopped.onSwitch).toHaveBeenCalledWith(project.patterns[0]!.patternId);
 });
 
-// #1958: playing no longer locks the picker — a press queues the transport's
-// switch — while recording (until S3) still does.
-test("the Pattern picker stays available while the transport plays and is disabled while recording", () => {
+// S3 selection uses the same transport while recording; editing stays locked.
+test("the Pattern picker stays available while playing and recording, but closes for a selection lock", () => {
   const view = renderSurface(false, {transport: transportStatus({playing: true})});
-  expect(screen.getByRole("button", {name: "Choose Pattern"}).hasAttribute("disabled"))
-    .toBe(false);
+  const picker = screen.getByRole("button", {name: "Choose Pattern"});
+  expect(picker.hasAttribute("disabled")).toBe(false);
   view.update({transport: transportStatus({playing: true, recording: true})});
-  expect(screen.getByRole("button", {name: "Choose Pattern"}).hasAttribute("disabled"))
-    .toBe(true);
+  expect(picker.hasAttribute("disabled")).toBe(false);
+  fireEvent.click(picker);
+  fireEvent.click(screen.getByRole("button", {name: "GROOVE / 02"}));
+  expect(view.onSwitch).toHaveBeenCalledExactlyOnceWith(project.patterns[1]!.patternId);
+  openSetup();
+  expect(screen.getByRole("slider", {name: "BPM"}).hasAttribute("disabled")).toBe(true);
+  expect(screen.getByRole("button", {name: "Copy Pattern"}).hasAttribute("disabled")).toBe(true);
+  view.update({transport: transportStatus({playing: true, recording: true}), patternSelectionLocked: true});
+  expect(picker.hasAttribute("disabled")).toBe(true);
 });
 
 // #1958: while the transport plays, the header names the Pattern the engine
