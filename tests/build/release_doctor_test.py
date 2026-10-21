@@ -258,7 +258,7 @@ class DoctorChecksTest(unittest.TestCase):
     # fseventsd and spotlight
     def test_fseventsd_and_spotlight_are_macos_checks_with_cpu_limits(self):
         self.probes.rows = [(1, 90.0, "/System/.../fseventsd"), (2, 40.0, "/System/.../mds_stores"),
-                            (3, 5.0, "/System/.../mds")]
+                            (3, 5.0, "/System/.../mds"), (4, 1.0, "   ")]
         self.probes.commands[("mdutil", "-s", "/")] = (0, "/:\n\tIndexing enabled. \n", "")
         check = check_fseventsd(self.probes)
         self.assertFails(check, detail="fseventsd is at 90% cpu", remedy="sudo killall fseventsd")
@@ -292,6 +292,13 @@ class DoctorChecksTest(unittest.TestCase):
         self.probes.rows = [(90, 50.0, "/Users/x/actions-runner/lmdj/bin/Runner.Worker spawnclient 1 2")]
         busy = check_runner(self.probes)
         self.assertFails(busy, detail="executing a CI job", remedy=f"launchctl bootout gui/$(id -u)/{label}")
+        # When prepare runs next, a loaded runner must be paused even if idle.
+        self.probes.rows = []
+        paused = check_runner(self.probes, require_paused=True)
+        self.assertFails(paused, detail="is loaded; prepare refuses", remedy=f"launchctl bootout gui/$(id -u)/{label}")
+        self.probes.commands[("launchctl", "list")] = (0, "123\t0\tcom.apple.x\n", "")
+        self.assertEqual(check_runner(self.probes, require_paused=True).status, "ok")
+        self.probes.commands[("launchctl", "list")] = (0, f"123\t0\tcom.apple.x\n77\t0\t{label}\n", "")
         # An agent without WorkingDirectory is located by its program's directory.
         self.probes.files[str(self.probes.home / "Library/LaunchAgents" / f"{label}.plist")] = plistlib.dumps(
             {"Label": label, "ProgramArguments": ["/Users/x/actions-runner/lmdj/runsvc.sh"]}).decode()
@@ -341,6 +348,14 @@ class DoctorChecksTest(unittest.TestCase):
                           "fseventsd", "spotlight", "m1 runner"])
         self.assertTrue(doctor_passed(checks))
         self.assertIn("release doctor: all checks passed", format_doctor(checks))
+        self.probes.commands[("launchctl", "list")] = (0, "77\t0\tactions.runner.x.y\n", "")
+        self.assertTrue(doctor_passed(run_doctor(
+            self.root, product_fingerprint=PRODUCT, checksum_fingerprint=CHECKSUM,
+            journal_root=self.root / "journal", probes=self.probes)))
+        self.assertFalse(doctor_passed(run_doctor(
+            self.root, product_fingerprint=PRODUCT, checksum_fingerprint=CHECKSUM,
+            journal_root=self.root / "journal", probes=self.probes, require_paused_runner=True)))
+        self.probes.commands[("launchctl", "list")] = (0, "", "")
         self.probes.lock = "held"
         checks = run_doctor(self.root, product_fingerprint=PRODUCT, checksum_fingerprint=CHECKSUM,
                             journal_root=self.root / "journal", probes=self.probes)

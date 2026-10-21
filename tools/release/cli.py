@@ -262,12 +262,32 @@ def release_carriers(context: PrepareContext, policy, request) -> tuple:
 _DOCTORED_COMMANDS = ("run", "resume", "prepare")
 
 
-def release_doctor(root: Path):
+def _next_step(root: Path, git, request_id: str):
+    """The first unverified step of a journaled request (read-only), or None."""
+    directory = release_journal_root(root, git)
+    if not directory.is_dir():
+        return None
+    try:
+        with RequestJournal(directory, writable=False) as journal:
+            alias = journal.read_alias(request_id)
+            state = journal.read(alias["original_id"] if alias is not None else request_id)
+    except JournalError:
+        return None
+    if state is None:
+        return None
+    for record in state["transitions"]:
+        if record["status"] != "verified":
+            return record["step"]
+    return STEPS[len(state["transitions"])] if len(state["transitions"]) < len(STEPS) else None
+
+
+def release_doctor(root: Path, *, require_paused_runner: bool = False):
     """The read-only host preflight bound to this repository's policy and journal.
 
     Its own inputs are reported the same way as every other check: a checkout
     without a readable policy or Git directory is a failed check with a
-    remedy, not a traceback.
+    remedy, not a traceback. `require_paused_runner` is set for the commands
+    that drive `prepare` next.
     """
     from tools.release.doctor import Check
 
@@ -286,7 +306,8 @@ def release_doctor(root: Path):
                       "run from the main checkout of endaye/lmdj, not a copy or an export")]
     return run_doctor(
         root, product_fingerprint=policy.product_fingerprint,
-        checksum_fingerprint=policy.checksum_fingerprint, journal_root=journal)
+        checksum_fingerprint=policy.checksum_fingerprint, journal_root=journal,
+        require_paused_runner=require_paused_runner)
 
 
 def confirm_canonical_signing_keys(context: PrepareContext):
@@ -365,13 +386,17 @@ def clear_reprove(root: Path, git, request_id: str) -> None:
 def _require_known_request(root: Path, git, request_id: str) -> None:
     """Raise the journal's own refusal for a request it does not hold.
 
-    The same read the driver's `resume` performs first, under the same writer
-    context, so an unreadable or foreign-owned journal is reported exactly as
-    the driver would report it.
+    A read-only journal context, as every other read path uses: it never
+    joins the writer lock or creates the journal, so a running driver stays
+    undisturbed and the finding is the request, not the lock.
     """
-    with RequestJournal(release_journal_root(root, git)) as journal:
+    directory = release_journal_root(root, git)
+    missing = JournalError("why: request is missing; remedy: use the original request ID")
+    if not directory.is_dir():
+        raise missing
+    with RequestJournal(directory, writable=False) as journal:
         if journal.read_alias(request_id) is None and journal.read(request_id) is None:
-            raise JournalError("why: request is missing; remedy: use the original request ID")
+            raise missing
 
 
 def _resume_request(root: Path, git, request_id: str):
@@ -849,7 +874,13 @@ def main(argv: list[str] | None = None) -> int:
             # failed host check. The journal reports its own unreadable state.
             _require_known_request(root, GitRepository(root), options.request_id)
         if options.command in _DOCTORED_COMMANDS:
-            checks = release_doctor(root)
+            # prepare runs next for the prepare command itself and for a
+            # resume whose next step is `prepared`; a run or a resume waiting
+            # on the candidate batch needs the runner up.
+            driving_prepare = options.command == "prepare" or (
+                options.command == "resume"
+                and _next_step(root, GitRepository(root), options.request_id) == "prepared")
+            checks = release_doctor(root, require_paused_runner=driving_prepare)
             if not doctor_passed(checks):
                 print(format_doctor(checks), end="")
                 print(f"release doctor: refusing {options.command}; apply the remedies above, "

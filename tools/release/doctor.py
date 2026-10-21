@@ -347,11 +347,17 @@ def check_load(probes):
                  "M1 runner, and wait until the 1-minute load is below the cpu count")
 
 
+def _program(command):
+    """The program token of a ps command field; empty when the field is blank."""
+    tokens = command.split()
+    return tokens[0] if tokens else ""
+
+
 def check_fseventsd(probes):
     if probes.platform != "darwin":
         return Check("fseventsd", "skip", "macOS only")
     cpu = max((cpu for _, cpu, command in probes.processes()
-               if command.split()[0].endswith("/fseventsd")), default=0.0)
+               if _program(command).endswith("/fseventsd")), default=0.0)
     if cpu <= FSEVENTSD_CPU_LIMIT:
         return Check("fseventsd", "ok", f"{cpu:.0f}% cpu")
     return Check("fseventsd", "fail", f"fseventsd is at {cpu:.0f}% cpu (it held a core for "
@@ -363,7 +369,7 @@ def check_spotlight(probes, root):
     if probes.platform != "darwin":
         return Check("spotlight", "skip", "macOS only")
     cpu = sum(cpu for _, cpu, command in probes.processes()
-              if command.split()[0].endswith(("/mds_stores", "/mds", "/mdworker_shared")))
+              if _program(command).endswith(("/mds_stores", "/mds", "/mdworker_shared")))
     # mdutil answers for volumes, not folders: the repository's volume state
     # is reported; folder exclusions live in Spotlight Privacy and are not
     # readable here.
@@ -378,7 +384,14 @@ def check_spotlight(probes, root):
                  "(or sudo mdutil -i off <volume> if the whole volume may stop indexing)")
 
 
-def check_runner(probes):
+def check_runner(probes, *, require_paused=False):
+    """The runner shares the cores with `prepare`'s timing-sensitive legs.
+
+    A running job always fails. An idle loaded service fails only when the
+    command about to run is `prepare` (`require_paused`): a `run` or a
+    `resume` waiting on the candidate batch needs the runner up, since that
+    batch executes on it; the report then names the pause command for later.
+    """
     if probes.platform != "darwin":
         return Check("m1 runner", "skip", "macOS only")
     code, stdout, _ = probes.run(["launchctl", "list"])
@@ -409,28 +422,32 @@ def check_runner(probes):
                     workdir = None
         except (OSError, ValueError, plistlib.InvalidFileException, UnicodeError):
             workdir = None
-        if workdir is None:
-            if workers:
-                return Check("m1 runner", "fail",
-                             f"{label}'s launch agent is unreadable, so a running Runner.Worker "
-                             "cannot be attributed to a service",
-                             "wait for every runner job on this host to finish, or pause each "
-                             "loaded runner service (" + "; ".join(
-                                 f"launchctl bootout gui/$(id -u)/{name}" for name in labels)
-                             + "); then restore the agent definition under ~/Library/LaunchAgents")
-            idle.append(f"{label} loaded (agent definition unreadable), no worker running; "
-                        f"pause it before prepare: {pause}; resume afterwards: {resume}")
-            continue
-        if any(command.startswith(workdir.rstrip("/") + "/") for command in workers):
+        if workdir is None and workers:
+            return Check("m1 runner", "fail",
+                         f"{label}'s launch agent is unreadable, so a running Runner.Worker "
+                         "cannot be attributed to a service",
+                         "wait for every runner job on this host to finish, or pause each "
+                         "loaded runner service (" + "; ".join(
+                             f"launchctl bootout gui/$(id -u)/{name}" for name in labels)
+                         + "); then restore the agent definition under ~/Library/LaunchAgents")
+        if workdir is not None and any(command.startswith(workdir.rstrip("/") + "/")
+                                       for command in workers):
             return Check("m1 runner", "fail", f"{label} is executing a CI job on this host",
                          f"wait for the job, or pause the runner for the release: {pause}; "
                          f"resume it afterwards: {resume}")
-        idle.append(f"{label} loaded, idle; pause it before prepare: {pause}; "
-                    f"resume afterwards: {resume}")
+        if require_paused:
+            return Check("m1 runner", "fail", f"{label} is loaded; prepare refuses while a "
+                         "runner can start a job on these cores",
+                         f"pause it for the prepare: {pause}; resume it afterwards: {resume}")
+        state = "loaded (agent definition unreadable), no worker running" if workdir is None \
+            else "loaded, idle"
+        idle.append(f"{label} {state}; prepare refuses while it is loaded, pause it then: "
+                    f"{pause}; resume afterwards: {resume}")
     return Check("m1 runner", "ok", " | ".join(idle))
 
 
-def run_doctor(root, *, product_fingerprint, checksum_fingerprint, journal_root, probes=None):
+def run_doctor(root, *, product_fingerprint, checksum_fingerprint, journal_root, probes=None,
+               require_paused_runner=False):
     probes = HostProbes() if probes is None else probes
     root = Path(root)
     return [
@@ -444,7 +461,7 @@ def run_doctor(root, *, product_fingerprint, checksum_fingerprint, journal_root,
         check_load(probes),
         check_fseventsd(probes),
         check_spotlight(probes, root),
-        check_runner(probes),
+        check_runner(probes, require_paused=require_paused_runner),
     ]
 
 

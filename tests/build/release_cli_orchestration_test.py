@@ -902,6 +902,41 @@ class ReleaseEntryPointTest(unittest.TestCase):
         self.assertEqual(self.run_cli(["resume", "release-" + "0" * 16], capture=output), 2)
         self.assertIn("request is missing", output.getvalue())
 
+    def test_prepare_and_a_resume_at_the_prepared_step_require_the_runner_paused(self):
+        from tools.release.orchestration import STEPS
+        seen = []
+
+        def doctor(root, *, require_paused_runner=False):
+            seen.append(require_paused_runner)
+            return []
+
+        def main(arguments):
+            with patch.object(cli, "build_context", return_value=self.context), \
+                    patch.object(cli, "release_carriers", return_value=tuple(self.carriers.values())), \
+                    patch.object(cli, "release_recheck", return_value=None), \
+                    patch.object(cli, "release_doctor", doctor), \
+                    patch.object(cli, "confirm_canonical_signing_keys", return_value=[]), \
+                    patch.object(cli, "compose_candidate", return_value=None), \
+                    contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+                return cli.main(["--repo-root", str(self.root), *arguments])
+        # A run, and a resume whose next step is before `prepared`, need the runner up.
+        self.carriers["publication"].fail_after_write = True
+        self.assertEqual(main(["run", "--authority", "issue:1301"]), 2)
+        (request_id,) = self.request_ids()
+        self.assertEqual(main(["resume", request_id]), 0)   # next step: publication
+        with patch.object(cli, "_next_step", return_value="prepared"):
+            self.assertEqual(main(["resume", request_id]), 0)
+        with patch.object(cli, "_next_step", return_value="verification"):
+            self.assertEqual(main(["resume", request_id]), 0)
+        with patch.object(cli, "release_doctor", doctor), \
+                patch.object(cli, "build_context", side_effect=CommandError("stop")), \
+                contextlib.redirect_stderr(io.StringIO()):
+            cli.main(["--repo-root", str(self.root), "prepare", "lmdj-v1.0.61.0"])
+        self.assertEqual(seen, [False, False, True, False, True])
+        # `_next_step` reads the journal read-only: the first unverified step.
+        self.assertEqual(cli._next_step(self.root, self.context.git, request_id), None)
+        self.assertEqual(cli._next_step(self.root, self.context.git, "release-" + "0" * 16), None)
+
     def test_an_unknown_resume_is_reported_before_the_host_doctor(self):
         # The journal's finding is not hidden behind a failing host check.
         from tools.release.doctor import Check
@@ -918,6 +953,16 @@ class ReleaseEntryPointTest(unittest.TestCase):
         self.assertEqual(code, 2)
         self.assertIn("request is missing", output.getvalue())
         self.assertNotIn("host load", output.getvalue())
+        # The finding is the request even while another driver holds the lock.
+        output = io.StringIO()
+        with RequestJournal(self.journal()), \
+                patch.object(cli, "release_doctor", return_value=failed), \
+                patch.object(cli, "GitRepository", return_value=self.context.git), \
+                contextlib.redirect_stdout(output), contextlib.redirect_stderr(output):
+            code = cli.main(["--repo-root", str(self.root), "resume", "release-" + "0" * 16])
+        self.assertEqual(code, 2)
+        self.assertIn("request is missing", output.getvalue())
+        self.assertNotIn("another writer", output.getvalue())
 
 
 class RealCompositionTest(unittest.TestCase):

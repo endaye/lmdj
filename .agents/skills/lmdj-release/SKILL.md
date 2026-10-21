@@ -24,8 +24,10 @@ Before the long local path, read the host: `scripts/release.sh doctor` is a
 read-only preflight that names each failed condition with its remedy — the
 pinned emsdk, both signing-key roles in their own keyrings, GitHub auth, a free
 journal writer lock, no second driver, disk space, host load, `fseventsd` and
-Spotlight pressure, and the M1 runner (busy fails; idle reports the pause and
-resume commands). `run`, `resume` and `prepare` run it first and refuse while
+Spotlight pressure, and the M1 runner (a running job fails; a loaded runner
+fails for `prepare` and for a `resume` whose next step is `prepared`, with the
+pause and resume commands; a `run` or an earlier `resume` needs it up for the
+candidate batch). `run`, `resume` and `prepare` run it first and refuse while
 any check fails; `status`, `audit` and the other read-only commands never wait
 on it (#2422 items 5 and 7).
 For an audit-only, design or development request, keep release mutations out of
