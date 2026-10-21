@@ -78,8 +78,8 @@
     },
     {
       "id": "collaborators",
-      "label": "Performance Runtime",
-      "detail": "ports · bridge · replay · engine adapter",
+      "label": "Runtime Collaborators",
+      "detail": "Performance ports · tempo (B1)",
       "kind": "core",
       "x": 1310,
       "y": 430,
@@ -160,7 +160,7 @@
     {
       "from": "performance",
       "to": "collaborators",
-      "label": "one-way link"
+      "label": "Performance ports"
     },
     {
       "from": "native-hosts",
