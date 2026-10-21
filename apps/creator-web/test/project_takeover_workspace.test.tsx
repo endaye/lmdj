@@ -287,3 +287,34 @@ test("a busy open without a takeover action only points to its usable retry", as
   await waitFor(() => expect(screen.getByTestId("opened-project").textContent).toBe(LISTED.projectId.slice(0, 8)));
   expect(screen.queryByRole("alert")).toBeNull();
 });
+
+
+test("pending requester shows one status and cancellation restores its busy recovery", async () => {
+  const {fixture} = await bootRequester(["busy"]);
+  await userEvent.click(screen.getByRole("button", {name: "Continue here"}));
+  expect(screen.getByText("Asking the other tab to hand over this Project…")).toBeTruthy();
+  expect(screen.queryByRole("alert")).toBeNull();
+  expect(screen.queryByRole("button", {name: "Dismiss"})).toBeNull();
+  await userEvent.click(screen.getByRole("button", {name: "Cancel"}));
+  await screen.findByText(BUSY);
+  expect(screen.getByRole("button", {name: "Continue here"})).toBeTruthy();
+  expect(screen.getByRole("button", {name: "Retry project"})).toBeTruthy();
+  expect(screen.queryByText("Asking the other tab to hand over this Project…")).toBeNull();
+  expect(openCalls(fixture.calls)).toHaveLength(1);
+});
+
+test("pending take-back shows one status and cancellation restores the closed owner", async () => {
+  const {first, second, takeover, created} = await bootHolder();
+  act(() => { takeover.holder().decide(); });
+  await userEvent.click(await screen.findByRole("button", {name: "Continue here"}));
+  expect(screen.getByText("Asking the other tab to hand over this Project…")).toBeTruthy();
+  expect(screen.queryByText("Project open in another tab")).toBeNull();
+  expect(screen.queryByRole("alert")).toBeNull();
+  await userEvent.click(screen.getByRole("button", {name: "Cancel"}));
+  await screen.findByText("Project open in another tab");
+  expect(screen.getByRole("button", {name: "Continue here"})).toBeTruthy();
+  expect(screen.queryByText("Asking the other tab to hand over this Project…")).toBeNull();
+  expect(created()).toBe(1);
+  expect(first.calls.filter(call => call === "close")).toHaveLength(1);
+  expect(openCalls(second.calls)).toHaveLength(0);
+});

@@ -3648,7 +3648,8 @@ function Workspace({
         }}
         onDetails={openSystem} />
               <ErrorPanel
-                code={state.runtime.errorCode}
+                code={takeoverRequest !== null && state.runtime.errorCode === "PROJECT_BUSY"
+                  ? null : state.runtime.errorCode}
                 details={state.runtime.errorDetails}
                 {...(session && state.runtime.errorCode === "DUPLICATE_ID"
                   ? {onOpenLocalProject: () => {
@@ -3685,7 +3686,7 @@ function Workspace({
                   ? {onDismiss: () => dispatch({type: "runtime-error-dismissed"})}
                   : {})}
               />
-              {yieldedProject !== null && runtimePhase === "closed" && (
+              {yieldedProject !== null && runtimePhase === "closed" && takeoverRequest === null && (
                 <TakenOverPanel
                   note={takeoverOutcome === null ? null : takeoverNote(takeoverOutcome)}
                   {...(takeoverRequest === null && onRetryRuntime
