@@ -22,6 +22,7 @@ import fcntl
 import json
 import os
 from pathlib import Path
+import plistlib
 import re
 import shutil
 import subprocess
@@ -105,9 +106,13 @@ class HostProbes:
         return rows
 
     def lock_free(self, path):
-        """Whether the journal writer lock can be taken right now (released at once)."""
+        """Whether the journal writer lock can be taken right now (released at once).
+
+        Opened read-only: flock needs no write access, so a lock file another
+        account owns is probed for a holder rather than reported as held.
+        """
         try:
-            fd = os.open(path, os.O_RDWR | os.O_NOFOLLOW)
+            fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
         except FileNotFoundError:
             return True
         except OSError:
@@ -320,12 +325,24 @@ def check_runner(probes):
     code, stdout, _ = probes.run(["launchctl", "list"])
     labels = [line.split()[-1] for line in stdout.splitlines()
               if code == 0 and line.strip() and line.split()[-1].startswith(RUNNER_LABEL_PREFIX)]
-    busy = any("Runner.Worker" in command for _, _, command in probes.processes())
     if not labels:
         return Check("m1 runner", "ok", "no actions runner service loaded (paused or not installed)")
     label = labels[0]
     pause = f"launchctl bootout gui/$(id -u)/{label}"
     resume = f"launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/{label}.plist"
+    # A worker belongs to this service when it runs from the service's own
+    # working directory (the launch agent's WorkingDirectory); without a
+    # readable agent definition any worker counts, conservatively.
+    workdir = None
+    try:
+        agent = plistlib.loads(probes.read_text(
+            probes.home / "Library/LaunchAgents" / f"{label}.plist").encode("utf-8"))
+        workdir = agent.get("WorkingDirectory") if isinstance(agent, dict) else None
+    except (OSError, ValueError, plistlib.InvalidFileException, UnicodeError):
+        workdir = None
+    workers = [command for _, _, command in probes.processes() if "Runner.Worker" in command]
+    busy = any(workdir is None or command.startswith(workdir.rstrip("/") + "/")
+               for command in workers)
     if busy:
         return Check("m1 runner", "fail", f"{label} is executing a CI job on this host",
                      f"wait for the job, or pause the runner for the release: {pause}; "

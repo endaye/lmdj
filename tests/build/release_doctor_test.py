@@ -241,6 +241,7 @@ class DoctorChecksTest(unittest.TestCase):
 
     # runner
     def test_runner_states_pause_and_resume_commands(self):
+        import plistlib
         label = "actions.runner.endaye-lmdj.endaye-mbp-m1"
         self.probes.commands[("launchctl", "list")] = (0, "123\t0\tcom.apple.x\n", "")
         self.assertEqual(check_runner(self.probes).status, "ok")
@@ -249,9 +250,18 @@ class DoctorChecksTest(unittest.TestCase):
         self.assertEqual(idle.status, "ok")
         self.assertIn(f"launchctl bootout gui/$(id -u)/{label}", idle.detail)
         self.assertIn(f"launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/{label}.plist", idle.detail)
-        self.probes.rows = [(90, 50.0, "/Users/x/actions-runner/bin/Runner.Worker spawnclient 1 2")]
+        self.probes.files[str(self.probes.home / "Library/LaunchAgents" / f"{label}.plist")] = plistlib.dumps(
+            {"Label": label, "WorkingDirectory": "/Users/x/actions-runner/lmdj"}).decode()
+        # A worker of another runner on this host is not this service's job.
+        self.probes.rows = [(90, 50.0, "/Users/x/actions-runner/other/bin/Runner.Worker spawnclient 1 2")]
+        self.assertEqual(check_runner(self.probes).status, "ok")
+        self.probes.rows = [(90, 50.0, "/Users/x/actions-runner/lmdj/bin/Runner.Worker spawnclient 1 2")]
         busy = check_runner(self.probes)
         self.assertFails(busy, detail="executing a CI job", remedy=f"launchctl bootout gui/$(id -u)/{label}")
+        # Without a readable agent definition any worker counts, conservatively.
+        del self.probes.files[str(self.probes.home / "Library/LaunchAgents" / f"{label}.plist")]
+        self.probes.rows = [(90, 50.0, "/Users/x/actions-runner/other/bin/Runner.Worker spawnclient 1 2")]
+        self.assertEqual(check_runner(self.probes).status, "fail")
 
     # aggregate
     def test_run_doctor_reports_every_check_in_a_fixed_order_and_fails_closed(self):
@@ -293,6 +303,10 @@ class HostProbesTest(unittest.TestCase):
             self.assertTrue(probes.lock_free(lock))
             lock.write_bytes(b"")
             self.assertTrue(probes.lock_free(lock))
+            # A lock file this account may only read is probed, not reported held.
+            lock.chmod(0o400)
+            self.assertTrue(probes.lock_free(lock))
+            lock.chmod(0o600)
             fd = os.open(lock, os.O_RDWR)
             try:
                 fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)

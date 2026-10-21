@@ -16,7 +16,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from tools.release.commands import CommandError, CommandRunner  # noqa: E402
-from tools.release.doctor import doctor_passed, format_doctor, run_doctor  # noqa: E402
+from tools.release.doctor import check_signing_keys, doctor_passed, format_doctor, run_doctor  # noqa: E402
 from tools.release.audit import (  # noqa: E402
     AuditContext,
     audit,
@@ -269,6 +269,20 @@ def release_doctor(root: Path):
         root, product_fingerprint=policy.product_fingerprint,
         checksum_fingerprint=policy.checksum_fingerprint,
         journal_root=release_journal_root(root, GitRepository(root)))
+
+
+def confirm_canonical_signing_keys(context: PrepareContext):
+    """The key-role checks again, against the freshly fetched canonical policy.
+
+    The doctor runs before any fetch and reads the checkout's policy, which
+    could be stale or edited; the context's policy is the canonical one the
+    release will sign with, so its fingerprints are what the host must hold.
+    """
+    from tools.release.doctor import HostProbes
+
+    return check_signing_keys(
+        HostProbes(), product_fingerprint=context.policy.product_fingerprint,
+        checksum_fingerprint=context.policy.checksum_fingerprint)
 
 
 def release_recheck(context: PrepareContext, policy, request):
@@ -812,6 +826,13 @@ def main(argv: list[str] | None = None) -> int:
             # A request once resumed or started with --reprove keeps it.
             reprove = reprove_requested(root, GitRepository(root), options.request_id)
         context = build_context(root, reprove=reprove)
+        if options.command in _DOCTORED_COMMANDS:
+            checks = confirm_canonical_signing_keys(context)
+            if not doctor_passed(checks):
+                print(format_doctor(checks), end="")
+                print(f"release doctor: refusing {options.command}; the canonical policy names "
+                      "a signing key this host cannot use", file=sys.stderr)
+                return 2
         if options.command in ("run", "resume"):
             policy = build_orchestration_policy(root, context)
             request = (

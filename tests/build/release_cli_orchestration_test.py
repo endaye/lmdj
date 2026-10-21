@@ -127,6 +127,7 @@ class ReleaseEntryPointTest(unittest.TestCase):
                 patch.object(cli, "release_carriers", return_value=selected), \
                 patch.object(cli, "release_recheck", return_value=None), \
                 patch.object(cli, "release_doctor", return_value=[]), \
+                patch.object(cli, "confirm_canonical_signing_keys", return_value=[]), \
                 patch.object(cli, "compose_candidate", return_value=None), \
                 contextlib.redirect_stdout(stream), contextlib.redirect_stderr(stream):
             return cli.main(["--repo-root", str(self.root), *arguments])
@@ -655,6 +656,7 @@ class ReleaseEntryPointTest(unittest.TestCase):
         with patch.object(cli, "build_context", return_value=self.context), \
                 patch.object(cli, "release_carriers", return_value=tuple(self.carriers.values())), \
                 patch.object(cli, "release_doctor", return_value=[]), \
+                patch.object(cli, "confirm_canonical_signing_keys", return_value=[]), \
                 patch.object(cli, "release_recheck", return_value=recheck) as composed, \
                 patch.object(cli, "compose_candidate", return_value=None), \
                 patch.object(cli, "ReleaseDriver", Driver), \
@@ -702,6 +704,7 @@ class ReleaseEntryPointTest(unittest.TestCase):
                         patch.object(cli, "_authenticated_github_client", return_value=github), \
                         patch.object(cli, "load_authority_documents", reader), \
                         patch.object(cli, "release_doctor", return_value=[]), \
+                        patch.object(cli, "confirm_canonical_signing_keys", return_value=[]), \
                         patch.object(cli, "prepare", side_effect=CommandError("stop after context")), \
                         patch.object(cli, "build_orchestration_policy", side_effect=CommandError("stop after context")), \
                         contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
@@ -739,6 +742,7 @@ class ReleaseEntryPointTest(unittest.TestCase):
                     patch.object(cli, "_authenticated_github_client", return_value=github), \
                     patch.object(cli, "load_authority_documents", reader), \
                     patch.object(cli, "release_doctor", return_value=[]), \
+                    patch.object(cli, "confirm_canonical_signing_keys", return_value=[]), \
                     patch.object(cli, "release_carriers", return_value=carriers), \
                     patch.object(cli, "release_recheck", return_value=None), \
                     patch.object(cli, "compose_candidate", return_value=None), \
@@ -815,6 +819,32 @@ class ReleaseEntryPointTest(unittest.TestCase):
         with patch.object(cli, "release_doctor", side_effect=AssertionError("doctor ran")):
             code, report = self.status()
         self.assertEqual(code, 0)
+
+    def test_the_signing_keys_are_rechecked_against_the_canonical_policy(self):
+        # The doctor reads the checkout's policy before any fetch; after the
+        # canonical fetch the key roles are checked again with the canonical
+        # fingerprints, which are what the release signs with.
+        from tools.release.doctor import Check
+
+        seen = []
+
+        def canonical(probes, *, product_fingerprint, checksum_fingerprint):
+            seen.append((product_fingerprint, checksum_fingerprint))
+            return [Check("signing key (checksum)", "fail", f"secret key {checksum_fingerprint} is not in x",
+                          "import the checksum private key into x")]
+        output, errors = io.StringIO(), io.StringIO()
+        with patch.object(cli, "release_doctor", return_value=[]), \
+                patch.object(cli, "build_context", return_value=self.context), \
+                patch.object(cli, "check_signing_keys", canonical), \
+                patch.object(cli, "build_orchestration_policy", side_effect=AssertionError("ran past the gate")), \
+                contextlib.redirect_stdout(output), contextlib.redirect_stderr(errors):
+            code = cli.main(["--repo-root", str(self.root), "run", "--authority", "issue:1301"])
+        self.assertEqual(code, 2)
+        policy = self.context.policy
+        self.assertEqual(seen, [(policy.product_fingerprint, policy.checksum_fingerprint)])
+        self.assertIn("[fail] signing key (checksum)", output.getvalue())
+        self.assertIn("canonical policy names a signing key", errors.getvalue())
+        self.assertEqual(self.request_ids(), [])
 
     def test_doctor_subcommand_prints_every_check_and_its_exit_names_the_outcome(self):
         from tools.release.doctor import Check
@@ -967,6 +997,7 @@ class RealCompositionTest(unittest.TestCase):
         output = io.StringIO()
         with patch.object(cli, "build_context", return_value=self.context), \
                 patch.object(cli, "release_doctor", return_value=[]), \
+                patch.object(cli, "confirm_canonical_signing_keys", return_value=[]), \
                 patch.object(cli, "compose_candidate", return_value=None), \
                 patch("tools.release.entry_composition.release_token",
                       return_value="fixture-only-no-credential"), \
