@@ -129,6 +129,13 @@ function storageMessage(details: Details): UserMessage {
 }
 
 export function userMessage(code: string, details: Details = {}): UserMessage {
+  if (code === "HOST_STATE_INVALID" &&
+      ["recording_switch_preparation_pending", "recording_switch_capacity",
+        "recording_switch_material_pending", "recording_switch_overlay_pending"].includes(
+        typeof details.reason === "string" ? details.reason : "")) return {
+    message: "The previous Pattern change is still settling.",
+    nextStep: "Keep playing and choose the Pattern again in a moment.",
+  };
   if (code === "IO_ERROR") return storageMessage(details);
   return Object.hasOwn(MESSAGES, code) ? MESSAGES[code]! : UNKNOWN;
 }

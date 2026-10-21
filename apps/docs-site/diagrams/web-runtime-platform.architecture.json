@@ -228,7 +228,7 @@
     },
     {
       "title": "producer 与验收边界",
-      "body": "Host 分段/Truth/reopen 证明独立；S6 held I/O/raw PCM 原验收债不因本 Task 清除。Creator C4、候选/设备/听感仍待验收。"
+      "body": "Host 分段与 Creator 普通录音选择分别证明。COUNT-IN UI 仍撤回，恢复/验收债保留；S6 held I/O/raw PCM、组合候选/设备/听感债保留。"
     }
   ]
 }
