@@ -133,6 +133,17 @@ Host 从 inspection 的真实序号生成下一条命令，不能因选中另一
 重新从 epoch 1 开始。Audio suspend 或 Project replacement 仍按实际生命周期
 退役运输控制器；重新启用的引擎 generation 才使用新的序号序列。
 
+## 共享 SDK 的 Performance inspection
+
+`inspectPerformance` 读取 Facade 已提交的 canonical events。旧录音保持原有事件字段；
+带起点状态的录音保留每个事件的 `input_sequence`，并接受已有的 `filter_change` 和
+`pad_gates_set`。SDK 保留原事件顺序与字符串序号，不将 uint64 身份转换为 Number。
+耐久序号必须为正的规范十进制 uint64 字符串，同一列表不能混用两种 profile 或重复序号；
+时间排序后的序号可以有 gap 或不递增。Filter 的 phase、type、整数 Hz／resonance
+范围以及 Pad gate 升序且不重复的0..63数组继续严格校验，未知字段仍拒绝。
+这项共享 SDK 兼容修复不增加诊断 Host 的 Perform UI，也不把 Project Truth 当作
+Runtime Snapshot；录制、重放、恢复与 neutral acknowledgement 继续由原有 Core 路径负责。
+
 ## 自动化证据
 
 `scripts/web-runtime-host.sh proof` 覆盖可复现 build、distribution gates 与 Chromium packaged Main→shared Platform→Facade/OPFS→Wasm AudioWorklet 旅程，包括 Project（写出契约现为 `lmdj.project.v5`）、500-trigger 压力、Sequence recording/status/recovery、跨窗口 observer/busy、失败和 lifecycle；switch journey 从 pending overlay 越过已确认边界录入新 Pattern，并经 stop、Project inspection 与新 Pattern reload 验证两侧提交，还覆盖 switch-pending BPM pre-mutation rejection 与 Stop target cancellation。共享 C++ ControlRuntime journey 另验证 Facade pending overlay 到 Audio Runtime next-Bar publication、apply-point 精确 switch authority、target 在 cancellation 查询间 apply 的 fail-closed interleaving、延迟越过旧 boundary 的 durable Stop replay，以及 clean replacement 无重复/空洞/陈旧 overlay。WebKit 只在 mandatory primitive 可用时执行完整 smoke；结构化 limitation 不会被写成物理证据。
