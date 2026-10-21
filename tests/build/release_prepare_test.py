@@ -1072,6 +1072,10 @@ class ReleasePrepareTest(unittest.TestCase):
         diagnostic = "Web Runtime Host error: EMSDK is not configured"
         output = io.StringIO()
         with (
+            # The host doctor and the canonical key recheck run before prepare;
+            # this case is about the subprocess diagnostic, not the host.
+            mock.patch.object(cli, "release_doctor", return_value=[]),
+            mock.patch.object(cli, "confirm_canonical_signing_keys", return_value=[]),
             mock.patch.object(cli, "build_context", return_value=object()),
             mock.patch.object(
                 cli, "prepare",
