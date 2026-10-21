@@ -149,14 +149,10 @@ const stagePortrait = window.matchMedia(
   "(max-width: 959px) and (orientation: portrait)",
 );
 let fittedWorkspace: HTMLElement | null = null;
-let fittedNarrowPerform = false;
-const narrowPerform = (workspace: HTMLElement) => window.innerWidth <= 480 &&
-  stagePortrait.matches && workspace.querySelector(".perform-surface[data-page]") !== null;
 function fitStage(): void {
   const workspace = document.querySelector<HTMLElement>(".hardware-workspace");
   if (workspace === null) return;
   fittedWorkspace = workspace;
-  fittedNarrowPerform = narrowPerform(workspace);
   const layout = consoleLayoutForViewport({width: window.innerWidth, height: window.innerHeight});
   document.documentElement.dataset.creatorLayout = layout;
   workspace.style.width = "";
@@ -188,13 +184,12 @@ requestAnimationFrame(fitStage);
 // The App commits .hardware-workspace only after the Runtime session attempt
 // resolves, later than any of the events above, and a later remount produces
 // a fresh element without these inline styles. Keep watching and refit
-// whenever the mounted element or narrow Perform composition changes. Other
-// steady-state mutations do not refit; the childList-only filter keeps our own
-// inline-style writes from retriggering.
+// whenever the mounted element changes. All modes share console geometry,
+// so steady-state mutations need no fit. Observe only childList to ignore
+// our own inline-style writes.
 const stageMount = new MutationObserver(() => {
   const workspace = document.querySelector<HTMLElement>(".hardware-workspace");
-  if (workspace === null || (workspace === fittedWorkspace &&
-      narrowPerform(workspace) === fittedNarrowPerform)) return;
+  if (workspace === null || workspace === fittedWorkspace) return;
   fitStage();
 });
 stageMount.observe(root, {childList: true, subtree: true});

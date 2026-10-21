@@ -97,31 +97,8 @@
 .hardware-workspace .perform-surface[data-page] .perform-pad-gate-summary { display: grid; gap: 8px; margin: 0; }
 .hardware-workspace .perform-surface[data-page] .perform-pad-gate-summary dd { margin: 4px 0 0; overflow-wrap: anywhere; }
 
-/* The compact portrait console has no room for the desktop side-by-side
-   matrix/touch pair. Keep Perform to the right of the physical rail, with
-   its one touch scroller below the matrix. At390x844 the console fits at1:1. */
+/* Perform-specific typography inside the common narrow console. */
 @media (max-width: 480px) and (orientation: portrait) {
-  html[data-creator-layout="compact"] .hardware-workspace:has(.perform-surface[data-page]) .hardware-console {
-    height: 778px;
-  }
-  html[data-creator-layout="compact"] .hardware-console:has(.perform-surface[data-page]) > [aria-label="Pad matrix"] {
-    left: 108px;
-    right: 8px;
-    top: 168px;
-    width: auto;
-    height: 250px;
-  }
-  html[data-creator-layout="compact"] .hardware-console:has(.perform-surface[data-page]) .pad-grid {
-    width: min(100%, 250px);
-    height: 250px;
-  }
-  html[data-creator-layout="compact"] .hardware-console:has(.perform-surface[data-page]) > [aria-label="Touch workspace"] {
-    left: 108px;
-    right: 8px;
-    top: 426px;
-    width: auto;
-    height: 344px;
-  }
   .hardware-workspace .perform-surface[data-page] .perform-live-faders .perform-fader { padding: 4px; }
   .hardware-workspace .perform-surface[data-page] .perform-live-faders .perform-fader-value {
     font-size: 11px;
@@ -131,12 +108,5 @@
     font-size: 9.5px;
     white-space: nowrap;
   }
-  html[data-creator-layout="compact"] .hardware-console:has(.perform-surface[data-page]) .pad span {
-    left: 5px;
-    right: 5px;
-    font-size: 8px;
-    line-height: 10px;
-  }
-  html[data-creator-layout="compact"] .hardware-console:has(.perform-surface[data-page]) .pad.is-selected span { padding-right: 7px; font-size: 7.5px; }
-  html[data-creator-layout="compact"] .hardware-console:has(.perform-surface[data-page]) .pad-live-gate { font-size: 8px; line-height: 10px; }
+
 }

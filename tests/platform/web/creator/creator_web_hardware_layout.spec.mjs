@@ -1055,3 +1055,84 @@ test("Perform Pad steps keep real held FX, HOLD and the shared ENC4 MASTER value
     "performance.record.begin", "performance.record.stop",
     "pattern.transport.request"].includes(request.operation))).toEqual([]);
 });
+
+
+// The old compact shell kept a368px touch pane in a374px console, covering
+// the Project key and leaving the Pad matrix at0px. A mode-only fit test (or
+// the formerly special Perform frame) misses fresh Sample boot and reload.
+test("narrow console keeps every mode key and Pad reachable before and after reload", async ({page}, info) => {
+  test.setTimeout(PROJECT_TRANSITION_TIMEOUT_MS);
+  await page.setViewportSize({width:390,height:844});
+  await page.goto("/");await waitForBootProject(page);
+  await page.evaluate(()=>new Promise(resolve=>requestAnimationFrame(resolve)));
+  const keys=page.getByTestId("physical-controls");
+  const observations=[];
+  async function inspect(label) {
+    const value=await page.getByTestId("hardware-console").evaluate(root=>{
+      const rect=node=>{const b=node.getBoundingClientRect();return {x:b.x,y:b.y,width:b.width,height:b.height,right:b.right,bottom:b.bottom};};
+      const geometry=rect(root);
+      const targets=[...root.querySelectorAll('[data-testid="physical-controls"] button,[data-testid="pad-matrix"] button')].map(node=>{
+        const b=node.getBoundingClientRect();
+        const cx=b.x+b.width/2,cy=b.y+b.height/2;
+        const points=[[cx,cy],[b.x+2,cy],[b.right-2,cy],[cx,b.y+2],[cx,b.bottom-2]];
+        return {name:node.getAttribute("aria-label")??node.textContent,disabled:node.disabled,rect:rect(node),
+          hits:points.map(([x,y])=>{const top=document.elementFromPoint(x,y);return top===node||node.contains(top);})};
+      });
+      return {viewport:{width:innerWidth,height:innerHeight},geometry,stage:rect(document.querySelector("#root")),
+        regions:[...root.children].map(rect),targets,
+        padCount:root.querySelectorAll('[data-testid="pad-matrix"] button').length};
+    });
+    observations.push({label,...value});
+    await writeFile(info.outputPath("last-console-observation.json"),JSON.stringify({label,...value},null,2));
+    // Check the actual DOM hit owner, not CSS width alone or equality between
+    // two layouts that could share the same missing physical input region.
+    for(const target of value.targets) {
+      expect(target.rect.width,`${label}: ${target.name} width`).toBeGreaterThanOrEqual(44);
+      expect(target.rect.height,`${label}: ${target.name} height`).toBeGreaterThanOrEqual(44);
+      if(!target.disabled)expect(target.hits,`${label}: ${target.name} centre/edges intercepted`).toEqual([true,true,true,true,true]);
+    }
+    expect(value.padCount).toBe(16);
+    const b=value.geometry,stage=value.stage;
+    expect(b.x).toBeGreaterThanOrEqual(stage.x-1);expect(b.right).toBeLessThanOrEqual(stage.right+1);
+    expect(b.y).toBeGreaterThanOrEqual(stage.y-1);expect(b.bottom).toBeLessThanOrEqual(stage.bottom+1);
+    for(let i=0;i<value.regions.length;i++)for(let j=i+1;j<value.regions.length;j++) {
+      const a=value.regions[i],b=value.regions[j];
+      expect(a.right<=b.x||b.right<=a.x||a.bottom<=b.y||b.bottom<=a.y,`${label}: regions ${i}/${j} overlap`).toBe(true);
+    }
+    if(value.viewport.width<708) {
+      expect(b.width).toBe(value.viewport.width-16);expect(b.height).toBe(778);
+    }
+    return value;
+  }
+  await inspect("fresh phone boot");
+  for(const viewport of [{width:390,height:844},{width:480,height:844},
+    {width:707,height:900},{width:708,height:900},{width:1440,height:900}]) {
+    await resizeViewport(page,viewport);
+    for(const mode of ["Project","Sample","Sequence","Perform"]) {
+      await keys.getByRole("button",{name:mode,exact:true}).click();
+      await expect(page.locator(".overview-display")).toHaveAttribute("data-mode",mode.toLowerCase());
+      await page.evaluate(()=>new Promise(resolve=>requestAnimationFrame(resolve)));
+      await inspect(`${mode} ${viewport.width}x${viewport.height}`);
+      if(viewport.width===390||viewport.width===1440) {
+        const path=info.outputPath(`console-${viewport.width}-${mode}.png`);
+        await page.screenshot({path});await info.attach(`${viewport.width} ${mode}`,{path,contentType:"image/png"});
+      }
+    }
+    await keys.getByRole("button",{name:"System",exact:true}).click();
+    await expect(page.locator(".overview-display")).toHaveAttribute("data-mode","system");
+    await inspect(`System ${viewport.width}`);
+    await page.getByRole("button",{name:"Back to music",exact:true}).click();
+    await expect(page.locator(".overview-display")).toHaveAttribute("data-mode","perform");
+    await inspect(`System return ${viewport.width}`);
+  }
+  await resizeViewport(page,{width:390,height:844});await page.reload();await waitForBootProject(page);
+  await page.evaluate(()=>new Promise(resolve=>requestAnimationFrame(resolve)));
+  await inspect("reopened phone");
+  await keys.getByRole("button",{name:"Project",exact:true}).click();
+  await expect(page.locator(".overview-display")).toHaveAttribute("data-mode","project");
+  await expect(page.getByRole("button",{name:"Import .lmdj",exact:true})).toBeEnabled();
+  await inspect("reopened Project pointer");
+  const path=info.outputPath("narrow-console-hit-targets.json");
+  await writeFile(path,JSON.stringify({observations},null,2));
+  await info.attach("actual console geometry and pointer owners",{path,contentType:"application/json"});
+});
