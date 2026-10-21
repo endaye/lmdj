@@ -1066,7 +1066,13 @@ class ReleasePrepareTest(unittest.TestCase):
 
     def test_cli_normalizes_usage_and_verification_failures(self) -> None:
         self.assertEqual(cli.main(["prepare"]), 64)
-        self.assertEqual(cli.main(["--repo-root", str(self.root), "prepare", "bad-tag"]), 2)
+        # The host doctor runs first; this case is about the verification
+        # failure behind it, so the doctor is stubbed as passing.
+        with (
+            mock.patch.object(cli, "release_doctor", return_value=[]),
+            redirect_stderr(io.StringIO()),
+        ):
+            self.assertEqual(cli.main(["--repo-root", str(self.root), "prepare", "bad-tag"]), 2)
 
     def test_cli_reports_the_sanitized_subprocess_reason(self) -> None:
         diagnostic = "Web Runtime Host error: EMSDK is not configured"
