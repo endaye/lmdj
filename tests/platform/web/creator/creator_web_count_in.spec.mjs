@@ -132,7 +132,7 @@ for (const scenario of [
         expect(stalled.before).toBeLessThan(start);
         expect(stalled.after).toBeGreaterThanOrEqual(start + 9_600);
       } else await waitForObservedFrame(page, start + 9_600, 2_000);
-      // Freeze the fixed 24-second cell as soon as the required post-S PCM
+      // Freeze the fixed 16-second cell as soon as the required post-S PCM
       // exists. I/O opening may use its original remaining five seconds.
       const expectedCues = scenario.metronome ? [...markers, start] : markers;
       const pcm = await readCountInPcm(page, [...markers, start], {cueMarkers: expectedCues});

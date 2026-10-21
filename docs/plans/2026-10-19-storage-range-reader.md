@@ -1,3 +1,99 @@
+# Current-main B0 integration, 2026-10-21
+
+One Conventional Commit owns the exact original14 declared files below.
+Initial main6ca4c9cf78471c337668ec1642d23610f49f9fb2; precommit main21c0d8007df82908798d12a5882dd7ba4fcb95b7; original Draft2401
+source01aba485607e468259d14454c2bc64b06525d997 and parenta7954f87422f1d7e1faf9c49ca1b25ef7ee7038a
+remain unchanged. User authorizes sequential PR integration and safe postmerge
+cleanup. This current boundary supersedes the historical freeze paragraphs
+only for the declared allowed paths. No frozen release path, Creator/meter or
+COUNT-IN layer is included. Never replay the whole original stack.
+
+## Current premises before source transfer
+
+Live2135 remains OPEN and retains B0 as only the raw-read prerequisite; A,
+verified scan, WAV metadata, async worker and Take consumer stay distinct. All
+13 existing declared source/test/Portal files are byte-identical between actual
+main and the original parent; the new plan is absent at both. Full public
+header/native/Web implementations have complete reads and known-positive
+TextReader/LayoutValidator companions, but no range capability. Native existing
+complete-read helper still resizes to the entire file; Web read_complete copies
+a whole JS buffer into a whole vector, and read_artifact retains complete hash
+validation. B0 remains outstanding and necessary; it proves no saved metadata.
+No actual merged successor exists on this main; live2401 is OPEN Draft at the
+exact source with no auto-merge. Reader semantics/version/design unchanged.
+
+Clean isolated branch has ten real tracked symlinks and no main upstream. Before
+transfer, Native configure/build and complete storage-platform CTest PASS
+(27 original scenarios in the inspected main function); Node original14 PASS.
+Original14-file delta transfers cleanly; retain all original test bodies and
+original historical failure/recovery receipts, without rewriting published refs.
+
+## Integration verification and boundaries
+
+Run complete owning Native33 scenarios and production library, Node20, original
+wrong-offset/whole-file controls with actual RED and fresh-mtime rebuilt GREEN.
+Pinned6.0.5/Node26 toolchain/project-io build and production no-hook link smoke;
+unchanged complete Chromium5 and supported OPFS WebKit2 selections retain all
+common interruption/recovery, owner/mount/refusal, range and reopen legs and
+original deadlines. Inspect successful literal-byte/reopen/physical-writer
+JSONs. Full Portal/dependencies/Web timeout policy/staged+committed ownership.
+No blanket complete-core/Creator/batch/candidate PASS is inferred from selection.
+
+Two old WebKit common-recovery lifecycle timeouts remain historical unresolved
+evidence; a later green does not explain their cause. Preserve those exact
+nonzero logs/traces and parent control, inspect any new failure before retrying
+or disposition, and keep full-candidate stability unverified. Independent
+exact-head review must assess these alongside current Task evidence before
+integration. No environment-only cause, dropped leg or widened timeout.
+
+Version impact: existing Project I/O optional C++ API MINOR debt in2237,
+deduplicated within the existing domain; no base-vtable, manifest, Product/
+Assembly/Build/Channel/Contract identity or snapshot allocation.
+Documentation impact: required
+Affected portal pages: /core/modules/project-io/ /platform/storage/
+Reason: raw bounded read/buffer/offset/error/lifetime semantics and remaining
+verified consumer; no diagram edge changes.
+Pitfall impact: none unless new non-product evidence warrants it; original
+range/Asyncify regression ownership remains. Current-head review, all findings/
+conversations/closing relations, actual conflicts/live protection and expected-
+head squash still required. Source and candidate/device acceptance stay distinct.
+
+## Current integration verification, before commit
+
+Native baseline27 scenarios/Node14 PASS; integration Native33/Node20 PASS,
+original base vtable unchanged and27 main-body test calls retained in order.
+Production Native library PASS. Wrong-offset Native and whole-file Web mutants
+each fail the owning binary/window assertion; strictly fresh restoration
+recompiles Native source, complete Native33 and Node20 PASS.
+
+Portal179 tests/53 pages/51 routes PASS61.786s; dependencies, original Web
+timeout policy and staged ownership76 PASS. Pinned6.0.5/Node26 configure/toolchain/
+Project I/O build and production no-hook link smoke PASS. All14 staged source
+hashes stayed unchanged through actual browser tests. Chromium5 PASS22.566s
+and supported OPFS WebKit2 PASS50.988s, zero skips/flaky/failures. Both literal
+byte records:3 reports,3 real physical reads,3 closed pages/two reopens, exact
+window/canaries/tail/EOF and physical writer0/0. Raw JSON reports and successful
+path-backed evidence read back. WebKit uses existing pinned2361 through the
+supported explicit executable override and unchanged protocol wrapper; client
+1.62.1, no shared cache mutation.
+
+This success does not explain or discharge the two retained original WebKit
+lifecycle failures or clear full-candidate stability debt. Open pitfall guidance
+on environment correlation and declared gaps was read; no environment-only
+resolution or removed coverage is claimed. Independent exact-head review must
+inspect the complete diff and retained historical finding before integration.
+
+Precommit refresh observed external release PR2431 merge21c0d8007df82908798d12a5882dd7ba4fcb95b7.
+The first exact-initial-base guard exited1 before any commit. All11 intervening
+paths are release tooling/tests/pitfall, overlap0 with Task14, and all7 applicable
+governance hashes unchanged. Owned unpublished branch fast-forwarded safely;
+all14 staged source hashes stayed identical. No product/test/Portal input or
+range premise changed, no full-gate/strict-update requirement introduced. Earlier
+checks named committed-ownership/final-scope were only precommit observations;
+run actual final committed checks afterward, retaining both.
+
+## Historical original plan and receipts
+
 # Bounded storage range reads — #2135 B0
 
 ## Premises before edits

@@ -214,6 +214,25 @@ test("valid old-owner meter drains its token without adopting or poisoning the n
   await controller.close();
 });
 
+test("old-owner ACK failure does not poison the current meter owner", async () => {
+  const {controller, node} = await fixture({onPostMessage(message) {
+    if (message.type === "meter-ack" && message.owner === METER_A) throw new Error("old ACK failed");
+  }});
+  controller.setMeterOwner(METER_A);
+  controller.setMeterOwner(METER_B);
+  node.port.onmessage({data: meterMessage()});
+  assert.deepEqual(controller.meterMeasurement(), {state: "unavailable", reason: "pending"});
+  // Controller-level admitted traffic, not a claim that MessagePort retries
+  // a failed ACK or the Worklet can bypass its single in-flight token.
+  node.port.onmessage({data: meterMessage({owner: METER_B})});
+  const current = controller.meterMeasurement();
+  assert.equal(current.state, "available");
+  assert.equal(current.owner, METER_B);
+  node.port.onmessage({data: meterMessage()});
+  assert.deepEqual(controller.meterMeasurement(), current);
+  await controller.close();
+});
+
 test("unsafe clocks, malformed peaks and discontinuous windows fail only their meter owner", async () => {
   const malformed = [
     {windowEndFrame: "9007199254740992"}, {windowStartFrame: "00"},
@@ -874,6 +893,8 @@ test("a legacy null binding still arms, and a malformed binding is refused", asy
 
 
 test("capture progress counts delivered silent PCM and the real final partial batch, without a wall clock", async () => {
+  // Batch/getter/WAV agreement can share a dropped partial. The real VM must
+  // independently deliver all 38 * 128 = 4864 frames, including the final 64.
   const f = await integratedFixture();
   const delivered = [];
   const handle = await f.controller.start({onBatch: ([left]) => delivered.push(left.length), onStopped() {}, onFailure() { assert.fail(); }});
@@ -996,4 +1017,47 @@ test("capture progress is published before sink callbacks and does not claim Hos
   const stop=h.stop();f.node.port.onmessage({data:{type:"stopped",generation:1,finalSequence:1}});await stop;
   assert.equal(duringStop.phase,"stopped");assert.equal(duringStop.receivedFrames,3);
   await f.controller.close();
+});
+
+test("real meter owner replacement preserves capture progress through final partial and stopped metering", async () => {
+  const f = await integratedFixture();
+  const batches = [];
+  f.controller.setMeterOwner(METER_A);
+  const capture = await f.controller.start({
+    onBatch: channels => batches.push(channels[0].length),
+    onFailure() { assert.fail("meter ownership cannot fail capture"); },
+    onStopped() {},
+  });
+  let rendered = 0;
+  const render = quanta => {
+    for (let i = 0; i < quanta; i++) {
+      f.clock.currentFrame = rendered;
+      const input = [new Float32Array(128).fill(0.5), new Float32Array(128).fill(0.125)];
+      f.processor.process([input], [[new Float32Array(128), new Float32Array(128)]]);
+      rendered += 128;
+    }
+  };
+  try {
+    render(40);
+    assert.equal(f.controller.meterMeasurement().owner, METER_A);
+    assert.equal(f.controller.meterMeasurement().leftPeak, 0.5);
+    assert.equal(f.controller.meterMeasurement().rightPeak, 0.125);
+    assert.equal(f.controller.captureProgress().receivedFrames, 4800);
+    f.controller.setMeterOwner(METER_B);
+    assert.equal(f.controller.captureProgress().receivedFrames, 4800);
+    render(7);
+    await capture.stop();
+    // Closed-form rendering count is independent of both consumers' counters.
+    assert.equal(rendered, 6016);
+    assert.deepEqual(batches, [4800, 1216]);
+    const progress = f.controller.captureProgress();
+    assert.equal(progress.phase, "stopped");
+    assert.equal(progress.receivedFrames, 6016);
+    assert.equal(progress.generation, capture.generation);
+    render(20);
+    assert.equal(f.controller.meterMeasurement().owner, METER_B);
+    assert.equal(f.controller.meterMeasurement().leftPeak, 0.5);
+    assert.equal(f.controller.meterMeasurement().rightPeak, 0.125);
+    assert.deepEqual(f.controller.captureProgress(), progress);
+  } finally { await f.controller.close(); }
 });

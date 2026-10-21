@@ -206,6 +206,31 @@ class ComposedReferenceTest(unittest.TestCase):
         with self.assertRaises(VerificationError):
             terminal_result([self.result(), self.result()], WITNESS)
 
+    def test_the_intent_batch_reference_ignores_a_main_result_for_the_witness(self):
+        # When the witness merge is also main's head, the incremental main
+        # batch records its own terminal result for the same revision (seen
+        # live for 2.0.122.0: z1-full-candidate beside o1-incremental:1346).
+        # The intent step must select the candidate result exactly as the
+        # verification carrier does, not refuse the target as ambiguous.
+        from unittest import mock
+        from tools.release import entry_composition, verification
+        main = self.result(identity={"target_sha": WITNESS, "request_id": "o1-incremental",
+                                     "run_id": 3333, "run_attempt": 1, "request_kind": "node"})
+        candidate = self.result()
+        picked = []
+        with mock.patch.object(verification, "release_reference",
+                               lambda events, result, witness, consumer: picked.append(result) or "ref"):
+            reference_for = entry_composition._batch_reference_for(lambda: [main, candidate], self.consumer)
+            self.assertEqual(reference_for(WITNESS), "ref")
+            self.assertEqual(picked[-1]["request_id"], "batch-request")
+            # Two candidate-kind results for one target remain a hard refusal.
+            with self.assertRaises(entry_composition.JournalError):
+                entry_composition._batch_reference_for(
+                    lambda: [candidate, self.result()], self.consumer)(WITNESS)
+            # Only the main result: there is no admissible candidate result.
+            with self.assertRaises(entry_composition.JournalError):
+                entry_composition._batch_reference_for(lambda: [main], self.consumer)(WITNESS)
+
     def test_a_non_terminal_candidate_result_alongside_a_passed_one_still_refuses(self):
         # The kind filter must not silently skip a candidate result that has
         # not proven terminal: the observe path refuses it (multiplicity or

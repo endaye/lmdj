@@ -158,6 +158,30 @@ class CarrierTest(unittest.TestCase):
         self.assertEqual(carrier.advance({}, {"step": "prepared"},
                                          before_write=lambda: None).status, "unknown")
 
+    def test_prepare_failure_carries_a_sanitized_console_cause(self):
+        # 2.0.122.0 spent several resume rounds before "EMSDK is not configured"
+        # was visible; a release-tool error now travels as a bounded, redacted
+        # diagnostic, while a foreign exception contributes only its type.
+        from tools.release.commands import CommandError
+        def failing(tag):
+            raise CommandError("release command failed: bash (exit 1)",
+                               detail="Creator Web error: EMSDK is not configured GITHUB_TOKEN=ghp_" + "a" * 36)
+        carrier = PreparedCarrier(root=self.root, spec=spec(), prepare=failing,
+                                  tag_state=lambda: None, signer_fingerprint=SIGNER)
+        observed = carrier.advance({}, {"step": "prepared"}, before_write=lambda: None)
+        self.assertEqual(observed.status, "unknown")
+        self.assertIn("CommandError: release command failed: bash (exit 1): "
+                      "Creator Web error: EMSDK is not configured", observed.diagnostic)
+        self.assertNotIn("ghp_", observed.diagnostic)
+        self.assertNotIn("a" * 36, observed.diagnostic)
+
+        def foreign(tag):
+            raise RuntimeError("upstream body with private detail")
+        carrier = PreparedCarrier(root=self.root, spec=spec(), prepare=foreign,
+                                  tag_state=lambda: None, signer_fingerprint=SIGNER)
+        observed = carrier.advance({}, {"step": "prepared"}, before_write=lambda: None)
+        self.assertEqual(observed.diagnostic, "RuntimeError")
+
     def test_carrier_refuses_an_untrusted_composition(self):
         with self.assertRaises(PreparedStepError):
             PreparedCarrier(root=self.root, spec=spec(), prepare=None,

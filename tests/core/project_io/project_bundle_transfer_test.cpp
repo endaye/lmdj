@@ -988,6 +988,38 @@ void test_copy_starts_a_fresh_history() {
       !std::filesystem::exists(copy / "history/checkpoints/1.json"));
 }
 
+void test_busy_project_listing_preserves_committed_read_without_writer_authority() {
+  Fixture f;
+  ProjectBundleTransfer original{f.platform};
+  const auto copied = duplicate(original, f.workspace);
+  LMDJ_CHECK(copied.has_value());
+  const auto source = project_path(f.workspace, kSourceId);
+  const auto expected = build_fixture(source, kSourceId);
+  auto foreign = lmdj::project_io::make_native_project_storage_platform(f.leases);
+  auto held = foreign->acquire_writer(source);
+  LMDJ_CHECK(held.has_value());
+  // The existing Store contract can inspect committed Truth under a foreign
+  // owner, without recovering or acquiring that owner's writer authority.
+  const auto committed = ProjectStore{f.platform}.load(source);
+  LMDJ_CHECK(committed.has_value());
+  auto platform = std::make_shared<InventoryRangePlatform>(f.platform,
+      source / "assets" / (artifact(kRecordingAudio).sha256 + ".wav"));
+  ProjectBundleTransfer transfer{platform};
+  const auto listed = transfer.list_local_projects(f.workspace);
+  LMDJ_CHECK(listed.has_value());
+  LMDJ_CHECK(listed.value().size() == 2);
+  const auto summary = std::find_if(listed.value().begin(), listed.value().end(),
+      [](const auto& value) { return value.project_id.value() == kSourceId; });
+  LMDJ_CHECK(summary != listed.value().end());
+  LMDJ_CHECK(summary->revision == committed.value().revision);
+  LMDJ_CHECK(summary->bundle_digest == expected.digest);
+  LMDJ_CHECK(listed.value().at(1) == copied.value());
+  const auto still_busy = f.platform->acquire_writer(source);
+  LMDJ_CHECK(!still_busy.has_value());
+  LMDJ_CHECK(still_busy.error().details.at("storage_condition") == "project_busy");
+  LMDJ_CHECK(build_fixture(source, kSourceId).digest == expected.digest);
+}
+
 void test_library_lists_both_projects_and_the_copy_summary() {
   Fixture f;
   ProjectBundleTransfer transfer{f.platform};
@@ -1371,6 +1403,7 @@ void test_duplicate_preserves_source_redo_and_does_not_copy_session_history() {
 
 int main() {
   try {
+    test_busy_project_listing_preserves_committed_read_without_writer_authority();
     test_discovery_hashes_bounded_bytes_under_the_project_writer();
     test_discovery_range_failures_never_publish_partial_identity();
     test_large_legacy_inventory_is_refused_before_complete_allocation();

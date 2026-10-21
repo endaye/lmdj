@@ -21,13 +21,6 @@ export type WavSealReason =
   | "tap-failure"
   | "stopped";
 
-export interface WavWriterFormat {
-  readonly sampleRate: number;
-  readonly channels: number;
-}
-
-const WAV_FORMAT: WavWriterFormat = Object.freeze({sampleRate: SAMPLE_RATE, channels: CHANNELS});
-
 export interface WavWriterSnapshot {
   readonly state: "active" | "sealed";
   readonly durableFrames: number;
@@ -86,8 +79,6 @@ export class WavStreamWriter {
     this.#file = file;
     this.#limits = validateLimits(limits);
   }
-
-  get format(): WavWriterFormat { return WAV_FORMAT; }
 
   get queueBatchLimit(): number {
     return this.#limits.perform_recording_queue_batches;

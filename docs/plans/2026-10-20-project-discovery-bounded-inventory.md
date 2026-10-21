@@ -1,3 +1,126 @@
+# Current-main integration of #2410
+
+## Current review correction before follow-up commit
+
+GLM5591733351/run39497355277 found a real compatibility regression: the new
+unconditional outer writer acquisition rejected a busy Project where the existing
+ProjectStore::load explicitly allows committed read-only loading. An isolated real
+Native two-Project case passes against main5ec03d71 and fails against candidate
+3f25339e after actual source rebuilds. The complete candidate CTest and actual
+Chromium foreign-owner case also fail at the discovery-success assertion.
+
+Correct the overly strong unconditional-writer premise: preserve history-before-
+writer ordering and retain a genuine lease for the full scan whenever acquired;
+when project_busy, follow the existing committed-read path without writer,
+recovery or mutation authority. Full canonical bytes, bounded windows, original
+error/EOF checks and all original allocation/ownership oracles remain. This is
+existing read-only compatibility, not a new atomic cross-owner snapshot promise.
+Add persistent Native two-Project/foreign-owner and actual public OPFS two-page
+ownership regressions; free Project open succeeds, busy Project open still
+refuses and the original owner retains its Project. Both digests are independently
+verified in the browser. Old full selections remain and the new case adds one
+per browser; no deadline, quota, threshold or journey leg is reduced.
+
+The second review note describes the per-instance transfer mutex, whose scope
+is byte-identical in5ec03d71 and3f25339e. It already serialized full hashing with
+begin/append/commit/abort. Retaining a successfully acquired writer through the
+scan is the declared consistency cost; the existing API gains no nonblocking or
+concurrent-transfer guarantee. Record this limitation and reasoned disposition;
+do not remove full hashing to make the concern disappear.
+
+All initial3f25339e passing results below remain historical. Updated complete
+Native/Wasm/browser/Portal/production verification and new-head independent
+review/automatic repair recheck remain pending until actual receipts exist.
+
+
+## Follow-up source verification before clean checkpoint
+
+The exact corrected collector rebuilt successfully and the complete original-plus-
+new Native owning selection passed12/12 in29.172s. Official pinned6.0.5 formal
+build-audio-runtime passed50.359s. Final full Chromium5/5 passed107.255s and
+supported OPFS WebKit4/4 passed154.474s, zero skips/flaky/retries. Artifact readback
+verifies9 metadata reports,6 full long-file inventories,4 pre-open lists and18
+closed pages perbrowser. Every original Save/bind/two-reopen leg, full345600056-
+byte SHA/header/tail/86400000frames,512MiB and30s/180s budgets remains.
+
+The new two-Project case compares each full digest with independent browser
+Crypto, opens the free Project, receives exact public PROJECT_BUSY on the busy
+Project, retains the free/current and foreign/original owners and closes all3
+pages. Native separately proves project_busy and no transferred writer authority.
+Two added-test mistakes remain negative evidence: initial Chromium checked the
+underlying storage field instead of established normalized PROJECT_BUSY; next
+WebKit assumed an empty profile though that supported browser retains earlier
+fixtures across contexts. The final test independently enumerates physical
+pre-existing Project directories before seeding, then asserts the entire exact
+returned ID inventory plus both new Projects. No original test is removed or
+weakened. All failed traces remain distinct from the actual old-code busy RED.
+
+Dependencies, Runtime and explicit-root Host boundaries and spec syntax pass.
+Current four verified non-plan input hashes are saved. Full Portal passed50.676s:
+179 tests,53 pages and51 routes/internal links before the follow-up Conventional
+Commit. Clean-head production configure/build/package, committed ownership/scope,
+independent new-head review and automatic repair publication remain separate
+boundaries recorded in the PR only after actual receipts. Never amend/force the
+already published initial3f25339e.
+
+
+# #2410 integration premises before source edits
+
+Main5ec03d715b2fbf2323219537be159336f5b6f315; original sourcec3edab71c0ad6eb380e0d9a8837dd56a67db7ee2, original parent3a62b103c7c79cbfb8c18e4849b3cd477318df4c. Clean isolated fix/project-discovery-bounded-inventory-main has10 actual symlinks. Live #2112/#2135/#2237/comments and #2410/#2411/#2438 refreshed. No competing discovery implementation exists; #2411 owns subsequent Take consumer.
+
+- Outstanding: actual Creator App startup calls listLocalProjectsJourney before opening remembered Project; SDK/Control project.list calls public Application list_local_projects -> ProjectBundleTransfer list_local_projects -> summarize_project -> project_digest -> collect_inventory. Current collector calls read_complete on every file and only afterward applies64MiB entry/512MiB transfer payload limits. Current summary load does not retain history/writer across full inventory. Read authoritative dispatch/handlers, not only name search.
+- Already delivered: bounded Save/bind5ec03d71 (#2438) and raw/scan/WAV/Facade/Runtime/SDK producers through #2437. Save now accepts the physical345600056-byte recording under fixed512MiB; direct reopen/metadata is not startup discovery. Do not repeat those fixes or import held meter/capture-progress/withdrawn COUNT-IN ancestors.
+- Four non-new inputs compared: C++ collector, original Native test and real RPC spec equal original parent; only ProjectIO Portal differs by the verified Facade/SDK status correction from #2438. Re-home only this five-file delta and retain that correction plus all original tests/journeys.
+- Local discovery requires full canonical identity, stable history-before-writer ownership and bounded64KiB ranges with complete digest, pre/post lengths and EOF. Preserve keys/path validation/4096 count bounds/unsigned canonical order and uint64 overflow protection. Existing local long recordings are not Bundle import/copy authorization; transfer64MiB/512MiB caps remain at their original boundaries. Legacy small complete reads stay compatible; oversized legacy files refuse before allocation, present-reader errors never fall back.
+- Original full Native bundle-transfer baseline must pass before edits. Apply added observer against unchanged collector for actual rebuilt RED at complete_recording_reads==0 while digest agrees, then exact fix/rebuild GREEN. Preserve all original import/copy/publication/recovery tests and complete12-suite persistence/stress selection. Real Chromium4/WebKit3 retains all original metadata/live-Control/longSave/bind/two-reopen legs and adds public project.list plus independent browser-Crypto full physical canonical inventory digest in every long-file report; no increased512MiB,30s RPC or180s case budgets.
+- Formal staged-source proof and clean-head production Creator configure/build/package are separate boundaries. Run heavy Native/Wasm/browser/Portal/production phases sequentially. Full Portal/ownership/source boundaries/current-head independent review and guarded merge remain required. Preserve the second original U08b discovery OOM trace take-audio-bounded-parent-target-chromium, earlierSaveOOM/fixture mistake and oldB0 WebKit negative evidence.
+- Exact five-file Task, one Conventional Commit; current normal push/review/squash and safe postmerge cleanup authorized. Original published stack, rootmain6ca4c9cf and both dirtyWIPs remain untouched. Release-owned path freeze, fixedcandidate8c361623f and pending #2430 owner exception stillapply; no hand-resolve, subagents, auto-merge/tag/Release/deploy/Channel.
+
+Original complete Native bundle-transfer baseline passed3.263s before any Task
+edit. The added observer first runs against the unchanged collector; a matching
+digest alone cannot establish bounded reads. Later verification and shipping
+boundaries remain pending until actual receipts exist.
+
+## Additional startup discovery verification
+
+Source inspection confirms Creator lists before selecting/opening the remembered
+Project. Preserve all original post-open complete-inventory digest assertions,
+and additionally list on each fresh reopen page before project.open. Exact
+Project/Pattern/revision/summary-key identity and digest shape prove startup
+admission with no selected Project; the independent full physical digest remains
+asserted after the original list. No original leg, limit or budget is removed.
+
+## Initial 3f25339e source verification before review
+
+Original complete Native bundle-transfer baseline passed3.263s. Added observer
+rebuilt against unchanged main fails at complete_recording_reads==0 (exit8),
+after the exact complete-digest assertion succeeds. Applying the exact original
+collector fix recompiles project_bundle_transfer.cpp and passes; final original
+persistence/component/writer-stress selection12/12 passed30.870s. Full original
+import/copy/publication/recovery cases and limits remain called. Independent
+Python hashlib confirms the literal131089-byte recording digest. Dependencies,
+Runtime and explicit-root Host source boundaries pass. Pinned formal Wasm configure/build passed. Actual complete Chromium4/4
+passed106.317s and supported OPFS WebKit3/3 passed141.618s, with no skips/flaky/
+retries and original budgets unchanged. Each browser retains9 metadata reports,
+6 long-file full physical canonical inventory comparisons and15 closed pages.
+Four fresh-page pre-open lists additionally pass exact identity/revision/key/
+digest-shape assertions; complete artifact readback verifies those digests also
+match the unchanged fixture's independent post-open inventory digest. Full WAV
+345600056-byte SHA/header/tail/86400000frames at48kHz/stereo and512MiB memory
+remain exact. Built-in speakers observed at both endpoints, no warnings; this
+is controlled OPFS fixture evidence, not captured PCM or device hearing.
+Full Portal passed64.070s:179 tests,53 pages,51 routes/internal links.
+Precommit main5ec03d71 and all seven read governing files are unchanged; all
+four non-plan verified input hashes remain exact. A clean unpublished source
+checkpoint is required for official production Creator configure/build/package;
+those receipts and independent review remain pending until their boundaries.
+
+## Retained original Task record
+
+The following is the published original implementation record. Its older base,
+freeze, counts and unverified boundaries are historical; current authorization,
+refreshed premises and new receipts above govern this integration.
+
 # Bounded local Project discovery for saved long recordings
 
 ## Premises before implementation

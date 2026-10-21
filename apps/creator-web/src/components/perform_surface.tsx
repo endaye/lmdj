@@ -1,20 +1,19 @@
-import "./perform_surface.css";
 import {performCaptureUnavailableMessage} from "../state/error_messages";
-import {useEffect, useId, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore} from "react";
+import {useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore} from "react";
 import type {PerformanceFx} from "@lmdj/web-runtime-platform/runtime_types";
-import type {ContextualEncoders, ContextualNavigation} from "./physical_controls";
+import type {ContextualEncoders} from "./physical_controls";
 
 import type {ProjectView} from "../runtime/runtime_types";
 import type {Bank} from "../state/creator_state";
 import {
   selectTransportBusy,
   selectTransportPlaying,
+  selectTransportRecording,
   type PatternTransportState,
 } from "../state/pattern_transport_state";
 import {transportStatusLabel} from "./transport_status";
 import {
   PERFORMANCE_FX_ORDER,
-  performanceNameError,
   selectLivePadGate,
   type PerformController,
   type PerformState,
@@ -27,9 +26,6 @@ import {
 } from "./fx_slider_bank";
 import {slotAddress} from "../state/view_model";
 import {PatternLaunchStrip} from "./pattern_launch_strip";
-import {RecordingAudioReadout} from "./recording_audio_readout";
-import {TakeAudioReadout} from "./take_audio_readout";
-import {ReplayProgressReadout} from "./replay_progress_readout";
 
 export interface PerformSurfaceProps {
   readonly controller: PerformController;
@@ -39,13 +35,10 @@ export interface PerformSurfaceProps {
   // The Perform surface renders the same global Pattern transport projection
   // every other mode consumes; it never drives it.
   readonly transport?: PatternTransportState;
-  readonly patternSelectionLocked?: boolean;
-  readonly slotEditingLocked?: boolean;
   readonly recordingBusy?: boolean;
   readonly reviewRequested?: boolean;
   readonly onReviewShown?: () => void;
   readonly onEncodersReady?: (encoders: ContextualEncoders | null) => void;
-  readonly onNavigationReady?: (navigation: ContextualNavigation | null) => void;
   readonly monitorVolume?: MonitorVolumeControl | undefined;
   // #1958: without a Performance recording, a Launch slot selects its Pattern
   // through the app's Sequence selection path, which queues a transport switch
@@ -71,17 +64,8 @@ function RecordingPanel(props: {
 }) {
   const phase = props.state.recording.phase;
   const [name, setName] = useState("Performance");
-  const nameHelpId = useId();
-  const nameError = props.state.pendingSaveName === null ? performanceNameError(name.trim()) : null;
-  const stopped = props.page === "takes" && ["stopped", "saving", "discarding"].includes(phase);
   return (
-    <section className="perform-recording" aria-label="Performance recording" data-phase={phase}>
-      {stopped ? <div className="perform-stopped-card">
-        <h2 className="perform-take-heading">{phase === "saving" ? "Saving recording…"
-          : phase === "discarding" ? "Discarding recording…" : "Ready to save"}</h2>
-        <RecordingAudioReadout progress={props.state.recordingAudio} />
-      </div> : props.page === "live" || props.page === "takes"
-        ? <RecordingAudioReadout progress={props.state.recordingAudio} /> : null}
+    <section className="perform-recording" aria-label="Performance recording">
       {props.page === "live" || props.page === "takes" ? <>
         {phase === "idle" ? <button type="button" disabled={!props.canRecord}
           onClick={props.onRecord}>Record Performance</button> : null}
@@ -94,38 +78,22 @@ function RecordingPanel(props: {
         {phase === "recording" ? <button type="button"
           onClick={props.onFlush}>Flush Performance</button> : null}
         {["stopped", "saving", "discarding"].includes(phase) ? <>
-          <label className="perform-take-name">Performance name
-            <input type="text" aria-label="Performance name" value={props.state.pendingSaveName ?? name}
-              aria-invalid={nameError !== null || undefined}
-              aria-describedby={nameError === null ? undefined : nameHelpId}
-              disabled={phase !== "stopped" || props.state.saveConfirmation !== null || props.state.pendingSaveName !== null}
+          <label>Performance name
+            <input type="text" aria-label="Performance name" value={name}
+              disabled={phase !== "stopped"}
               onChange={(event) => setName(event.currentTarget.value)} />
           </label>
-          {nameError !== null ? <p role="alert" id={nameHelpId}>{nameError}</p> : null}
-          <div className="perform-take-actions">
-          <button className="perform-take-save" type="button" disabled={phase !== "stopped" || nameError !== null}
-            onClick={() => props.onSave(props.state.pendingSaveName ?? name.trim())}>Save Performance</button>
-          <button className="perform-take-discard" type="button" disabled={phase !== "stopped"}
+          <button type="button" disabled={phase !== "stopped" || name.trim() === ""}
+            onClick={() => props.onSave(name.trim())}>Save Performance</button>
+          <button type="button" disabled={phase !== "stopped"}
             onClick={props.onDiscard}>Discard Performance</button>
-          </div>
         </> : null}
         {props.state.recording.wav !== null ? <button type="button"
           onClick={props.onExportWav}>Export Performance WAV</button> : null}
         {props.state.bindingStatus === "retry" ? <button type="button"
           onClick={props.onRetryBind}>Retry WAV bind</button> : null}
-        {props.state.saveConfirmation !== null &&
-          props.state.saveConfirmation.performanceId === props.state.recording.performanceId ?
-          <output role="status" aria-label="Performance save confirmation"
-            data-performance-id={props.state.saveConfirmation.performanceId}
-            data-project-revision={props.state.saveConfirmation.projectRevision}
-            data-confirmation-source={props.state.saveConfirmation.source}>
-            {props.state.saveConfirmation.source === "save" ? "Performance saved" : "Performance inspected"}
-          </output> : null}
       </> : null}
-      <p aria-hidden="true" className={(stopped || props.page === "replay") && props.state.recordingNote === null ? "visually-hidden" : undefined}>
-        {{idle: "Ready to record", starting: "Preparing recording", recording: "Recording",
-          flushing: "Writing recording", stopping: "Finishing recording", stopped: "Ready to save or discard",
-          saving: "Saving recording", discarding: "Discarding recording"}[phase]}
+      <p aria-hidden="true">{phase === "stopped" ? "Ready to save or discard" : phase}
         {props.state.recordingNote === null ? "" : ` · ${props.state.recordingNote}`}</p>
       <output className="visually-hidden" role="status" aria-label="Performance recording status">
         {phase}
@@ -141,7 +109,7 @@ function RecordingPanel(props: {
       <output className="visually-hidden" role="status" aria-label="WAV binding status">
         {props.state.bindingStatus}
       </output>
-      {props.page !== "replay" ? <details className="perform-details">
+      <details className="perform-details">
         <summary>Recording details</summary>
         <dl>
           <div><dt>WAV recording</dt><dd>{props.state.wavStatus}</dd></div>
@@ -152,131 +120,31 @@ function RecordingPanel(props: {
             <div><dt>HOLD</dt><dd>{props.state.authority.hold ? "on" : "off"}</dd></div>
           </>}
         </dl>
-      </details> : null}
+      </details>
     </section>
   );
 }
 
-function savedPerformances(state: PerformState, project: ProjectView) {
-  return state.performancesOwner === project ? state.performances.filter(value =>
-    !state.performanceDraftIds.includes(value.performanceId) &&
-    !(state.stoppedDraft?.owner === project && state.stoppedDraft.performanceId === value.performanceId) &&
-    (state.recording.phase === "idle" || state.recording.performanceId !== value.performanceId)) : [];
-}
-
-function SavedTakesPanel({state, project, controller, selectedId, onSelect, onReplay}: {
-  readonly state: PerformState;
-  readonly project: ProjectView;
-  readonly controller: PerformController;
-  readonly selectedId: string | null;
-  readonly onSelect: (performanceId: string) => void;
-  readonly onReplay: (performanceId: string) => void;
-}) {
-  const owned = state.performancesOwner === project;
-  const performances = savedPerformances(state, project);
-  const selected = performances.find(value => value.performanceId === selectedId) ?? performances[0] ?? null;
-  useEffect(() => {
-    void controller.refreshPerformances().catch(() => {});
-  }, [controller, project]);
-  useEffect(() => {
-    if (selected !== null) void controller.inspectTakeAudio(selected.performanceId);
-    return () => controller.clearTakeAudio();
-  }, [controller, project, state.performances, selected?.performanceId]);
-  return <section className="perform-saved-takes" aria-label="Saved Takes">
-    <h2 className="perform-take-heading">Saved Takes</h2>
-    {!owned || state.performancesStatus === "loading" || state.performancesStatus === "unloaded"
-      ? <p role="status">Loading saved Takes…</p>
-      : state.performancesStatus === "unavailable" ? <>
-        <p role="status">Saved Takes unavailable</p>
-        <button type="button" onClick={() => {void controller.refreshPerformances().catch(() => {});}}>Retry saved Takes</button>
-      </> : performances.length === 0 ? <p>No saved Takes</p> : null}
-    <div className="perform-take-list" role="group" aria-label="Select saved Take">
-      {performances.map((performance, index) => <button type="button" key={performance.performanceId}
-        data-performance-id={performance.performanceId}
-        aria-label={`Select Take ${String(index + 1).padStart(2, "0")}: ${performance.name}`}
-        aria-pressed={selected?.performanceId === performance.performanceId}
-        onClick={() => onSelect(performance.performanceId)}>
-        <span>TAKE {String(index + 1).padStart(2, "0")}</span><span>{performance.name}</span>
-      </button>)}
-    </div>
-    {selected !== null ? <>
-      <TakeAudioReadout project={project} performance={selected} value={state.takeAudio}
-        onRetry={() => {void controller.inspectTakeAudio(selected.performanceId);}} />
-      <button type="button" onClick={() => onReplay(selected.performanceId)}>Replay selected Take</button>
-    </> : null}
-  </section>;
-}
-
 function ReplayPanel(props: {
   readonly state: PerformState;
-  readonly project: ProjectView;
-  readonly controller: PerformController;
   readonly onReplay: (performanceId: string) => void;
   readonly onRecover: (sessionId: string) => void;
   readonly onDiscardRecovery: (sessionId: string) => void;
 }) {
-  const {state, project, controller} = props;
-  const [finishingDraft, setFinishingDraft] = useState<"saving" | "discarding" | null>(null);
-  const owned = state.performancesOwner === project;
-  const performances = savedPerformances(state, project);
-  const stoppedDraft = owned && state.recording.phase === "idle" && state.stoppedDraft?.owner === project
-    ? state.performances.find(value => value.performanceId === state.stoppedDraft?.performanceId) : undefined;
-  useEffect(() => {
-    if (!owned || state.performancesStatus === "unloaded") {
-      void controller.refreshPerformances().catch(() => {});
-    }
-  }, [controller, project, owned, state.performancesStatus]);
   return (
     <section className="perform-replay" aria-label="Performance replay">
-      <h2 className="perform-take-heading">Saved Takes</h2>
-      {!owned || state.performancesStatus === "loading" || state.performancesStatus === "unloaded"
-        ? <p role="status">Loading saved Takes…</p>
-        : state.performancesStatus === "unavailable" ? <>
-          <p role="status">Saved Takes unavailable</p>
-          <button type="button" onClick={() => {void controller.refreshPerformances().catch(() => {});}}>Retry saved Takes</button>
-        </> : performances.length === 0 ? <p>No saved Takes</p> : null}
-      {performances.map((performance) => (
-        <article className="perform-replay-take" key={performance.performanceId}
-          data-performance-id={performance.performanceId}>
-          <h3 className="perform-take-heading">{performance.name}</h3>
-          <dl className="perform-replay-count"><div><dt>Events</dt><dd>
-            {Number.isSafeInteger(performance.eventCount) && performance.eventCount >= 0
-              ? performance.eventCount : "Unavailable"}
-          </dd></div></dl>
-          <button type="button" className="perform-replay-start is-primary"
-            disabled={state.replay?.state === "playing"}
+      {props.state.performances.map((performance) => (
+        <article key={performance.performanceId}>
+          <span>{performance.name}</span>
+          <button type="button"
             aria-label={`Replay ${performance.name}`}
             onClick={() => {
               props.onReplay(performance.performanceId);
             }}>Replay</button>
         </article>
       ))}
-      {stoppedDraft !== undefined ? <section className="perform-replay-take"
-        aria-label="Stopped Performance draft" data-performance-id={stoppedDraft.performanceId}>
-        <h2 className="perform-take-heading">Stopped recording</h2>
-        <h3 className="perform-take-heading">{stoppedDraft.name}</h3>
-        <p>Not saved yet · save or discard to finish.</p>
-        {stoppedDraft.recordingArtifact === null ? <p>No recording WAV is attached.</p> : null}
-        <dl className="perform-replay-count"><div><dt>Events</dt><dd>{stoppedDraft.eventCount}</dd></div></dl>
-        <button type="button" className="perform-replay-start is-primary"
-          disabled={state.replay?.state === "playing"}
-          aria-label={`Replay ${stoppedDraft.name}`}
-          onClick={() => props.onReplay(stoppedDraft.performanceId)}>Replay</button>
-        <button type="button" disabled={finishingDraft !== null}
-          onClick={() => {
-            setFinishingDraft("saving");
-            void controller.saveStoppedDraft().catch(() => {}).finally(() => setFinishingDraft(null));
-          }}>Save stopped recording</button>
-        <button type="button" disabled={finishingDraft !== null}
-          onClick={() => {
-            setFinishingDraft("discarding");
-            void controller.discardStoppedDraft().catch(() => {}).finally(() => setFinishingDraft(null));
-          }}>Discard stopped recording</button>
-      </section> : null}
-      <div className="perform-replay-recovery" role="group" aria-label="Performance recovery">
-      {state.recovery.length > 0 ? <h2 className="perform-take-heading">Recording recovery</h2> : null}
-      {state.recovery.map((candidate) => (
-        <article className="perform-replay-recovery-card" key={candidate.sessionId}>
+      {props.state.recovery.map((candidate) => (
+        <article key={candidate.sessionId}>
           <span>{candidate.reason}</span>
           <button type="button"
             onClick={() => props.onRecover(candidate.sessionId)}>Apply recovery</button>
@@ -286,43 +154,16 @@ function ReplayPanel(props: {
           </button>
         </article>
       ))}
-      <output className={state.recoveryStatus === "idle" ? "visually-hidden" : undefined}
-        role="status" aria-label="Performance recovery status">
-        {state.recoveryStatus}
+      <output role="status" aria-label="Performance recovery status">
+        {props.state.recoveryStatus}
       </output>
-      </div>
     </section>
   );
-}
-
-function CurrentReplayPanel({state, onStop}: {
-  readonly state: PerformState;
-  readonly onStop: () => Promise<void>;
-}) {
-  const [stopping, setStopping] = useState(false);
-  return <section className="perform-current-replay" aria-label="Current Performance replay">
-    <ReplayProgressReadout replay={state.replay} neutral={state.replayNeutral} hold={state.hold} stopping={stopping} />
-    <button type="button" disabled={stopping || state.replay?.state !== "playing"}
-      onClick={() => {
-        setStopping(true);
-        void onStop().catch(() => {}).finally(() => setStopping(false));
-      }}>Stop Replay</button>
-    <output className="visually-hidden" role="status" aria-label="Replay status">
-      {state.replay === null ? "idle" : `${state.replay.state}${
-        state.replayNeutral ? " · neutral" : ""} · resolved revision · ${state.replay.resolvedRevision}`}
-    </output>
-    {state.replay !== null && <details className="perform-details">
-      <summary>Replay details</summary>
-      <dl><div><dt>Resolved revision</dt><dd>{state.replay.resolvedRevision}</dd></div>
-        <div><dt>Neutral FX</dt><dd>{state.replayNeutral ? "yes" : "no"}</dd></div></dl>
-    </details>}
-  </section>;
 }
 
 export function PerformSurface(props: PerformSurfaceProps) {
   const {controller} = props;
   const [page, setPage] = useState<PerformPage>("live");
-  const [selectedTakeId, setSelectedTakeId] = useState<string | null>(null);
   const surface = useRef<HTMLElement>(null);
   useEffect(() => {
     if (!props.reviewRequested) return;
@@ -335,24 +176,6 @@ export function PerformSurface(props: PerformSurfaceProps) {
   const [fxGestureActive, setFxGestureActive] = useState(false);
   useEffect(() => { controller.setBank(props.bank); }, [controller, props.bank]);
   const [encoderGroup, setEncoderGroup] = useState<FxGroup>("main");
-  const [padGatesOpen, setPadGatesOpen] = useState(false);
-  const navigation = useMemo<ContextualNavigation>(() => {
-    const groups: readonly FxGroup[] = ["main", "filter", "more"];
-    const index = groups.indexOf(encoderGroup);
-    const step = (direction: -1 | 1) => {
-      setPadGatesOpen(false);
-      setEncoderGroup(groups[Math.max(0, Math.min(2, index + direction))]!);
-    };
-    return {directionStep: {
-      backLabel: "Previous FX group — ←", forwardLabel: "Next FX group — →",
-      backAvailable: index > 0, forwardAvailable: index < 2,
-      onBack: () => step(-1), onForward: () => step(1),
-    }};
-  }, [encoderGroup]);
-  useLayoutEffect(() => {
-    props.onNavigationReady?.(navigation);
-    return () => props.onNavigationReady?.(null);
-  }, [navigation, props.onNavigationReady]);
   const state = useSyncExternalStore(
     controller.subscribe,
     controller.getState,
@@ -363,13 +186,13 @@ export function PerformSurface(props: PerformSurfaceProps) {
       // The FILTER group is pure UI state: entering it calls no producer and
       // engages nothing (D04); the first actual turn engages.
       return {bindings: {
-        1: {label: "Type", value: state.filter.provenance === "unavailable" ? "—" : state.filter.type.toUpperCase(),
+        1: {label: "Type", value: state.filter.type.toUpperCase(),
           onTurn: (detents: number) => controller.turnFilterType(detents)},
-        2: {label: "Cutoff", value: state.filter.provenance === "unavailable" ? "—" : formatCutoffHz(state.filter.cutoffHz),
+        2: {label: "Cutoff", value: formatCutoffHz(state.filter.cutoffHz),
           onTurn: (detents: number, fine?: boolean) =>
             controller.turnFilterCutoff(detents, fine)},
         3: {label: "Resonance",
-          value: state.filter.provenance === "unavailable" ? "—" : `${(state.filter.resonanceMilli / 10).toFixed(1)}%`,
+          value: `${(state.filter.resonanceMilli / 10).toFixed(1)}%`,
           onTurn: (detents: number, fine?: boolean) =>
             controller.turnFilterResonance(detents, fine)},
       }};
@@ -404,7 +227,7 @@ export function PerformSurface(props: PerformSurfaceProps) {
     }};
   }, [controller, encoderGroup, state.fx, state.filter,
     state.liveControl.available, state.legacyFilterGesture]);
-  useLayoutEffect(() => {
+  useEffect(() => {
     props.onEncodersReady?.(encoders);
     return () => props.onEncodersReady?.(null);
   }, [props.onEncodersReady, encoders]);
@@ -440,20 +263,20 @@ export function PerformSurface(props: PerformSurfaceProps) {
   const performing = ["recording", "flushing"].includes(state.recording.phase);
   // #1958: without a Performance recording, Launch drives the global transport
   // through selection. Unsettled Performance operations still own their
-  // recording/capture transition. Global Pattern recording uses this ordinary
-  // selection path after opening; it never joins the Performance event clock.
+  // recording/capture transition. The transport fallback also stays closed
+  // while a transport command settles or records (recording switches are S3).
   const transportLaunchOpen = ["idle", "stopped"].includes(state.recording.phase) &&
-    props.patternSelectionLocked !== true &&
     props.transport !== undefined &&
     props.transport.status !== null &&
-    !selectTransportBusy(props.transport);
+    !selectTransportBusy(props.transport) &&
+    !selectTransportRecording(props.transport);
   const launchDisabled = !performing && !transportLaunchOpen;
   // The transport's slot facts exist only while it plays; stopped, no slot is
   // Playing and a queued switch cannot outlive Stop.
   const transportPlaying = props.transport !== undefined &&
     selectTransportPlaying(props.transport);
   return (
-    <main ref={surface} className="perform-surface" aria-label="Perform" data-page={page} data-pad-gates={padGatesOpen}>
+    <main ref={surface} className="perform-surface" aria-label="Perform" data-page={page}>
       <nav className="perform-page-nav" aria-label="Perform pages">
         {(["live", "slots", "takes", "replay"] as const).map((value) => (
           <button type="button" key={value} disabled={fxGestureActive}
@@ -464,30 +287,14 @@ export function PerformSurface(props: PerformSurfaceProps) {
         ))}
       </nav>
       <header className="perform-live-header">
-        <p className="perform-live-title">{{live: "LIVE CONTROLS", slots: "PATTERN SLOTS", takes: "RECORDING / TAKES", replay: "REPLAY"}[page]}</p>
+        <p className="perform-live-title">{{live: "LIVE CONTROLS", slots: "PATTERN SLOTS", takes: "RECORDING", replay: "REPLAY"}[page]}</p>
       </header>
-      <FxSliderBank action={<button className="perform-hold" type="button" aria-pressed={state.hold}
-        onClick={() => controller.toggleHold()}>HOLD</button>} gestureOwner={controller} active={page === "live" && !padGatesOpen} onGestureActiveChange={setFxGestureActive} order={PERFORMANCE_FX_ORDER} values={state.fx}
-        filter={state.filter}
-        legacyFilterGesture={state.legacyFilterGesture}
-        onFilterType={(type) => controller.setFilterType(type)}
-        onFilterTouchEngage={(parameter) => controller.touchFilterEngage(parameter)}
-        onFilterTouchMove={(token, parameter, value) =>
-          controller.touchFilterMove(token, parameter, value)}
-        onFilterTouchRelease={(token, parameter) =>
-          controller.touchFilterRelease(token, parameter)}
-        monitorVolume={props.monitorVolume}
-        group={encoderGroup}
-        onGroupChange={setEncoderGroup}
-        onEngage={(fx, value) => controller.engageFx(fx, value)}
-        onMove={(gestureId, fx, value) => controller.moveFx(gestureId, fx, value)}
-        onRelease={(gestureId, fx) => controller.releaseFx(gestureId, fx)} />
       <PatternLaunchStrip slots={props.project.patternSlots}
         patterns={props.project.patterns}
         pending={state.pendingLaunch} lastAck={state.lastLaunchAck}
         view={page === "live" ? "launch" : page === "slots" ? "edit" : null}
         disabled={launchDisabled}
-        mutationDisabled={props.slotEditingLocked === true || state.recording.phase !== "idle"}
+        mutationDisabled={state.recording.phase !== "idle"}
         transportPendingPatternId={props.transport?.status?.pendingSwitch?.patternId ?? null}
         transportCurrentPatternId={transportPlaying
           ? props.transport?.status?.currentPatternId ?? null
@@ -517,14 +324,25 @@ export function PerformSurface(props: PerformSurfaceProps) {
           <dd role="definition">{props.project.revision}</dd>
         </div>
       </dl></details> : null}
-      {page === "live" && !padGatesOpen ? <button type="button" className="perform-pad-gates-entry"
-        onClick={() => { setEncoderGroup("filter"); setPadGatesOpen(true); }}>
-        Live Mute / Solo
-      </button> : null}
-      {page === "live" && padGatesOpen && currentPad !== undefined && currentGate !== null ? (
+      <FxSliderBank action={<button className="perform-hold" type="button" aria-pressed={state.hold}
+        onClick={() => controller.toggleHold()}>HOLD</button>} active={page === "live"} onGestureActiveChange={setFxGestureActive} order={PERFORMANCE_FX_ORDER} values={state.fx}
+        filter={state.filter}
+        legacyFilterGesture={state.legacyFilterGesture}
+        onFilterType={(type) => controller.setFilterType(type)}
+        onFilterTouchEngage={(parameter) => controller.touchFilterEngage(parameter)}
+        onFilterTouchMove={(token, parameter, value) =>
+          controller.touchFilterMove(token, parameter, value)}
+        onFilterTouchRelease={(token, parameter) =>
+          controller.touchFilterRelease(token, parameter)}
+        monitorVolume={props.monitorVolume}
+        group={encoderGroup}
+        onGroupChange={setEncoderGroup}
+        onEngage={(fx, value) => controller.engageFx(fx, value)}
+        onMove={(gestureId, fx, value) => controller.moveFx(gestureId, fx, value)}
+        onRelease={(gestureId, fx) => controller.releaseFx(gestureId, fx)} />
+      {page === "live" && currentPad !== undefined && currentGate !== null ? (
         <section className="perform-pad-gates" aria-label="Current Pad live controls">
-          <header><p>LIVE MUTE / SOLO · Bank {slotAddress(currentPad)[0]}</p>
-            <strong>Current Pad {slotAddress(currentPad)}</strong></header>
+          <strong>Current Pad {slotAddress(currentPad)}</strong>
           <button type="button" aria-label={`Mute ${slotAddress(currentPad)}`}
             aria-pressed={currentGate.muted} disabled={gatesDisabled}
             onClick={() => controller.togglePadGate("mute", currentPad)}>Mute</button>
@@ -538,18 +356,6 @@ export function PerformSurface(props: PerformSurfaceProps) {
               currentGate.silenced ? "Silenced · other Pads soloed" :
               currentGate.solo ? "Active · Solo" : "Active"}
           </output>
-          <dl className="perform-pad-gate-summary" data-provenance={state.padGates.provenance}>
-            {(["mutedSlots", "soloSlots"] as const).map((kind) => <div key={kind}>
-              <dt>{kind === "mutedSlots" ? "Muted Pads" : "Soloed Pads"}</dt>
-              <dd>{state.padGates.provenance !== "core" ?
-                (state.padGates.provenance === "pending" ? "Pending" : "Unavailable") :
-                [...state.padGates[kind]].sort((a, b) => a - b).map(slotAddress).join(" · ") || "None"}</dd>
-            </div>)}
-          </dl>
-          <p>Mute silences a Pad even when it is soloed. Multiple Pads can be soloed together.</p>
-          <button type="button" onClick={() => {setEncoderGroup("filter"); setPadGatesOpen(false);}}>
-            Back to Filter
-          </button>
         </section>
       ) : null}
       <RecordingPanel page={page} navigationDisabled={fxGestureActive} onReview={() => setPage("takes")} state={state} canRecord={!props.recordingBusy && controller.canRecord()}
@@ -560,10 +366,7 @@ export function PerformSurface(props: PerformSurfaceProps) {
         onDiscard={() => { void controller.discard(); }}
         onRetryBind={() => { void controller.retryWavBind(); }}
         onExportWav={() => { void controller.exportWav(); }} />
-      {page === "takes" ? <SavedTakesPanel controller={controller} state={state} project={props.project}
-        selectedId={selectedTakeId} onSelect={setSelectedTakeId}
-        onReplay={(performanceId) => {void controller.beginReplay(performanceId); setPage("replay");}} /> : null}
-      {page === "replay" ? <ReplayPanel state={state} project={props.project} controller={controller}
+      {page === "replay" ? <ReplayPanel state={state}
         onReplay={(performanceId) => { void controller.beginReplay(performanceId); }}
         onRecover={(sessionId) => { void controller.applyRecovery(sessionId); }}
         onDiscardRecovery={(sessionId) => {
@@ -573,8 +376,21 @@ export function PerformSurface(props: PerformSurfaceProps) {
         onClick={() => setPage("replay")} disabled={fxGestureActive}>
         Review recovery ({state.recovery.length})
       </button> : null}
-      {state.replay !== null || page === "replay" ? <CurrentReplayPanel key={state.replay?.replayId ?? "none"} state={state}
-        onStop={() => controller.stopReplay()} /> : null}
+      {state.replay !== null || page === "replay" ? <section aria-label="Current Performance replay">
+        {state.replay?.state === "playing" ? <button type="button"
+          onClick={() => { void controller.stopReplay().catch(() => {}); }}>Stop Replay</button> : null}
+        <p aria-hidden="true">{state.replay?.state ?? "No replay selected"}</p>
+        <output className="visually-hidden" role="status" aria-label="Replay status">
+          {state.replay === null ? "idle" : `${state.replay.state}${
+            state.replayNeutral ? " · neutral" : ""} · resolved revision · ${
+            state.replay.resolvedRevision}`}
+        </output>
+        {state.replay !== null && <details className="perform-details">
+          <summary>Replay details</summary>
+          <dl><div><dt>Resolved revision</dt><dd>{state.replay.resolvedRevision}</dd></div>
+            <div><dt>Neutral FX</dt><dd>{state.replayNeutral ? "yes" : "no"}</dd></div></dl>
+        </details>}
+      </section> : null}
       {captureMessage !== null ? <p role="status">{captureMessage}</p> : null}
       {props.transport !== undefined ? (
         <output role="status" aria-label="Pattern transport status">

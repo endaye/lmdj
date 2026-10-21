@@ -211,127 +211,6 @@ const liveState = {
   solo_slots: [],
 };
 
-function inspectedEvents(events) {
-  const envelope = {
-    protocol_version: PROTOCOL_VERSION, request_id: ids[0], ok: true,
-    result: {performance: {id: ids[3], name: "Saved headered Take", created_bpm: 120,
-      recording_artifact: null, events}, project_revision: 69},
-  };
-  return validateResponseEnvelope(envelope, "performance.inspect").result.performance.events;
-}
-
-test("inspection accepts the actual headered Pad receipt without losing its sequence", () => {
-  const event = {duration_tick: 420, input_sequence: "1", kind: "pad_hit",
-    onset_tick: 1853, slot: 0, velocity: 100};
-  assert.deepEqual(inspectedEvents([event]), [event]);
-});
-
-const legacyInspectEvents = [
-  {kind: "pad_hit", slot: 63, onset_tick: 0, duration_tick: 1, velocity: 127},
-  {kind: "pattern_launch", pattern_slot: 15, effective_tick: 0},
-  {kind: "fx_engage", fx: 0, value: 0, tick: 0},
-  {kind: "fx_move", fx: 7, value: 1000, tick: 1},
-  {kind: "fx_release", fx: 7, tick: 2},
-  {kind: "hold_on", tick: 3},
-  {kind: "hold_off", tick: 4},
-];
-const filterInspectEvent = {kind: "filter_change", tick: 5, input_sequence: "8",
-  phase: "engage", type: "lp", cutoff_hz: 20000, resonance_milli: 0};
-const gatesInspectEvent = {kind: "pad_gates_set", tick: 6, input_sequence: "9",
-  muted_slots: [0, 63], solo_slots: [0, 63]};
-
-for (const event of legacyInspectEvents) {
-  test(`inspection retains legacy ${event.kind} and its exact headered variant`, () => {
-    assert.deepEqual(inspectedEvents([event]), [event]);
-    const headered = {...event, input_sequence: "18446744073709551615"};
-    assert.deepEqual(inspectedEvents([headered]), [headered]);
-  });
-}
-
-test("inspection keeps headered sequence gaps and time-ordered non-monotonic identities", () => {
-  const events = [{kind: "hold_on", tick: 0, input_sequence: "18446744073709551615"},
-    {kind: "hold_off", tick: 1, input_sequence: "1"}];
-  assert.deepEqual(inspectedEvents(events), events);
-  assert.deepEqual(inspectedEvents([]), []);
-});
-
-for (const phase of ["engage", "move", "release"]) {
-  for (const type of ["lp", "hp", "bp"]) {
-    test(`inspection decodes typed Filter ${phase}/${type} at its value boundaries`, () => {
-      for (const [cutoff_hz, resonance_milli] of [[20, 0], [20000, 1000]]) {
-        const event = {...filterInspectEvent, phase, type, cutoff_hz, resonance_milli};
-        assert.deepEqual(inspectedEvents([event]), [event]);
-      }
-    });
-  }
-}
-
-test("inspection accepts full-width Pad gate masks, including mute/solo overlap", () => {
-  for (const slots of [[], [0], [63], Array.from({length: 64}, (_, n) => n)]) {
-    const event = {...gatesInspectEvent, muted_slots: slots, solo_slots: slots};
-    assert.deepEqual(inspectedEvents([event]), [event]);
-  }
-});
-
-for (const [label, sequence] of [
-  ["zero", "0"], ["leading zero", "01"], ["signed", "+1"], ["negative", "-1"],
-  ["fraction", "1.0"], ["exponent", "1e2"], ["empty", ""], ["numeric", 1],
-  ["null", null], ["overflow", "18446744073709551616"],
-  ["too long", "100000000000000000000"], ["LF", "1\n"], ["CR", "1\r"],
-  ["CRLF", "1\r\n"], ["leading space", " 1"], ["trailing space", "1 "],
-]) {
-  test(`inspection rejects ${label} durable sequence`, () => {
-    expectProtocolMismatch(() => inspectedEvents([{...legacyInspectEvents[0], input_sequence: sequence}]));
-  });
-}
-
-test("inspection rejects mixed profiles in either order and duplicate sequence identities", () => {
-  const legacy = {kind: "hold_on", tick: 0};
-  const headered = {kind: "hold_off", tick: 1, input_sequence: "1"};
-  expectProtocolMismatch(() => inspectedEvents([legacy, headered]));
-  expectProtocolMismatch(() => inspectedEvents([headered, legacy]));
-  expectProtocolMismatch(() => inspectedEvents([
-    {...legacy, input_sequence: "1"}, headered,
-  ]));
-});
-
-for (const event of [...legacyInspectEvents.map((value, i) => ({...value, input_sequence: String(i + 1)})),
-  filterInspectEvent, gatesInspectEvent]) {
-  test(`inspection keeps ${event.kind} keys closed`, () => {
-    expectProtocolMismatch(() => inspectedEvents([{...event, runtime_frame: 1}]));
-  });
-}
-
-for (const event of [filterInspectEvent, gatesInspectEvent]) {
-  test(`inspection requires ${event.kind}'s durable sequence`, () => {
-    const {input_sequence, ...withoutSequence} = event;
-    expectProtocolMismatch(() => inspectedEvents([withoutSequence]));
-  });
-}
-
-for (const [label, patch] of [
-  ["phase", {phase: "start"}], ["type", {type: "notch"}],
-  ["low cutoff", {cutoff_hz: 19}], ["high cutoff", {cutoff_hz: 20001}],
-  ["fractional cutoff", {cutoff_hz: 20.5}], ["string cutoff", {cutoff_hz: "20"}],
-  ["low resonance", {resonance_milli: -1}], ["high resonance", {resonance_milli: 1001}],
-  ["fractional resonance", {resonance_milli: .5}], ["negative tick", {tick: -1}],
-]) {
-  test(`inspection rejects typed Filter ${label} drift`, () => {
-    expectProtocolMismatch(() => inspectedEvents([{...filterInspectEvent, ...patch}]));
-  });
-}
-
-for (const key of ["muted_slots", "solo_slots"]) {
-  for (const [label, mask] of [
-    ["duplicate", [0, 0]], ["descending", [63, 0]], ["low", [-1]], ["high", [64]],
-    ["fractional", [.5]], ["string", ["1"]], ["bitmask", "0xffffffffffffffff"],
-  ]) {
-    test(`inspection rejects ${key} ${label} mask`, () => {
-      expectProtocolMismatch(() => inspectedEvents([{...gatesInspectEvent, [key]: mask}]));
-    });
-  }
-}
-
 function validResults() {
   const revisioned = new Set([
     "pattern.slot.assign", "pattern.slot.clear", "pattern.slot.move",
@@ -682,4 +561,14 @@ test("recording metadata keeps verified identity separate from a format refusal"
     {...input, recording_artifact: null},
     {...input, recording_artifact: {...input.recording_artifact, media_type: "audio/mpeg"}}])
     expectProtocolMismatch(() => request(operation, changed));
+});
+
+
+test("recording metadata rejects zero frames in a successful WAV result", () => {
+  const operation = "performance.recording.metadata";
+  const value = validResults().get(operation);
+  const result = {...value, audio_metadata: {...value.audio_metadata, source_frames: 0}};
+  expectProtocolMismatch(() => validateResponseEnvelope({
+    protocol_version: 1, request_id: ids[0], ok: true, result,
+  }, operation));
 });

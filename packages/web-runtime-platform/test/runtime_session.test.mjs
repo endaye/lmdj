@@ -489,6 +489,20 @@ function outputMeterFixture(options = {}) {
           this.port = {onmessage: null, postMessage: (message) => this.messages.push(message)};
           tapNode = this;
         }
+        // Controlled native-event model only; the real packaged render-throw
+        // journey independently requires an actual trusted browser ErrorEvent.
+        nativeErrorListeners = new Set();
+        addEventListener(type, listener, options) {
+          if (type === "error") this.nativeErrorListeners.add(listener);
+          super.addEventListener(type, listener, options);
+        }
+        removeEventListener(type, listener, options) {
+          if (type === "error") this.nativeErrorListeners.delete(listener);
+          super.removeEventListener(type, listener, options);
+        }
+        emitNativeProcessorError() {
+          for (const listener of this.nativeErrorListeners) listener({type: "error", isTrusted: true});
+        }
         connect(destination) { this.connected.push(destination); }
         disconnect() { this.connected = []; }
       };
@@ -662,13 +676,29 @@ test("old published meter closures remain closed while a replacement Session mea
   await replacement.session.close();
 });
 
+test("synthetic generic error cannot revoke a running meter or reconnect its graph", async () => {
+  const direct = [];
+  const runtime = outputMeterFixture({connectAudioWorkletDirect: (...args) => { direct.push(args); return true; }});
+  await activateMeter(runtime);
+  runtime.context.currentTime = 0.05;
+  runtime.deliver();
+  const before = runtime.session.outputMeter();
+  const event = new Event("error");
+  assert.equal(event.isTrusted, false);
+  runtime.node().dispatchEvent(event);
+  await drainTasks();
+  assert.deepEqual(runtime.session.outputMeter(), before);
+  assert.deepEqual(direct, []);
+  await runtime.session.close();
+});
+
 test("native error event revokes meter and duplicate processor failures recover audio only once", async () => {
   const direct = [];
   const runtime = outputMeterFixture({connectAudioWorkletDirect: (...args) => { direct.push(args); return true; }});
   await activateMeter(runtime);
   runtime.context.currentTime = 0.05;
   const old = runtime.deliver();
-  runtime.node().dispatchEvent(new Event("error"));
+  runtime.node().emitNativeProcessorError();
   assert.deepEqual(runtime.session.outputMeter(), {state: "unavailable", reason: "processor-failed"});
   runtime.node().dispatchEvent(new Event("processorerror"));
   runtime.node().dispatchEvent(new Event("error"));
@@ -14252,149 +14282,6 @@ for (const coreStopFails of [false, true]) {
   });
 }
 
-
-async function startProgressCapture(f,binding=null,sink={onBatch(){},onStopped(){},onFailure(){}}) {
-  const starting=f.session.startPerformanceMasterCapture(sink,binding);
-  const message=f.node().messages.filter(m=>m.type==="start").at(-1);
-  assert.ok(message);
-  f.node().port.onmessage({data:{type:"started",generation:message.generation,binding:message.binding}});
-  return {capture:await starting,generation:message.generation};
-}
-
-function deliverProgressBatch(f,generation,sequence,frames) {
-  f.node().port.onmessage({data:{type:"batch",generation,sequence,
-    channels:[new Float32Array(frames),new Float32Array(frames)]}});
-}
-
-async function stopProgressCapture(f,capture,generation,finalSequence) {
-  const stop=capture.stop();
-  f.node().port.onmessage({data:{type:"stopped",generation,finalSequence}});
-  await stop;
-}
-
-test("public capture progress reads the same retained Session without RPC or capture-handle widening", async () => {
-  const browserWindow={};const f=outputMeterFixture({browserWindow,publishRuntime:true});
-  await f.session.start();await f.session.activateAudio(createUserGestureToken({isTrusted:true}));
-  assert.equal(browserWindow.lmdjWebRuntimeHost.session,f.session);
-  assert.deepEqual(f.session.performanceMasterCaptureProgress(),{state:"unavailable",reason:"idle"});
-  const binding={controlEpoch:LIVE_EPOCH,sessionId:"40000000-0000-4000-8000-000000000040",beginCommandId:"40000000-0000-4000-8000-000000000041"};
-  const {capture,generation}=await startProgressCapture(f,binding);
-  assert.deepEqual(Object.keys(capture),["stop"]);
-  deliverProgressBatch(f,generation,1,4800);
-  const value=f.session.performanceMasterCaptureProgress();
-  assert.equal(value.state,"available");assert.equal(value.receivedFrames,4800);assert.equal(value.sampleRate,48_000);
-  assert.match(value.captureId,/^[0-9a-f-]{36}$/);assert.deepEqual(value.binding,binding);
-  assert.equal(Object.isFrozen(value),true);assert.equal(Object.isFrozen(value.binding),true);
-  binding.sessionId="40000000-0000-4000-8000-000000000099";
-  assert.notEqual(f.session.performanceMasterCaptureProgress().binding.sessionId,binding.sessionId);
-  const before={requests:f.requests.length,messages:f.node().messages.length};
-  for(let i=0;i<20;i++)assert.deepEqual(f.session.performanceMasterCaptureProgress(),value);
-  assert.deepEqual({requests:f.requests.length,messages:f.node().messages.length},before);
-  const stop=capture.stop();assert.equal(f.session.performanceMasterCaptureProgress().phase,"stopping");
-  deliverProgressBatch(f,generation,2,64);
-  f.node().port.onmessage({data:{type:"stopped",generation,finalSequence:2}});await stop;
-  const stopped=f.session.performanceMasterCaptureProgress();assert.equal(stopped.receivedFrames,4864);assert.equal(stopped.phase,"stopped");
-  assert.equal(stopped.captureId,value.captureId);assert.equal(value.receivedFrames,4800);
-  await f.session.close();
-  assert.deepEqual(f.session.performanceMasterCaptureProgress(),{state:"unavailable",reason:"closed"});
-});
-
-test("public capture progress does not inherit old frames or identity after replacement start", async () => {
-  const f=outputMeterFixture();await f.session.start();await f.session.activateAudio(createUserGestureToken({isTrusted:true}));
-  const first=await startProgressCapture(f);deliverProgressBatch(f,first.generation,1,7);
-  await stopProgressCapture(f,first.capture,first.generation,1);const old=f.session.performanceMasterCaptureProgress();
-  const second=await startProgressCapture(f);deliverProgressBatch(f,first.generation,2,9);
-  const value=f.session.performanceMasterCaptureProgress();assert.equal(value.state,"available");assert.notEqual(value.captureId,old.captureId);
-  assert.equal(value.generation,second.generation);assert.equal(value.receivedFrames,0);
-  await first.capture.stop();assert.equal(f.session.performanceMasterCaptureProgress().phase,"recording");
-  assert.equal(old.receivedFrames,7);
-  await stopProgressCapture(f,second.capture,second.generation,0);await f.session.close();
-});
-
-test("public capture progress uses actual non48k context rate and retains unknown protocol loss", async () => {
-  const f=outputMeterFixture();f.context.sampleRate=44_100;
-  await f.session.start();await f.session.activateAudio(createUserGestureToken({isTrusted:true}));
-  const {capture,generation}=await startProgressCapture(f);
-  deliverProgressBatch(f,generation,1,441);
-  assert.equal(f.session.performanceMasterCaptureProgress().sampleRate,44_100);
-  deliverProgressBatch(f,generation,3,123);
-  const failed=f.session.performanceMasterCaptureProgress();assert.equal(failed.phase,"failed");
-  assert.equal(failed.receivedFrames,441);assert.equal(failed.droppedFrames,null);assert.equal(failed.failure,"protocol-error");
-  await capture.stop();await f.session.close();
-});
-
-test("public capture progress remains unavailable before exact started ACK and after failed start", async () => {
-  const f=outputMeterFixture();await f.session.start();await f.session.activateAudio(createUserGestureToken({isTrusted:true}));
-  const starting=f.session.startPerformanceMasterCapture({onBatch(){},onStopped(){},onFailure(){}});
-  assert.deepEqual(f.session.performanceMasterCaptureProgress(),{state:"unavailable",reason:"starting"});
-  const message=f.node().messages.filter(m=>m.type==="start").at(-1);
-  f.node().port.onmessage({data:{type:"started",generation:message.generation,binding:{bad:true}}});
-  await assert.rejects(starting);
-  assert.deepEqual(f.session.performanceMasterCaptureProgress(),{state:"unavailable",reason:"start-failed"});
-  await f.session.close();
-});
-
-test("optional capture progress capability is not a new capture admission requirement", async () => {
-  let sink;
-  const f=fixture({browserDocument:{baseURI:"https://example.test/"},
-    manifestSource:{resourceLimits:RESOURCE_LIMITS,performanceMasterTapUrl:"./tap.js"},
-    createPerformanceMasterTap:async()=>({destinationNode:Object.assign(new EventTarget(),{disconnect(){}}),
-      async start(next){sink=next;return {async stop(){sink.onStopped();}};},async close(){}})});
-  await f.session.start();await f.session.activateAudio(createUserGestureToken({isTrusted:true}));
-  let frames=0;const capture=await f.session.startPerformanceMasterCapture({onBatch:([left])=>{frames+=left.length;},onStopped(){},onFailure(){assert.fail();}});
-  sink.onBatch([new Float32Array(4),new Float32Array(4)]);assert.equal(frames,4);
-  assert.deepEqual(f.session.performanceMasterCaptureProgress(),{state:"unavailable",reason:"unsupported"});
-  assert.deepEqual(Object.keys(capture),["stop"]);await capture.stop();await f.session.close();
-});
-
-test("capture identity telemetry failure never stops real capture delivery", async () => {
-  let fail=false;
-  const f=outputMeterFixture({cryptoSource:{subtle:webcrypto.subtle,randomUUID(){if(fail)throw new Error("identity unavailable");return webcrypto.randomUUID();}}});
-  await f.session.start();await f.session.activateAudio(createUserGestureToken({isTrusted:true}));
-  fail=true;let received=0;
-  const {capture,generation}=await startProgressCapture(f,null,{onBatch:([left])=>{received+=left.length;},onStopped(){},onFailure(){assert.fail();}});
-  deliverProgressBatch(f,generation,1,13);assert.equal(received,13);
-  assert.deepEqual(f.session.performanceMasterCaptureProgress(),{state:"unavailable",reason:"identity-unavailable"});
-  await stopProgressCapture(f,capture,generation,1);fail=false;await f.session.close();
-});
-
-
-test("an old published capture getter stays closed while a replacement Session receives its own PCM", async () => {
-  const browserWindow={};
-  const old=outputMeterFixture({browserWindow,publishRuntime:true,cryptoSource:webcrypto});
-  await old.session.start();await old.session.activateAudio(createUserGestureToken({isTrusted:true}));
-  const first=await startProgressCapture(old);deliverProgressBatch(old,first.generation,1,7);
-  await stopProgressCapture(old,first.capture,first.generation,1);
-  const oldValue=old.session.performanceMasterCaptureProgress();const readOld=browserWindow.lmdjWebRuntimeHost.session.performanceMasterCaptureProgress;
-  await old.session.close();
-  const next=outputMeterFixture({browserWindow,publishRuntime:true,cryptoSource:webcrypto});
-  await next.session.start();await next.session.activateAudio(createUserGestureToken({isTrusted:true}));
-  const second=await startProgressCapture(next);deliverProgressBatch(next,second.generation,1,13);
-  const value=browserWindow.lmdjWebRuntimeHost.session.performanceMasterCaptureProgress();
-  assert.equal(value.state,"available");assert.equal(value.receivedFrames,13);assert.notEqual(value.captureId,oldValue.captureId);
-  assert.deepEqual(readOld(),{state:"unavailable",reason:"closed"});
-  await stopProgressCapture(next,second.capture,second.generation,1);await next.session.close();
-});
-
-
-test("public capture progress rejects a provider that turns unknown protocol loss into zero", async () => {
-  let sink;let stops=0;
-  const value={state:"available",generation:1,binding:null,sampleRate:48_000,receivedFrames:3,
-    phase:"failed",failure:"protocol-error",droppedFrames:0};
-  const f=fixture({browserDocument:{baseURI:"https://example.test/"},
-    manifestSource:{resourceLimits:RESOURCE_LIMITS,performanceMasterTapUrl:"./tap.js"},
-    createPerformanceMasterTap:async()=>({destinationNode:Object.assign(new EventTarget(),{disconnect(){}}),
-      async start(next){sink=next;return {generation:1,binding:null,async stop(){stops++;sink.onStopped();}};},
-      captureProgress:()=>({...value}),async close(){}})});
-  f.context.sampleRate=48_000;await f.session.start();await f.session.activateAudio(createUserGestureToken({isTrusted:true}));
-  const h=await f.session.startPerformanceMasterCapture({onBatch(){},onStopped(){},onFailure(){}});
-  assert.deepEqual(f.session.performanceMasterCaptureProgress(),{state:"unavailable",reason:"protocol-error"});
-  assert.equal(stops,0,"bad telemetry cannot operate capture");
-  value.droppedFrames=null;const valid=f.session.performanceMasterCaptureProgress();
-  assert.equal(valid.state,"available");assert.equal(valid.phase,"failed");assert.equal(valid.droppedFrames,null);
-  await h.stop();assert.equal(stops,1);await f.session.close();
-});
-
 const METADATA_QUERY = Object.freeze({
   projectId: "00000000-0000-4000-8000-000000000001",
   performanceId: "10000000-0000-4000-8000-000000000001",
@@ -14402,42 +14289,6 @@ const METADATA_QUERY = Object.freeze({
   recordingArtifact: Object.freeze({sha256: "985ee1bbde8458eeb675cff7bb99b6bd61278b9646a127c7c39b1fb7634cb2d5",
     mediaType: "audio/wav", byteLength: 192124}),
 });
-
-test("public inspection preserves actual saved headered Pad, Filter and HOLD events", async () => {
-  // Actual Native receipt from U08c's legal64 recording/Save/inspection failure.
-  const events = [
-    {duration_tick: 420, input_sequence: "1", kind: "pad_hit", onset_tick: 1853, slot: 0, velocity: 100},
-    {cutoff_hz: 20000, input_sequence: "3", kind: "filter_change", phase: "engage", resonance_milli: 0, tick: 2529, type: "lp"},
-    {cutoff_hz: 1552, input_sequence: "4", kind: "filter_change", phase: "move", resonance_milli: 0, tick: 2856, type: "lp"},
-    {cutoff_hz: 1552, input_sequence: "5", kind: "filter_change", phase: "release", resonance_milli: 0, tick: 3225, type: "lp"},
-    {input_sequence: "6", kind: "hold_on", tick: 3676},
-    {duration_tick: 348, input_sequence: "7", kind: "pad_hit", onset_tick: 15544, slot: 0, velocity: 100},
-    {input_sequence: "9", kind: "hold_off", tick: 16168},
-  ];
-  const artifact = {byte_length: 1532972, media_type: "audio/wav",
-    sha256: "aad2c199af0342865601284a9b1142ca64a24ccce3ff47bb392197c74993a1cd"};
-  const f = fixture({send: async envelope => {
-    if (envelope.operation === "performance.inspect") return success(envelope, {
-      performance: {id: METADATA_QUERY.performanceId, name: "Evening take", created_bpm: 120,
-        recording_artifact: artifact, events}, project_revision: 69});
-    return success(envelope, defaultResult(envelope.operation));
-  }});
-  await f.session.start();
-  try {
-    const value = await f.session.inspectPerformance(METADATA_QUERY.performanceId);
-    assert.deepEqual(value, {id: METADATA_QUERY.performanceId, name: "Evening take", createdBpm: 120,
-      recordingArtifact: {sha256: artifact.sha256, mediaType: "audio/wav", byteLength: artifact.byte_length},
-      events, projectRevision: 69});
-    assert.equal(Object.isFrozen(value), true);
-    assert.equal(Object.isFrozen(value.events), true);
-    assert.equal(value.events.every(Object.isFrozen), true);
-    events[0].input_sequence = 1;
-    await assert.rejects(f.session.inspectPerformance(METADATA_QUERY.performanceId),
-      error => error.code === "HOST_PROTOCOL_MISMATCH");
-    assert.equal(value.events[0].input_sequence, "1", "a later response cannot mutate the public snapshot");
-  } finally {await f.session.close();}
-});
-
 function recordingMetadataResult() {
   return {project_id: METADATA_QUERY.projectId, performance_id: METADATA_QUERY.performanceId,
     project_revision: 3, recording_revision: 17, recording_artifact: {
@@ -14638,4 +14489,242 @@ test("recording metadata waiting cancellation and expiry never enter Native", as
     firstAbort.abort();gate.resolve();
     await Promise.allSettled([first,secondObserved,thirdObserved]);await f.session.close();
   }
+});
+
+
+// Real capture port/Session boundary; no meter owner, packet or implementation.
+function captureProgressFixture(options = {}) {
+  let tapNode;
+  const requests = [];
+  const runtime = fixture({
+    ...options,
+    browserDocument: {baseURI: "https://example.test/creator/", ...options.browserDocument},
+    manifestSource: {resourceLimits: RESOURCE_LIMITS,
+      performanceMasterTapUrl: "./assets/perform-master-tap.js", ...options.manifestSource},
+    send: async (request, transportOptions) => {
+      requests.push(request);
+      return options.send ? options.send(request, transportOptions) : success(request, defaultResult(request.operation));
+    },
+    createPerformanceMasterTap: async (arguments_) => {
+      const previousNode = globalThis.AudioWorkletNode;
+      globalThis.AudioWorkletNode = class extends EventTarget {
+        constructor(context) {
+          super();
+          this.context = context;
+          this.messages = [];
+          this.connected = [];
+          this.port = {onmessage: null, postMessage: (message) => this.messages.push(message)};
+          tapNode = this;
+        }
+        connect(destination) { this.connected.push(destination); }
+        disconnect() { this.connected = []; }
+      };
+      try { return await createPerformanceMasterTap(arguments_); }
+      finally {
+        if (previousNode === undefined) delete globalThis.AudioWorkletNode;
+        else globalThis.AudioWorkletNode = previousNode;
+      }
+    },
+  });
+  runtime.context.sampleRate = 48_000;
+  runtime.context.audioWorklet = {async addModule() {}};
+  return {...runtime, requests, node: () => tapNode};
+}
+
+async function startProgressCapture(f,binding=null,sink={onBatch(){},onStopped(){},onFailure(){}}) {
+  const starting=f.session.startPerformanceMasterCapture(sink,binding);
+  const message=f.node().messages.filter(m=>m.type==="start").at(-1);
+  assert.ok(message);
+  f.node().port.onmessage({data:{type:"started",generation:message.generation,binding:message.binding}});
+  return {capture:await starting,generation:message.generation};
+}
+
+function deliverProgressBatch(f,generation,sequence,frames) {
+  f.node().port.onmessage({data:{type:"batch",generation,sequence,
+    channels:[new Float32Array(frames),new Float32Array(frames)]}});
+}
+
+async function stopProgressCapture(f,capture,generation,finalSequence) {
+  const stop=capture.stop();
+  f.node().port.onmessage({data:{type:"stopped",generation,finalSequence}});
+  await stop;
+}
+
+test("public capture progress reads the same retained Session without RPC or capture-handle widening", async () => {
+  const browserWindow={};const f=captureProgressFixture({browserWindow,publishRuntime:true});
+  await f.session.start();await f.session.activateAudio(createUserGestureToken({isTrusted:true}));
+  assert.equal(browserWindow.lmdjWebRuntimeHost.session,f.session);
+  assert.deepEqual(f.session.performanceMasterCaptureProgress(),{state:"unavailable",reason:"idle"});
+  const binding={controlEpoch:LIVE_EPOCH,sessionId:"40000000-0000-4000-8000-000000000040",beginCommandId:"40000000-0000-4000-8000-000000000041"};
+  const {capture,generation}=await startProgressCapture(f,binding);
+  assert.deepEqual(Object.keys(capture),["stop"]);
+  deliverProgressBatch(f,generation,1,4800);
+  const value=f.session.performanceMasterCaptureProgress();
+  assert.equal(value.state,"available");assert.equal(value.receivedFrames,4800);assert.equal(value.sampleRate,48_000);
+  assert.match(value.captureId,/^[0-9a-f-]{36}$/);assert.deepEqual(value.binding,binding);
+  assert.equal(Object.isFrozen(value),true);assert.equal(Object.isFrozen(value.binding),true);
+  binding.sessionId="40000000-0000-4000-8000-000000000099";
+  assert.notEqual(f.session.performanceMasterCaptureProgress().binding.sessionId,binding.sessionId);
+  const before={requests:f.requests.length,messages:f.node().messages.length};
+  for(let i=0;i<20;i++)assert.deepEqual(f.session.performanceMasterCaptureProgress(),value);
+  assert.deepEqual({requests:f.requests.length,messages:f.node().messages.length},before);
+  const stop=capture.stop();assert.equal(f.session.performanceMasterCaptureProgress().phase,"stopping");
+  deliverProgressBatch(f,generation,2,64);
+  f.node().port.onmessage({data:{type:"stopped",generation,finalSequence:2}});await stop;
+  const stopped=f.session.performanceMasterCaptureProgress();assert.equal(stopped.receivedFrames,4864);assert.equal(stopped.phase,"stopped");
+  assert.equal(stopped.captureId,value.captureId);assert.equal(value.receivedFrames,4800);
+  await f.session.close();
+  assert.deepEqual(f.session.performanceMasterCaptureProgress(),{state:"unavailable",reason:"closed"});
+});
+
+test("public capture progress does not inherit old frames or identity after replacement start", async () => {
+  const f=captureProgressFixture();await f.session.start();await f.session.activateAudio(createUserGestureToken({isTrusted:true}));
+  const first=await startProgressCapture(f);deliverProgressBatch(f,first.generation,1,7);
+  await stopProgressCapture(f,first.capture,first.generation,1);const old=f.session.performanceMasterCaptureProgress();
+  const second=await startProgressCapture(f);deliverProgressBatch(f,first.generation,2,9);
+  const value=f.session.performanceMasterCaptureProgress();assert.equal(value.state,"available");assert.notEqual(value.captureId,old.captureId);
+  assert.equal(value.generation,second.generation);assert.equal(value.receivedFrames,0);
+  await first.capture.stop();assert.equal(f.session.performanceMasterCaptureProgress().phase,"recording");
+  assert.equal(old.receivedFrames,7);
+  await stopProgressCapture(f,second.capture,second.generation,0);await f.session.close();
+});
+
+test("public capture progress uses actual non48k context rate and retains unknown protocol loss", async () => {
+  const f=captureProgressFixture();f.context.sampleRate=44_100;
+  await f.session.start();await f.session.activateAudio(createUserGestureToken({isTrusted:true}));
+  const {capture,generation}=await startProgressCapture(f);
+  deliverProgressBatch(f,generation,1,441);
+  assert.equal(f.session.performanceMasterCaptureProgress().sampleRate,44_100);
+  deliverProgressBatch(f,generation,3,123);
+  const failed=f.session.performanceMasterCaptureProgress();assert.equal(failed.phase,"failed");
+  assert.equal(failed.receivedFrames,441);assert.equal(failed.droppedFrames,null);assert.equal(failed.failure,"protocol-error");
+  await capture.stop();await f.session.close();
+});
+
+test("public capture progress remains unavailable before exact started ACK and after failed start", async () => {
+  const f=captureProgressFixture();await f.session.start();await f.session.activateAudio(createUserGestureToken({isTrusted:true}));
+  const starting=f.session.startPerformanceMasterCapture({onBatch(){},onStopped(){},onFailure(){}});
+  assert.deepEqual(f.session.performanceMasterCaptureProgress(),{state:"unavailable",reason:"starting"});
+  const message=f.node().messages.filter(m=>m.type==="start").at(-1);
+  f.node().port.onmessage({data:{type:"started",generation:message.generation,binding:{bad:true}}});
+  await assert.rejects(starting);
+  assert.deepEqual(f.session.performanceMasterCaptureProgress(),{state:"unavailable",reason:"start-failed"});
+  await f.session.close();
+});
+
+test("optional capture progress capability is not a new capture admission requirement", async () => {
+  let sink;
+  const f=fixture({browserDocument:{baseURI:"https://example.test/"},
+    manifestSource:{resourceLimits:RESOURCE_LIMITS,performanceMasterTapUrl:"./tap.js"},
+    createPerformanceMasterTap:async()=>({destinationNode:Object.assign(new EventTarget(),{disconnect(){}}),
+      async start(next){sink=next;return {async stop(){sink.onStopped();}};},async close(){}})});
+  await f.session.start();await f.session.activateAudio(createUserGestureToken({isTrusted:true}));
+  let frames=0;const capture=await f.session.startPerformanceMasterCapture({onBatch:([left])=>{frames+=left.length;},onStopped(){},onFailure(){assert.fail();}});
+  sink.onBatch([new Float32Array(4),new Float32Array(4)]);assert.equal(frames,4);
+  assert.deepEqual(f.session.performanceMasterCaptureProgress(),{state:"unavailable",reason:"unsupported"});
+  assert.deepEqual(Object.keys(capture),["stop"]);await capture.stop();await f.session.close();
+});
+
+test("capture identity telemetry failure never stops real capture delivery", async () => {
+  let fail=false;
+  const f=captureProgressFixture({cryptoSource:{subtle:webcrypto.subtle,randomUUID(){if(fail)throw new Error("identity unavailable");return webcrypto.randomUUID();}}});
+  await f.session.start();await f.session.activateAudio(createUserGestureToken({isTrusted:true}));
+  fail=true;let received=0;
+  const {capture,generation}=await startProgressCapture(f,null,{onBatch:([left])=>{received+=left.length;},onStopped(){},onFailure(){assert.fail();}});
+  deliverProgressBatch(f,generation,1,13);assert.equal(received,13);
+  assert.deepEqual(f.session.performanceMasterCaptureProgress(),{state:"unavailable",reason:"identity-unavailable"});
+  await stopProgressCapture(f,capture,generation,1);fail=false;await f.session.close();
+});
+
+
+test("an old published capture getter stays closed while a replacement Session receives its own PCM", async () => {
+  const browserWindow={};
+  const old=captureProgressFixture({browserWindow,publishRuntime:true,cryptoSource:webcrypto});
+  await old.session.start();await old.session.activateAudio(createUserGestureToken({isTrusted:true}));
+  const first=await startProgressCapture(old);deliverProgressBatch(old,first.generation,1,7);
+  await stopProgressCapture(old,first.capture,first.generation,1);
+  const oldValue=old.session.performanceMasterCaptureProgress();const readOld=browserWindow.lmdjWebRuntimeHost.session.performanceMasterCaptureProgress;
+  await old.session.close();
+  const next=captureProgressFixture({browserWindow,publishRuntime:true,cryptoSource:webcrypto});
+  await next.session.start();await next.session.activateAudio(createUserGestureToken({isTrusted:true}));
+  const second=await startProgressCapture(next);deliverProgressBatch(next,second.generation,1,13);
+  const value=browserWindow.lmdjWebRuntimeHost.session.performanceMasterCaptureProgress();
+  assert.equal(value.state,"available");assert.equal(value.receivedFrames,13);assert.notEqual(value.captureId,oldValue.captureId);
+  assert.deepEqual(readOld(),{state:"unavailable",reason:"closed"});
+  await stopProgressCapture(next,second.capture,second.generation,1);await next.session.close();
+});
+
+
+test("public capture progress rejects a provider that turns unknown protocol loss into zero", async () => {
+  let sink;let stops=0;
+  const value={state:"available",generation:1,binding:null,sampleRate:48_000,receivedFrames:3,
+    phase:"failed",failure:"protocol-error",droppedFrames:0};
+  const f=fixture({browserDocument:{baseURI:"https://example.test/"},
+    manifestSource:{resourceLimits:RESOURCE_LIMITS,performanceMasterTapUrl:"./tap.js"},
+    createPerformanceMasterTap:async()=>({destinationNode:Object.assign(new EventTarget(),{disconnect(){}}),
+      async start(next){sink=next;return {generation:1,binding:null,async stop(){stops++;sink.onStopped();}};},
+      captureProgress:()=>({...value}),async close(){}})});
+  f.context.sampleRate=48_000;await f.session.start();await f.session.activateAudio(createUserGestureToken({isTrusted:true}));
+  const h=await f.session.startPerformanceMasterCapture({onBatch(){},onStopped(){},onFailure(){}});
+  assert.deepEqual(f.session.performanceMasterCaptureProgress(),{state:"unavailable",reason:"protocol-error"});
+  assert.equal(stops,0,"bad telemetry cannot operate capture");
+  value.droppedFrames=null;const valid=f.session.performanceMasterCaptureProgress();
+  assert.equal(valid.state,"available");assert.equal(valid.phase,"failed");assert.equal(valid.droppedFrames,null);
+  await h.stop();assert.equal(stops,1);await f.session.close();
+});
+
+
+function optionalTelemetryIsolationFixture(kind) {
+  let sink;let stops=0;let coercions=0;
+  const raw={async stop(){stops++;sink.onStopped();}};
+  if(kind==="generation-getter")Object.defineProperty(raw,"generation",{get(){throw new Error("optional generation unavailable");}});
+  else if(kind==="symbol")raw.generation=Symbol("invalid optional generation");
+  else if(kind==="coercion")raw.generation={valueOf(){coercions++;throw new Error("generation must not be coerced");}};
+  else raw.generation=1;
+  const tap={destinationNode:Object.assign(new EventTarget(),{disconnect(){}}),
+    async start(next){sink=next;return raw;},async close(){sink?.onStopped();},
+    captureProgress(){return {state:"available",generation:1,binding:null,sampleRate:48_000,
+      receivedFrames:13,phase:"recording",droppedFrames:0,failure:null};}};
+  if(kind==="progress-getter")Object.defineProperty(tap,"captureProgress",{get(){throw new Error("optional progress unavailable");}});
+  const f=fixture({browserDocument:{baseURI:"https://example.test/"},
+    manifestSource:{resourceLimits:RESOURCE_LIMITS,performanceMasterTapUrl:"./tap.js"},
+    createPerformanceMasterTap:async()=>tap});
+  return {...f,deliver:frames=>sink.onBatch([new Float32Array(frames),new Float32Array(frames)]),
+    stops:()=>stops,coercions:()=>coercions};
+}
+
+test("optional generation lookup failure never refuses otherwise valid capture",async()=>{
+  const f=optionalTelemetryIsolationFixture("generation-getter");await f.session.start();await f.session.activateAudio(createUserGestureToken({isTrusted:true}));
+  let received=0;
+  try {
+    let capture;
+    await assert.doesNotReject(async()=>{capture=await f.session.startPerformanceMasterCapture({onBatch:([left])=>{received+=left.length;},onStopped(){},onFailure(){assert.fail();}});},"passive metadata cannot reject capture admission");
+    assert.deepEqual(Object.keys(capture),["stop"]);f.deliver(13);assert.equal(received,13);
+    assert.deepEqual(f.session.performanceMasterCaptureProgress(),{state:"unavailable",reason:"unsupported"});
+    assert.equal(f.stops(),0);await capture.stop();assert.equal(f.stops(),1);
+  } finally {await f.session.close();}
+});
+
+test("optional progress accessor failure is unavailable and cannot operate capture",async()=>{
+  const f=optionalTelemetryIsolationFixture("progress-getter");await f.session.start();await f.session.activateAudio(createUserGestureToken({isTrusted:true}));
+  let received=0;
+  try {
+    const capture=await f.session.startPerformanceMasterCapture({onBatch:([left])=>{received+=left.length;},onStopped(){},onFailure(){assert.fail();}});
+    f.deliver(17);assert.equal(received,17);let value;
+    assert.doesNotThrow(()=>{value=f.session.performanceMasterCaptureProgress();},"passive lookup cannot escape the read");
+    assert.deepEqual(value,{state:"unavailable",reason:"protocol-error"});f.deliver(7);assert.equal(received,24);
+    assert.equal(f.stops(),0);await capture.stop();assert.equal(f.stops(),1);
+  } finally {await f.session.close();}
+});
+
+for(const kind of ["symbol","coercion"])test(`invalid optional generation ${kind} is unavailable without coercion or capture control`,async()=>{
+  const f=optionalTelemetryIsolationFixture(kind);await f.session.start();await f.session.activateAudio(createUserGestureToken({isTrusted:true}));
+  let received=0;
+  try {
+    const capture=await f.session.startPerformanceMasterCapture({onBatch:([left])=>{received+=left.length;},onStopped(){},onFailure(){assert.fail();}});
+    f.deliver(13);assert.equal(received,13);let value;
+    assert.doesNotThrow(()=>{value=f.session.performanceMasterCaptureProgress();},"untrusted metadata must not be numerically coerced");
+    assert.deepEqual(value,{state:"unavailable",reason:"protocol-error"});assert.equal(f.coercions(),0);
+    assert.equal(f.stops(),0);await capture.stop();assert.equal(f.stops(),1);
+  } finally {await f.session.close();}
 });

@@ -1498,75 +1498,33 @@ function validNullableUuid(value) {
   return value === null || validUuid(value);
 }
 
-function validDurableInputSequence(value) {
-  return typeof value === "string" && /^[1-9][0-9]*(?![\s\S])/.test(value) &&
-    value.length <= 20 &&
-    (value.length < 20 || value <= "18446744073709551615");
-}
-
-function validCanonicalEventKeys(value, keys) {
-  return hasExactKeys(value, keys) ||
-    (hasExactKeys(value, [...keys, "input_sequence"]) &&
-      validDurableInputSequence(value.input_sequence));
-}
-
-function validPerformanceSlotMask(list) {
-  return Array.isArray(list) &&
-    list.every((slot, index) => isUnsignedInteger(slot, 63) &&
-      (index === 0 || list[index - 1] < slot));
-}
-
 function validCanonicalPerformanceEvent(value) {
   if (!isPlainObject(value) || typeof value.kind !== "string") {
     return false;
   }
   switch (value.kind) {
     case "pad_hit":
-      return validCanonicalEventKeys(value, ["kind", "slot", "onset_tick", "duration_tick", "velocity"]) &&
+      return hasExactKeys(value, ["kind", "slot", "onset_tick", "duration_tick", "velocity"]) &&
         isUnsignedInteger(value.slot, 63) && isUnsignedInteger(value.onset_tick) &&
         isUnsignedInteger(value.duration_tick) && value.duration_tick > 0 &&
         isUnsignedInteger(value.velocity, 127) && value.velocity > 0;
     case "pattern_launch":
-      return validCanonicalEventKeys(value, ["kind", "pattern_slot", "effective_tick"]) &&
+      return hasExactKeys(value, ["kind", "pattern_slot", "effective_tick"]) &&
         validPatternSlot(value.pattern_slot) && isUnsignedInteger(value.effective_tick);
     case "fx_engage":
     case "fx_move":
-      return validCanonicalEventKeys(value, ["kind", "fx", "value", "tick"]) &&
+      return hasExactKeys(value, ["kind", "fx", "value", "tick"]) &&
         isUnsignedInteger(value.fx, 7) && isUnsignedInteger(value.value, 1000) &&
         isUnsignedInteger(value.tick);
     case "fx_release":
-      return validCanonicalEventKeys(value, ["kind", "fx", "tick"]) &&
+      return hasExactKeys(value, ["kind", "fx", "tick"]) &&
         isUnsignedInteger(value.fx, 7) && isUnsignedInteger(value.tick);
     case "hold_on":
     case "hold_off":
-      return validCanonicalEventKeys(value, ["kind", "tick"]) && isUnsignedInteger(value.tick);
-    case "filter_change":
-      return hasExactKeys(value, ["kind", "tick", "input_sequence", "phase", "type", "cutoff_hz", "resonance_milli"]) &&
-        validDurableInputSequence(value.input_sequence) && isUnsignedInteger(value.tick) &&
-        ["engage", "move", "release"].includes(value.phase) &&
-        ["lp", "hp", "bp"].includes(value.type) &&
-        isUnsignedInteger(value.cutoff_hz, 20_000) && value.cutoff_hz >= 20 &&
-        isUnsignedInteger(value.resonance_milli, 1_000);
-    case "pad_gates_set":
-      return hasExactKeys(value, ["kind", "tick", "input_sequence", "muted_slots", "solo_slots"]) &&
-        validDurableInputSequence(value.input_sequence) && isUnsignedInteger(value.tick) &&
-        validPerformanceSlotMask(value.muted_slots) && validPerformanceSlotMask(value.solo_slots);
+      return hasExactKeys(value, ["kind", "tick"]) && isUnsignedInteger(value.tick);
     default:
       return false;
   }
-}
-
-function validCanonicalPerformanceEvents(events) {
-  if (!Array.isArray(events) || !events.every(validCanonicalPerformanceEvent)) return false;
-  if (events.length === 0) return true;
-  const headered = Object.hasOwn(events[0], "input_sequence"), sequences = new Set();
-  return events.every((event) => {
-    if (Object.hasOwn(event, "input_sequence") !== headered) return false;
-    if (!headered) return true;
-    if (sequences.has(event.input_sequence)) return false;
-    sequences.add(event.input_sequence);
-    return true;
-  });
 }
 
 function validPerformanceSummary(value) {
@@ -1612,7 +1570,7 @@ function validPerformanceResult(operation, value) {
         error.code === "UNSUPPORTED_AUDIO" && typeof error.message === "string" && isPlainObject(error.details);
       return error === null && hasExactKeys(audio, ["sample_rate", "channels", "source_frames"]) &&
         [44100, 48000].includes(audio.sample_rate) && [1, 2].includes(audio.channels) &&
-        isUnsignedInteger(audio.source_frames) &&
+        isUnsignedInteger(audio.source_frames) && audio.source_frames > 0 &&
         audio.source_frames * audio.channels * 2 <= value.recording_artifact.byte_length;
     }
     case "pattern.slot.assign":
@@ -1637,7 +1595,7 @@ function validPerformanceResult(operation, value) {
         validUuid(value.performance.id) && validPerformanceName(value.performance.name) &&
         isUnsignedInteger(value.performance.created_bpm, 240) && value.performance.created_bpm >= 40 &&
         (value.performance.recording_artifact === null || validArtifact(value.performance.recording_artifact)) &&
-        validCanonicalPerformanceEvents(value.performance.events) &&
+        Array.isArray(value.performance.events) && value.performance.events.every(validCanonicalPerformanceEvent) &&
         isUnsignedInteger(value.project_revision);
     case "performance.record.begin":
       // The headered profile's begin carries the fence state and the logical

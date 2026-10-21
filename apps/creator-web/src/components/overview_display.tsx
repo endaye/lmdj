@@ -18,8 +18,6 @@ import {projectIdentity, projectStorageStatus, sampleIdentity} from "../state/ov
 import type {PerformController} from "../state/perform_state";
 import {SEQUENCE_TICKS_PER_BAR, sequenceBarBeat} from "../state/sequence_grid_model";
 import {usePatternPlayheadTick} from "./use_pattern_playhead";
-import {CountInReadout} from "./count_in_readout";
-import {initialCountInState, type CountInState} from "../runtime/count_in_controller";
 import type {OutputMeterSource} from "./stereo_output_meter";
 import "./overview_display.css";
 
@@ -38,7 +36,6 @@ interface OverviewDisplayProps {
   tempoPreview?: number | null;
   swingPreview?: number | null;
   transport?: PatternTransportState;
-  countIn?: CountInState;
   midi?: MidiStatus | null;
   performController?: PerformController | null;
   outputMeterSource?: OutputMeterSource | null;
@@ -68,21 +65,17 @@ function modeLabel(mode: CreatorMode): string {
 }
 
 // Keep animation local to the readout instead of rerendering every mode body.
-function TransportReadout({transport, bpm, bars, tempoPreview, swing, countIn, audioRunning}: {
+function TransportReadout({transport, bpm, bars, tempoPreview, swing}: {
   transport: PatternTransportState | undefined;
   bpm: number | null;
   bars: number | null;
   tempoPreview: number | null;
   swing: number | null;
-  countIn: CountInState;
-  audioRunning: boolean;
 }) {
   const tick = usePatternPlayheadTick(transport, bpm,
     bars === null ? null : bars * SEQUENCE_TICKS_PER_BAR);
   return <div className="overview-transport" aria-label="Pattern transport">
-    <span>{countIn.active ? (countIn.recording ? "RECORDING" : "COUNT-IN")
-      : transport === undefined ? "STOPPED" : transportStatusLabel(transport).toUpperCase()}</span>
-    <CountInReadout state={countIn} transport={transport?.status ?? null} running={audioRunning} />
+    <span>{transport === undefined ? "STOPPED" : transportStatusLabel(transport).toUpperCase()}</span>
     {tempoPreview === null ? null : <output className="overview-bpm">{tempoPreview} BPM</output>}
     {swing === null ? null : <output className="overview-swing">SWING {swing}%</output>}
     <output aria-label="Transport position" aria-live="off">{bars === null ? "—" : sequenceBarBeat(tick)}</output>
@@ -118,7 +111,6 @@ export function OverviewDisplay({
   tempoPreview = null,
   swingPreview = null,
   transport,
-  countIn = initialCountInState,
   midi = null,
   performController,
   outputMeterSource,
@@ -163,7 +155,6 @@ export function OverviewDisplay({
           {project ? `${project.bpm} BPM` : "NO PROJECT"}
         </output> : null}
         <TransportReadout transport={transport} bpm={project?.bpm ?? null} bars={pattern?.bars ?? null}
-          countIn={countIn} audioRunning={state.audio.phase === "running"}
           tempoPreview={sequenceMode || performMode ? tempoPreview ?? project?.bpm ?? null : null}
           swing={sequenceMode && project ? swingPreview ?? project.sequenceSettings.swingPercent : null} />
         <output className="overview-phase visually-hidden">

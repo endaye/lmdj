@@ -181,7 +181,7 @@ test("MASTER has the same endpoints as ENC4 and survives Perform groups and page
     fireEvent.keyDown(encoder(), {key: "ArrowUp"});
     expect(fixture.level()).toBe(100);
     fireEvent.change(master(), {target: {value: "42"}});
-    fireEvent.click(screen.getByRole("button", {name: "MORE"}));
+    fireEvent.click(screen.getByRole("button", {name: "FX / MORE"}));
     expect(master().value).toBe("42");
     const hold = screen.getByRole("button", {name: "HOLD"});
     fireEvent.click(hold);

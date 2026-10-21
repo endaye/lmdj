@@ -1,3 +1,27 @@
+# #2402 main integration premises, before edits
+
+Main 9b48e23f66b588c083bda7f497030080cf5263f0; original source 7719e29576c3af6f50a74ac18b629f3400b14b53.
+
+- B0 already delivered by #2432 / 9b48e23f; current header/Native/Web range reader and owning tests are present. No repeated range implementation.
+- The complete ProjectStore public header and implementation expose read_artifact/read_asset_artifact (positive control), but neither declares/defines scan_performance_recording or a bounded verified Performance selector/receipt. Whole-vector limit is retained. The scan Task remains outstanding on main.
+- All seven existing inputs in the nine-file source delta are byte-identical to the original parent 01aba485; the two new paths are absent. The already-authored original bounded scan can be re-homed without importing stack ancestors or COUNT-IN changes.
+- Current owner/history/writer and metadata-only load implementation is unchanged. Source snapshots caller request and revalidates exact owner/revision/binding after complete hash; preserve the alias and reentrant mutation tests.
+- Live #2135 and comments retain B0/raw vs scan vs WAV/Facade/SDK/Host separation. #2403 and later PRs are unmerged downstream of #2402, not delivering this missing main API.
+- #2430 remains pending the earlier owner exception; no manual closure or merge under this Task. #2433 concerns frozen release tools, excluded from this work.
+- Original full native/browser selection and Task-specific semantic controls will be run on the refreshed integration. Old B0 WebKit lifecycle failures remain unexplained and explicitly retained. Candidate/device/audio/full-batch gaps remain.
+- User now authorizes ordinary integration and proven-safe cleanup. Original published stack remains unchanged; create an independent replacement PR to main, authenticate exact-head review, protected squash then safe cleanup of the new integration resources only.
+
+## Current integration verification
+
+- Fresh integration Native production/test build PASS; original three baseline CTests PASS and all four final owning CTests PASS (10.09s). Independent digest and final-owner mutants each build successfully and fail their exact owning scan assertions (exit8), then source restored byte-exact with fresh mtime and actually recompiled; restored owning suite PASS.
+- Emscripten6.0.5/Node26 official configure/build/build-project-io PASS, including no-testing-hook production link. Locked client1.62.1 Chromium6 PASS31.150s and supported OPFS WebKit2361 three PASS54.488s: no skipped/flaky/retry cases. Complete original common interruption/recovery, ownership and B0 raw-range journeys retained. New scan JSONs prove3 exact owner/revision/ref reports,3 physical digest/length/prefix/tail reads,3 closed pages/two reopens per browser, stale revision refusal and zero published writes/writers after scans.
+- All eight code/test/Portal files retained the original7719e295 SHA256 bytes throughout actual verification. Only this integration plan receipt differs. Full Portal179tests/53pages/51routes PASS; dependencies, original Web timeout policy and staged ownership76 PASS.
+- Precommit main refresh 9b48e23f66b588c083bda7f497030080cf5263f0; intervening Task paths 0, all seven applicable governance files unchanged. No premise reimplementation required.
+- Historical original B0 WebKit lifecycle failures remain unexplained; no environmental closure, new pitfall incident or full candidate/device/hearing claim. Full Core/Creator/Runtime/sanitizer/batch lanes remain unexecuted.
+- Current user authorization permits ordinary integration and safe cleanup; original published stack preserved, exact-head independent review and guarded merge still required. Original records and freeze statements below remain historical evidence.
+
+---
+
 # Verified bounded Performance recording scan — #2135 B
 
 ## Premises before edits

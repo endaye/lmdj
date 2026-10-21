@@ -1,3 +1,30 @@
+# #2403 main integration premises, before edits
+
+Current main 0f1ef312dea10bd18750cba80f09e01c445bdded; original source 4bd64adb8dfd92a40cdb1d9c19e5ea78f336c20c.
+
+- B0 raw ranges and full bounded Performance recording integrity are already delivered by #2432 / 9b48e23f and #2434 / 0f1ef312. Reuse actual main code; do not repeat or import ancestor stack commits.
+- Bounded metadata remains outstanding on main. The complete Cooker public include inventory/CMake contains no streaming inspector; sample_analysis.cpp::inspect_wav still calls the known-present decode_wav and allocates complete PCM. Its exact function body is the positive/negative discriminator, not an empty name search.
+- All seven existing inputs of the original eleven-file delta equal the original parent7719e295; four new paths are absent. Main's unrelated COUNT-IN withdrawal remains preserved. Re-home the existing pure parser and retained complete owning proofs only.
+- Preserve the unchanged decoder's strict RIFF length/chunk extents/padding, unique16-byte PCM fmt and nonempty data, PCM16 mono/stereo44.1/48k, unknown chunks/data-before-fmt. Parser complete-input count and terminal boundary remain necessary; a header alone must fail. Literal independent metadata expectations constrain decoder/parser shared defects.
+- Source inspection confirms a fixed16-byte header/counters, no payload/view retention, sticky typed failure and no successful-parser heap allocation. Full hash/owner verification is still supplied separately by the already-merged scan. Actual three-variant Web composition must discard metadata after a late digest mismatch.
+- Live #2135 and comments retain raw/scan/format/Facade/SDK/Host/Take boundaries. Original #2403 and successor #2406 are unmerged, not delivering the missing main parser. Existing worker/cancellation/owner-retirement and duration consumers stay separate downstream Tasks.
+- Original Native/C++ grammar/allocation checks, rebuilt allocation/truncation/shared-defect controls and full Chromium/WebKit selections remain declared. Old B0 WebKit lifecycle failures, the original corrected harness failure and candidate/device/hearing/full-lane gaps remain historical evidence.
+- One Task, eleven declared files, one Conventional Commit. User authorizes sequential ordinary protected integration and proven-safe cleanup. Preserve original published stack refs, #2430 pending discussion exception and #2433/frozen release paths. No release/tag/Runtime deploy/Channel action.
+
+## Current integration verification
+
+- Baseline current-main Sample Analysis/Project Cooker two CTests PASS; final production and no-voice-DSP Native builds plus original complete owning3/3 CTests PASS1.273s. New inspector consumes a real345600044-byte30-minute stream from a reused64KiB buffer with exact86400000 frames and zero successful-parser heap allocations.
+- Three actual rebuilt controls: PCM allocation assertion88 RED; partial-input assertion207 RED after bypassing completeness/terminal guards; shared decoder/parser wrong-rate metadata first passes parity then literal-rate assertion75 RED. Temporary driver retains every original call. Every snapshot restored exactly with strictly newer mtime, source recompilation confirmed and owning GREEN; final production/no-DSP rebuild and original complete selection GREEN. Decoder/driver unchanged in final source.
+- Independent producer make_fixtures.py at current main (SHA256b4749d62abe0ca38658e1bcb97fe0af9a99e38983d9c587c81d5b7fcb451620e) supplies the seven accepted fixture identities/counts; fresh Python struct/hashlib independently reproduces all three192124-byte Web fixture digest/layout constants.
+- Pinned Emscripten6.0.5/Node26 configure/build/build-project-io PASS, including no-hook production link. Complete unchanged owning Chromium7 PASS68.737s, supported OPFS WebKit2361 four PASS64.632s; zero skipped/flaky/retries, original half-stack/timeout/recovery/owner/range/scan legs retained. Each browser retains and read-backs nine exact reports/physical full digest/length/prefix/tail results and nine closed pages: valid, unsupported, late mismatch each reopen twice. Mismatch publishes no metadata or verified receipt.
+- All ten implementation inputs byte-identical to original4bd64adb throughout staged Native/Wasm/browser proof; only this integration plan differs. Full Portal179tests/53pages/51routes/internal links PASS66.145s; dependencies, original Web timeout policy, staged ownership76 and diff checks PASS. No clean Product distribution or full candidate claim.
+- Precommit main refresh 0f1ef312dea10bd18750cba80f09e01c445bdded; 0 intervening paths, no Task overlap; seven governance hashes unchanged. Original2403 reviews/threads0. Current user authorizes ordinary protected merge and safe cleanup; exact-head independent review remains required before integration.
+- Original corrected browser fixture failure and old failed shared-mutant driver remain historical records. Older B0 WebKit lifecycle failures retain unexplained status. Complete batch/candidate, sanitizer, device/hearing and public async/Host consumer remain unverified; no new process-pitfall incident, release or version allocation claimed.
+
+Original records/freeze statements below remain historical evidence.
+
+---
+
 # Streaming WAV metadata — #2135 B
 
 ## Premises before edits

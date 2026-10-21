@@ -442,25 +442,27 @@ def _batch_reference_for(load, consumer):
     from the retained batch facts by the same `release_reference` the
     verification carrier uses, so both steps bind one identical document.
     """
-    from .verification import release_reference
+    from .verification import VerificationError, release_reference, terminal_result
 
 
     def batch_reference_for(witness):
         events = load()
-        matches = [event["data"] for event in events
-                   if type(event) is dict and event.get("type") == "result"
-                   and type(event.get("data")) is dict
-                   and event["data"].get("target") == witness
-                   and event["data"].get("terminal") is True]
-        if not matches:
+        # Select exactly as the verification carrier does (#2318): only a
+        # candidate-kind terminal result is admissible. When the witness merge
+        # is also main's head, the incremental main batch records its own
+        # terminal result for the same revision; that one must not make the
+        # target ambiguous here either.
+        try:
+            result = terminal_result(events, witness)
+        except VerificationError:
+            _fail("the batch journal binds the witness revision ambiguously")
+        if result is None:
             _fail("the batch journal has no terminal result for the verified "
                   "witness revision")
-        if len(matches) > 1:
-            _fail("the batch journal binds the witness revision ambiguously")
-        reference = matches[0].get("reference")
+        reference = result.get("reference")
         if type(reference) is not str or not reference:
             _fail("the terminal batch result has no durable reference")
-        return release_reference(events, matches[0], witness, consumer)
+        return release_reference(events, result, witness, consumer)
 
     return batch_reference_for
 
@@ -469,6 +471,13 @@ def _create_draft(context):
     from .transitions import create_draft
 
     return lambda tag: create_draft(tag, context)
+
+
+def _verify_draft(context):
+    """The trusted Draft asset verifier: downloads and checks every asset."""
+    from .transitions import verify_draft
+
+    return lambda tag, release_id, plan_sha256: verify_draft(tag, release_id, plan_sha256, context)
 
 
 def _push_tag(context):
@@ -880,7 +889,8 @@ def compose_carriers(context, policy, request):
         enroll_draft(root=root, candidate_root=candidate_root,
                      repository_id=repository_id, ledger=ledger,
                      create_draft=_create_draft(context),
-                     release_by_tag=draft_release_by_tag),
+                     release_by_tag=draft_release_by_tag,
+                     verify_draft=_verify_draft(context)),
         enroll_publication(root=root, candidate_root=candidate_root,
                            repository_id=repository_id, ledger=ledger,
                            workflow_id=_workflow_id(github,

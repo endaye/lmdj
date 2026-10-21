@@ -1,3 +1,31 @@
+# #2406 main integration premises, before edits
+
+Current main b54a1dcbb3a90936e276b8b4714ab1ab8e2f0184; source 5b0fe0ef8b281ddd309d423a854eb5940e7a2506.
+
+- B0 ranges, verified recording scan and streaming WAV metadata are already on main via #2432/#2434/#2435 (9b48e23f/0f1ef312/b54a1dcb). Reuse them without repeating producers or importing unmerged Creator/COUNT-IN ancestors.
+- Host-neutral recording metadata reader remains outstanding. At this exact main, the full Application public header and production CMake inventory expose existing inspect_sample/Pattern transport factories, not the new reader; authoritative registry/dispatch/handlers for performance.list and performance.inspect return ArtifactRef/events or Performance Truth. Their accepted payloads/session paths were inspected; Web Runtime tables currently retain only these known-positive queries, not asynchronous recording metadata.
+- All seven existing inputs in the eleven-file source delta equal original parent4bd64adb; four new files are absent. No merged successor supplies this missing reader; live #2406 and #2408 remain unmerged.
+- Candidate job execution is a synchronous provider/durable Attempt flow and Pattern transport worker owns its own retained work cell and durable lifecycle, not a generic read executor. Do not reuse either for long reads.
+- The private ProjectStore constructor over an exact shared platform creates a fresh AuthoringHistory (project_store.cpp:4784); sharing Application history would hold its mutex across the scan. Retain only platform/read state, preserve existing same-platform writer admission and verify final committed owner/revision/ref.
+- Preserve original API semantics: one sequential caller/worker, entry request snapshot, same-platform retained lifetime after Application destruction, cooperative cancellation before/window/after verification, no early parser-error publication before complete integrity, typed privacy-safe failure and actual lease retirement. No new JSON/SDK/Host query or audio-thread call in this Task; Runtime stale-owner completion retirement remains downstream #2408.
+- Retain complete owning Native selection, actual-thread Control progress and external-stop barriers, dedicated TSan instrument, two rebuilt cancellation/integrity controls, full real C++/Wasm/OPFS worker/root custody and close/reopen journeys on Chromium and supported WebKit. Existing half-stack/timeout/owner/recovery assertions and old B0 lifecycle debt stay intact.
+- User authorizes ordinary protected integration and safe cleanup. One Task/eleven files/one Conventional Commit, independent exact-head review, guarded squash then proven-safe cleanup of this new integration only. Keep original published stack, dirty WIPs, pending #2430 discussion exception and frozen release-owned #2433 (now6ecfbdad) separate. No release/tag/Runtime deployment/Channel action.
+
+## Current integration verification
+
+- Baseline current-main Application/Performance operation/recording scan3/3 PASS. Final regular Native Facade/C API build and original complete owning4/4 PASS8.000s, including real Control-rename-during-blocked-read, external stop/custody/foreign-writer and Application-retirement tests. Project revision1 and recording revision17 independently asserted.
+- Dedicated owning TSan component PASS4.308s: exact Application/test flags contain -fsanitize=thread and actual binary links libclang_rt.tsan_osx_dynamic; no TSAN_OPTIONS override/suppression. Actual barriers/interleavings and original deadlines remain, not a full Core/stress sanitizer claim.
+- Cancellation-publication mutant compiles then cancellation-variant assertion181 RED; provisional-format-short-circuit mutant compiles then verified-result assertion170 RED. Fresh byte-exact restoration, actual source recompilation and owning GREEN after each; final complete4-suite and production/C API relink GREEN. No temporary source enters final files.
+- Fresh Python struct/hashlib independently reproduces five192124-byte valid/unsupported/bad-header/late-mismatch fixture layouts/identities, separating format from complete raw integrity.
+- Pinned Emscripten6.0.5/Node26 configure/build/build-project-io and no-hook production link PASS. Complete unchanged owning Chromium8 PASS103.652s, supported OPFS WebKit2361 five PASS68.087s; zero skip/flaky/retry and all original direct parser/scan/range/common recovery/owner legs retained. Each browser's path-backed JSON read back: three cases each two actual reopens, nine complete identity/physical digest-length-prefix-tail reports and nine closed pages. Application retired, real distinct worker, pre-cancel and exit-before-join observed; root custody1 survives child retirement then0 after root, no writes, mismatch publishes no verification/metadata. Worker-own stack17896/262144 in all reports under unchanged half-stack gate.
+- External release actor merged#2433 as41afd17e while verification ran: ten release-tool/test paths, zero Task overlap, all seven governance hashes unchanged. Fast-forwarded only this unpublished owned branch b54a1dcb→41afd17e, preserving all eleven staged hashes. Ten implementation inputs remain byte-identical to original5b0fe0ef throughout Native/TSan/Wasm/browser proof; only this plan receipt differs. Root main worktree unchanged.
+- Full Portal on refreshed base PASS64.731s:179tests/53pages/51routes/internal links. Dependency, original Web timeout policy, staged ownership76 and diff checks PASS. Precommit refreshed main 41afd17e861b973cb8d2038f0dab1595142bc454; source/gov premises remain unchanged. Original2406 reviews/threads0.
+- Original Wasm stack-probe declaration ambiguity and all predecessor negative records remain historical; old B0 WebKit lifecycle causes remain unverified. Full Core/Creator/Runtime/coverage/ASan/full TSan-stress/package/batch/candidate/device/hearing and async Runtime/SDK/Host/Take consumer remain unexecuted or downstream. No release, version allocation, new process pitfall or full distribution claim.
+
+Current owner authorization permits protected integration/safe cleanup; exact-head independent review is still required. Original freeze statements below are historical evidence.
+
+---
+
 # Worker-owned Performance recording metadata reader — #2135 B
 
 ## Premises before implementation

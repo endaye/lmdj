@@ -151,13 +151,6 @@ import {
 import {beatsInWindow} from "./runtime/metronome_scheduler";
 import {createMetronomeClickLoop} from "./runtime/metronome_click";
 import {
-  countInLocksPatternSelection, createCountInController, initialCountInState, isCountInSession,
-  type CountInController,
-} from "./runtime/count_in_controller";
-import {
-  readCountInPreference, writeCountInPreference, type CountInBars,
-} from "./state/count_in_preference";
-import {
   initialSequenceState,
   reduceSequence,
   type SequenceState,
@@ -194,7 +187,6 @@ import type {CapturePhase} from "./state/capture_state";
 
 const subscribeNoPerform = () => () => {};
 const getNoPerform = () => null;
-const getNoCountIn = () => initialCountInState;
 
 function isMonitorSession(session: CreatorRuntimeSession | undefined):
   session is CreatorRuntimeSession & MonitorOutputSession {
@@ -443,8 +435,6 @@ function Workspace({
   const [sampleEncoders, setSampleEncoders] = useState<ContextualEncoders | null>(null);
   const [performEncoders, setPerformEncoders] = useState<ContextualEncoders | null>(null);
   const [projectNavigation, setProjectNavigation] = useState<ContextualNavigation | null>(null);
-  const [performNavigation, setPerformNavigation] = useState<ContextualNavigation | null>(null);
-  const bindPerformNavigation = useCallback((value: ContextualNavigation | null) => setPerformNavigation(value), []);
   const [sampleNavigation, setSampleNavigation] = useState<ContextualNavigation | null>(null);
   const bindProjectNavigation = useCallback((value: ContextualNavigation | null) => setProjectNavigation(value), []);
   const bindSampleNavigation = useCallback((value: ContextualNavigation | null) => setSampleNavigation(value), []);
@@ -548,21 +538,6 @@ function Workspace({
   // Per-device monitoring preference, never Project Truth; boot reads it back
   // from the Host settings store.
   const [metronomeOn, setMetronomeOn] = useState(false);
-  const metronomeOnRef = useRef(metronomeOn);
-  const metronomeTouchedRef = useRef(false);
-  const [countInBars, setCountInBars] = useState<CountInBars>(0);
-  const countInBarsRef = useRef<CountInBars>(0);
-  const countInTouchedRef = useRef(false);
-  const [countInController, setCountInController] = useState<CountInController | null>(null);
-  const countInControllerRef = useRef<CountInController | null>(null);
-  const [countInRefusal, setCountInRefusal] = useState<string | null>(null);
-  const countIn = useSyncExternalStore(
-    countInController?.subscribe ?? subscribeNoPerform,
-    countInController?.getState ?? getNoCountIn,
-    countInController?.getState ?? getNoCountIn,
-  );
-  const countInView = countInRefusal === null ? countIn
-    : {...countIn, errorCode: "UNSUPPORTED_AUDIO", errorMessage: countInRefusal};
   // #1958 S4: the device's SEQ SNAP boundary for playing-state Pattern
   // switches, never Project Truth. 1 BAR until the stored preference is
   // read; the choice is available immediately, and an explicit choice wins
@@ -660,34 +635,6 @@ function Workspace({
   transportRef.current = transport;
   armedCaptureSlotRef.current = armedCaptureSlot;
   activeModeRef.current = activeMode;
-  useEffect(() => {
-    const sessionId = transport.sessionId;
-    const projectId = transport.projectId;
-    if (!isCountInSession(session) || sessionId === null || projectId === null) {
-      countInControllerRef.current = null;
-      setCountInController(null);
-      setCountInRefusal(null);
-      return;
-    }
-    const controller = createCountInController({session, sessionId, projectId,
-      metronomeEnabled: () => metronomeOnRef.current,
-      onTransport: (status) => {
-        if (sessionRef.current === session && transportRef.current.sessionId === sessionId &&
-            stateRef.current.project.current?.projectId === projectId) {
-          dispatchTransport({type: "observed", status});
-        }
-      },
-      onError: (error) => {reportFailure("COUNT-IN", error);},
-    });
-    countInControllerRef.current = controller;
-    setCountInController(controller);
-    setCountInRefusal(null);
-    return () => {
-      controller.dispose();
-      if (countInControllerRef.current === controller) countInControllerRef.current = null;
-      setCountInController((current) => current === controller ? null : current);
-    };
-  }, [session, transport.sessionId, transport.projectId, reportFailure]);
   if (sequenceAuthoringProjectId.current !== (state.project.current?.projectId ?? null)) {
     sequenceAuthoringProjectId.current = state.project.current?.projectId ?? null;
     sequenceAuthoringRevision.current = state.project.current?.revision ?? 0;
@@ -1117,18 +1064,7 @@ function Workspace({
     // Read alongside the listing, so the library never shows while it waits.
     const remembered = readLastProjectId();
     void readMetronomePreference().then((on) => {
-      if (!active || metronomeTouchedRef.current) return;
-      try {
-        countInControllerRef.current?.setMetronome(on);
-        metronomeOnRef.current = on;
-        setMetronomeOn(on);
-      } catch { /* The owning controller retains and reports the refusal. */ }
-    });
-    void readCountInPreference().then((bars) => {
-      if (active && !countInTouchedRef.current) {
-        countInBarsRef.current = bars;
-        setCountInBars(bars);
-      }
+      if (active) setMetronomeOn(on);
     });
     void readSeqSnapPreference().then((snap) => {
       // A late read must not overwrite an explicit choice; it only fills
@@ -2250,11 +2186,6 @@ function Workspace({
   };
 
   const submitTransportIntent = async (intent: PatternTransportIntent) => {
-    const scheduled = countInControllerRef.current;
-    if (scheduled?.getState().active) {
-      await scheduled.cancel(intent);
-      return;
-    }
     if (intent === "record" && (
       (padCapture.current !== null && padCapture.current.getState().phase !== "idle") ||
       !["idle", "permission-error"].includes(capturePhaseRef.current) ||
@@ -2266,18 +2197,6 @@ function Workspace({
         current.sessionId === null || current.projectId !== project.projectId ||
         (stateRef.current.audio.phase !== "running" && session.diagnostics().state !== "running") ||
         selectTransportBusy(current)) {
-      return;
-    }
-    if (intent === "record" && countInBarsRef.current !== 0 &&
-        current.status?.playing !== true && current.status?.recording !== true) {
-      setCountInRefusal(null);
-      if (scheduled === null || !isCountInSession(session)) {
-        const message = "Count-in is unavailable on this audio output. Your setting is kept.";
-        setCountInRefusal(message);
-        reportFailure("Start count-in", Object.assign(new Error(message), {code: "UNSUPPORTED_AUDIO"}));
-        return;
-      }
-      await scheduled.start(countInBarsRef.current, sequenceAuthoringRevision.current);
       return;
     }
     const epoch = Math.max(
@@ -2400,10 +2319,7 @@ function Workspace({
     if (!metronomeOn || metronomeAudioPhase !== "running" || !metronomePlaying ||
         session == null || context === null || destination === null ||
         metronomeOriginFrame === null || metronomeBpm === null) {
-      if (metronomeAudioPhase !== "running") {
-        invalidateAudioClockAnchor();
-        countInControllerRef.current?.clearHandoff();
-      }
+      if (metronomeAudioPhase !== "running") invalidateAudioClockAnchor();
       if (!metronomePlaying && metronomePendingGrid !== null) {
         setMetronomePendingGrid(null);
       }
@@ -2443,8 +2359,7 @@ function Workspace({
           0, Math.ceil(contextSecondsToEngineFrame(fromSeconds)));
         const toFrame = Math.max(
           fromFrame, Math.ceil(contextSecondsToEngineFrame(untilSeconds)));
-        return beatsInWindow({fromFrame, toFrame, segments,
-          nativeDownbeatFrame: countIn.nativeDownbeatFrame}).map((beat) => ({
+        return beatsInWindow({fromFrame, toFrame, segments}).map((beat) => ({
           contextTime: engineFrameToContextSeconds(beat.frame),
           beat: beat.beat,
           accent: beat.accent,
@@ -2461,27 +2376,12 @@ function Workspace({
     metronomeOriginFrame,
     metronomeBpm,
     metronomePendingGrid,
-    countIn.nativeDownbeatFrame,
   ]);
 
   const onToggleMetronome = () => {
-    const next = !metronomeOnRef.current;
-    try {
-      // Native may claim S before another render/effect. Publish at the actual
-      // user toggle, never through a later control/I/O queue or React effect.
-      countInControllerRef.current?.setMetronome(next);
-    } catch { return; } // The controller keeps the actual error visible.
-    metronomeTouchedRef.current = true;
-    metronomeOnRef.current = next;
+    const next = !metronomeOn;
     setMetronomeOn(next);
     void writeMetronomePreference(next);
-  };
-
-  const onCountInBarsChange = (bars: CountInBars) => {
-    countInTouchedRef.current = true;
-    countInBarsRef.current = bars;
-    setCountInBars(bars);
-    void writeCountInPreference(bars);
   };
 
   // #1958 S4: a SEQ SNAP choice is remembered on this device only; the next
@@ -2512,8 +2412,7 @@ function Workspace({
     const operation = sequenceAuthoringTail.current.then(async () => {
       const project = stateRef.current.project.current;
       if (!isSequenceSession(session) || project === null) return;
-      if (countInControllerRef.current?.getState().active ||
-          selectTransportRecording(transportRef.current)) {
+      if (selectTransportRecording(transportRef.current)) {
         // The grid is disabled while recording; a gesture that raced the
         // transition is refused here as the Core would refuse it.
         return;
@@ -2542,7 +2441,6 @@ function Workspace({
         // land an intervening commit, so a frozen revision would die as a
         // conflict.
         for (let attempt = 0; attempt < 32; attempt += 1) {
-          if (countInControllerRef.current?.getState().active) return;
           try {
             result = await editPatternEventsJourney(session, {
               ...request,
@@ -2619,8 +2517,7 @@ function Workspace({
     const operation = sequenceAuthoringTail.current.then(async () => {
       const project = stateRef.current.project.current;
       const currentSequence = sequenceRef.current;
-      if (!isSequenceSession(session) || project === null ||
-          countInControllerRef.current?.getState().active) return;
+      if (!isSequenceSession(session) || project === null) return;
       const currentTransport = transportRef.current;
       if (currentTransport.sessionId !== null &&
           (selectTransportBusy(currentTransport) ||
@@ -2670,7 +2567,6 @@ function Workspace({
           selectTransportPlaying(currentTransport) ||
           selectTransportRecording(currentTransport));
       if (!isSequenceSession(session) || project === null || transportActive ||
-          countInControllerRef.current?.getState().active ||
           (currentTransport.sessionId === null &&
             sequenceRef.current.phase !== "stopped")) return;
       const patternId = crypto.randomUUID();
@@ -2724,7 +2620,6 @@ function Workspace({
           selectTransportPlaying(currentTransport) ||
           selectTransportRecording(currentTransport));
       if (!isPatternLengthSession(session) || project === null || transportActive ||
-          countInControllerRef.current?.getState().active ||
           (currentTransport.sessionId === null &&
             sequenceRef.current.phase !== "stopped")) return;
       const patternId = sequenceRef.current.selectedPatternId ?? project.patternId;
@@ -2868,15 +2763,18 @@ function Workspace({
   }, [session, reportFailure]);
 
   const selectSequencePattern = async (patternId: string) => {
-    if (!session || countInLocksPatternSelection(
-      countInControllerRef.current?.getState() ?? initialCountInState)) return;
+    if (!session) return;
     const current = transportRef.current;
     if (isPatternTransportSession(session) && current.sessionId !== null) {
       if (selectTransportBusy(current)) return;
-      // Playing and opened recording share the existing SEQ SNAP request.
-      // Native/Host own actual boundaries, durable segments and current-target
-      // withdrawal. A refusal is reported once, never replayed automatically.
+      // #1958: while the transport plays and does not record (recording is
+      // S3), a selection press queues the transport's Pattern switch at the
+      // device's SEQ SNAP boundary (1 BAR by default) instead of reloading
+      // the snapshot. The Host resolves latest-wins, claim deferral and
+      // pressing-the-playing-Pattern cancellation; a refusal is reported,
+      // never thrown.
       if (selectTransportPlaying(current)) {
+        if (selectTransportRecording(current)) return;
         try {
           await session.requestTransportPatternSwitch(
             createTransportPatternSwitchRequest(patternId, seqSnap));
@@ -2992,22 +2890,13 @@ function Workspace({
       (runtimeHostState === "audio-suspended" &&
         (state.audio.phase === "inactive" || state.audio.phase === "suspended"))
     );
-  const settledCountInEpoch = countIn.status?.cancelReceipt?.transportEpoch;
-  const countInOwnsRecording = countIn.active || (settledCountInEpoch != null &&
-    Number.isSafeInteger(transport.status?.transportEpoch ?? 0) &&
-    BigInt(transport.status?.transportEpoch ?? 0) <= BigInt(settledCountInEpoch));
-  const recording = countInOwnsRecording ? countIn.recording : selectTransportRecording(transport);
-  const countingIn = countIn.active && !countIn.recording && countIn.status?.cancelReceipt == null &&
-    (countIn.status?.startReceipt == null || countIn.status.startReceipt.result === "applied");
+  const recording = selectTransportRecording(transport);
   const playing = selectTransportPlaying(transport);
   // Tempo and Swing lock while recording or while a transport command
   // settles, as the touch controls do; a turn in progress is dropped.
-  const sequenceWorkspaceLocked = transportBusy || state.project.phase !== "ready" ||
+  const sequenceSettingsLocked = transportBusy || recording || state.project.phase !== "ready" ||
     state.runtime.phase !== "ready" || state.projectProjectionRefresh !== null ||
     state.transfer.phase !== "idle";
-  const sequenceSettingsLocked = countIn.active || recording || sequenceWorkspaceLocked;
-  const patternSelectionLocked = countInLocksPatternSelection(countIn) ||
-    sequenceWorkspaceLocked || transport.status?.phase === "error" || transport.lastFailed !== null;
   // Core refuses a Pad colour change while recording or while the transport
   // settles; playing is fine. A pending Project change would leave the
   // controls naming a stale revision.
@@ -3058,10 +2947,10 @@ function Workspace({
   const sequencePatternIndex = sequencePatterns.findIndex((item) =>
     item.patternId === (playingStepPatternId ??
       sequence.selectedPatternId ?? sequenceProject?.patternId));
-  // Selection remains independent of authoring locks while recording. Its
-  // queued/current base always comes from the actual transport projection.
+  // The direction keys and ‹ › queue the transport's switch while playing
+  // (#1958); recording (until S3) and a settling transport still close them.
   const patternStepOpen = activeMode === "sequence" && sequenceProject !== null &&
-    !patternSelectionLocked && sequencePatternIndex >= 0;
+    !sequenceSettingsLocked && sequencePatternIndex >= 0;
   const stepPatternBy = (offset: -1 | 1) => {
     const next = sequencePatterns[sequencePatternIndex + offset];
     if (patternStepOpen && next !== undefined) void selectSequencePattern(next.patternId);
@@ -3243,10 +3132,6 @@ function Workspace({
               onSelectBank={selectBank}
               onRecord={(event) => {
                 setRailShift(false);
-                if (countInControllerRef.current?.getState().active) {
-                  void submitTransportIntent("record");
-                  return;
-                }
                 const project = stateRef.current.project.current;
                 const epoch = gestureEpoch.current;
                 const activation = activateAudio(event.nativeEvent);
@@ -3258,18 +3143,13 @@ function Workspace({
                   }
                 });
               }}
-              recordEnabled={countIn.active ? countIn.phase !== "settling" : (transportReady && !transportBusy &&
+              recordEnabled={transportReady && !transportBusy &&
                 (padCaptureState === null || padCaptureState.phase === "idle") &&
                 ["idle", "permission-error"].includes(capturePhase) &&
-                ["idle", "saved", "discarded"].includes(historyPerformPhase))}
+                ["idle", "saved", "discarded"].includes(historyPerformPhase)}
               recording={recording}
-              countingIn={countingIn}
               onPlayStop={(event) => {
                 setRailShift(false);
-                if (countInControllerRef.current?.getState().active) {
-                  void submitTransportIntent("play_stop");
-                  return;
-                }
                 const project = stateRef.current.project.current;
                 const epoch = gestureEpoch.current;
                 const activation = activateAudio(event.nativeEvent);
@@ -3281,7 +3161,7 @@ function Workspace({
                   }
                 });
               }}
-              playEnabled={countIn.active ? countIn.phase !== "settling" : (transportReady && !transportBusy)}
+              playEnabled={transportReady && !transportBusy}
               playing={playing}
               onOpenSystem={openSystem}
               systemOpen={systemOpen}
@@ -3300,7 +3180,6 @@ function Workspace({
                 },
               } : {})}
               {...(activeMode === "perform" && !systemOpen && !railShift && sequenceProject !== null ? {
-                directionStep: performNavigation?.directionStep,
                 padStep: {
                   backLabel: "Previous Pad — ↑",
                   forwardLabel: "Next Pad — ↓",
@@ -3364,7 +3243,6 @@ function Workspace({
               encoders={encoderBindings}
               systemOpen={systemOpen}
               transport={transport}
-              countIn={countInView}
               midi={midi}
             />
           }
@@ -3584,10 +3462,6 @@ function Workspace({
                 onSelectionChange={setSequenceGridSelection}
                 onVelocityChange={setSequenceGridVelocity}
                 metronomeOn={metronomeOn}
-                countInBars={countInBars}
-                onCountInBarsChange={onCountInBarsChange}
-                countInLocked={countIn.active}
-                patternSelectionLocked={patternSelectionLocked}
                 onToggleMetronome={onToggleMetronome}
                 seqSnap={seqSnap}
                 onSeqSnapChange={onSeqSnapChange}
@@ -3635,7 +3509,6 @@ function Workspace({
                 performController !== null ? (
                   <PerformSurface
                     onEncodersReady={bindPerformEncoders}
-                    onNavigationReady={bindPerformNavigation}
                     monitorVolume={{value: monitorVolume, disabled: monitorVolumeDisabled,
                       onChange: changeMonitorVolume}}
                     controller={performController}
@@ -3646,8 +3519,6 @@ function Workspace({
                     bank={state.activeBank}
                     transport={transport}
                     onSelectPattern={(patternId) => { void selectSequencePattern(patternId); }}
-                    patternSelectionLocked={patternSelectionLocked}
-                    slotEditingLocked={sequenceSettingsLocked}
                     recordingBusy={(padCaptureState !== null && padCaptureState.phase !== "idle") ||
                       !["idle", "permission-error"].includes(capturePhase) || recording}
                   />

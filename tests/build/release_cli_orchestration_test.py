@@ -183,6 +183,38 @@ class ReleaseEntryPointTest(unittest.TestCase):
         self.assertEqual(publication.calls, 1)
         self.assertEqual(len(self.far_side()), len(STEPS))
 
+    def test_resume_and_status_name_the_last_swallowed_failure_until_it_clears(self):
+        # The cause of an unknown step reaches the operator console through the
+        # private failure note; the request state never carries it.
+        self.carriers["publication"].fail_after_write = True
+        output = io.StringIO()
+        self.assertEqual(self.run_cli(["run", "--authority", "issue:1301"], capture=output), 2)
+        self.assertIn("last failure: publication unknown at ", output.getvalue())
+        # A foreign exception names its type only; its text stays private.
+        self.assertIn("unknown at ", output.getvalue())
+        self.assertIn(": RuntimeError\n", output.getvalue())
+        self.assertNotIn("sensitive", output.getvalue())
+        request_id = self.request_ids()[0]
+        self.assertNotIn("sensitive", (self.journal() / f"{request_id}.json").read_text())
+
+        code, report = self.status()
+        self.assertEqual(code, 0)
+        self.assertIn("last failure: publication unknown", report)
+
+        self.assertEqual(self.run_cli(["resume", request_id]), 0)
+        code, report = self.status()
+        self.assertNotIn("last failure", report)
+
+    def test_a_malformed_failure_note_does_not_hide_the_listing(self):
+        self.carriers["publication"].fail_after_write = True
+        self.assertEqual(self.run_cli(["run", "--authority", "issue:1301"]), 2)
+        request_id = self.request_ids()[0]
+        (self.journal() / f"{request_id}.failure").write_text("{}")
+        code, report = self.status()
+        self.assertEqual(code, 0)
+        self.assertIn(request_id, report)
+        self.assertIn("last failure: unreadable", report)
+
     def test_status_before_any_request_reports_none_without_creating_a_journal(self):
         code, report = self.status()
         self.assertEqual(code, 0)
