@@ -12085,6 +12085,21 @@ foundation::Result<PatternTempoPreviewStatus> stale_tempo_source() {
 }
 }  // namespace
 
+foundation::Result<void> Application::check_pattern_tempo_preview_admission(
+    const std::filesystem::path& project_path) {
+  try {
+    testing::invoke_api_entry_hook();
+    std::scoped_lock lock(impl_->sequence_mutex, impl_->replay_mutex, impl_->sample_mutex);
+    if (!valid_host_project_path(project_path))
+      return foundation::Result<void>::failure({ErrorCode::invalid_argument,
+          "Pattern tempo source path is invalid"});
+    return impl_->admit_tempo_preview(project_path);
+  } catch (...) {
+    return foundation::Result<void>::failure({ErrorCode::internal_error,
+        "Pattern tempo preview admission failed"});
+  }
+}
+
 foundation::Result<PatternTempoPreviewStatus> Application::bind_pattern_tempo_source(
     const PatternTempoSourceRequest& request, const audio::PreparedPatternView& source,
     audio::RealtimeEngine& engine) {
@@ -12134,6 +12149,22 @@ foundation::Result<PatternTempoPreviewStatus> Application::service_pattern_tempo
     if (!impl_->tempo_source || !impl_->tempo_source->matches(source_id)) return stale_tempo_source();
     return foundation::Result<PatternTempoPreviewStatus>::success(impl_->tempo_source->service());
   });
+}
+
+foundation::Result<audio::PreparedPatternView> Application::retain_pattern_tempo_source(
+    std::uint64_t source_id) {
+  try {
+    testing::invoke_api_entry_hook();
+    std::scoped_lock lock(impl_->sequence_mutex, impl_->replay_mutex, impl_->sample_mutex);
+    if (!impl_->tempo_source || !impl_->tempo_source->matches(source_id))
+      return foundation::Result<audio::PreparedPatternView>::failure({
+          ErrorCode::invalid_argument, "Pattern tempo source is stale",
+          {{"reason", "tempo_source_stale"}}});
+    return impl_->tempo_source->retain_source();
+  } catch (...) {
+    return foundation::Result<audio::PreparedPatternView>::failure({
+        ErrorCode::internal_error, "Pattern tempo source retention failed"});
+  }
 }
 
 foundation::Result<PatternTempoPreviewStatus> Application::release_pattern_tempo_source(

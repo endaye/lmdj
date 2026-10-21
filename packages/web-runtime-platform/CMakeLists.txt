@@ -371,6 +371,22 @@ if(BUILD_TESTING AND NOT EMSCRIPTEN)
     test/control_runtime_test.cpp
     src/bridge.cpp
   )
+  add_executable(lmdj_web_pattern_tempo_preview_tests test/pattern_tempo_preview_test.cpp src/bridge.cpp)
+  target_include_directories(lmdj_web_pattern_tempo_preview_tests PRIVATE
+    "${CMAKE_CURRENT_SOURCE_DIR}/src" "${CMAKE_SOURCE_DIR}"
+    "${CMAKE_SOURCE_DIR}/packages/application-facade/internal")
+  target_link_libraries(lmdj_web_pattern_tempo_preview_tests PRIVATE lmdj_web_runtime_control_testable lmdj_picosha2 Threads::Threads)
+  target_compile_definitions(lmdj_web_pattern_tempo_preview_tests PRIVATE LMDJ_WEB_RUNTIME_TESTING=1)
+  lmdj_target_warnings(lmdj_web_pattern_tempo_preview_tests)
+  lmdj_target_sanitizers(lmdj_web_pattern_tempo_preview_tests)
+  foreach(group journey source identity recovery terminal edit switch handoff settings deferred recording scheduled performance record-admission import-admission)
+    lmdj_add_test(NAME host.web_pattern_tempo_preview.${group} TIER host
+      COMMAND lmdj_web_pattern_tempo_preview_tests ${group} LABELS audio concurrency)
+  endforeach()
+  lmdj_add_test(NAME stress.web_pattern_tempo_preview TIER stress
+    COMMAND lmdj_web_pattern_tempo_preview_tests stress LABELS audio concurrency)
+  lmdj_add_test(NAME stress.web_pattern_tempo_publications TIER stress
+    COMMAND lmdj_web_pattern_tempo_preview_tests publication-stress LABELS audio concurrency)
   target_include_directories(
     lmdj_web_control_runtime_tests
     PRIVATE

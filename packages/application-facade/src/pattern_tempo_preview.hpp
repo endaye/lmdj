@@ -38,6 +38,7 @@ class PatternTempoPreviewSession final {
   foundation::Result<PatternTempoPreviewStatus> commit(const PatternTempoPreviewCommit&);
   PatternTempoPreviewStatus service();
   PatternTempoPreviewStatus status() const;
+  foundation::Result<audio::PreparedPatternView> retain_source() const;
   bool releasable() const;
   const PatternTempoSourceRequest& request() const { return request_; }
   bool matches(std::uint64_t source_id) const { return source_id == source_id_; }

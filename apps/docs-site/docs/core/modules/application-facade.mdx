@@ -490,9 +490,9 @@ authority 不可用返回 `tempo_source_stale`；Native publication 拒绝保留
 
 Native component 通过真实 PCM onset 验证变速、cancel、同 BPM revision adoption、
 held voice、非整除节奏及大于 JavaScript 精确整数范围的 numerator；独立 stress
-覆盖 publication/observation/reclaim 与 render 的竞争。这个 B1 gateway 尚未接入
-Facade preview 生命周期、Web protocol/SDK、Creator 的400ms 操作或 metronome；这些
-后续工作仍须完成实际产品与存储旅程。它也不证明 legacy Bar 边界漂移已经修复。
+覆盖 publication/observation/reclaim 与 render 的竞争。B1 gateway 本身不包含
+下述 Facade preview 生命周期或 Web protocol/SDK；它们由各自 owner 组合。
+Creator400ms、metronome 与设备验收分别记录；gateway 不证明 legacy Bar 边界漂移已修复。
 
 ### Facade 拥有的 tempo preview session
 
@@ -539,12 +539,25 @@ Application，Host 必须先建立 Native start/stop/clear 所要求的 render q
 随后 Core 才停止并清除仍属于自己的 derived Pattern，避免重启复活 preview。
 Engine stop 本身不是 callback gate，Engine 必须晚于其 active binding 销毁。
 
+`check_pattern_tempo_preview_admission(project_path)` 是绑定与 set 共用准入策略的
+只读入口；Host 在 begin 准备和同 BPM source adoption 之前调用，先核对 Performance/
+Sequence 录音、Sample 导入、replay 和 transport owner，拒绝时不发布 Native view。
+它不预留或代替后续绑定，绑定与 set 仍重判准入。
+
+`retain_pattern_tempo_source(source_id)` 只在 settled、可释放且仍拥有实际 Native
+source 时返回同材料的 `PreparedPatternView` 副本。它保留 B2 实际采用的新 revision
+及其 PCM owner，不重新 Cook 或发布。Host 在无关操作释放 binding 前使用这个副本，
+使没有新 Pattern publication 的操作之后仍能从真实 source 开始下一轮预览。
+UNKNOWN、pending adoption、失去 generation/epoch 的 source 均不能借它转移身份。
+
 独立 Native 分组与并发测试覆盖实际 onset、完整 Truth/history、最新 Truth cancel、
 commit-before-apply、真实 manifest 已落盘但返回失败、原命令重试、Undo/reopen、
 record/replay/移动后的 transport、停止/替换/退出。真实 Wasm/OPFS fixture 走同一
 typed Application 路径，并回读完整 checkpoint 与 WAV digest/byte length；这些证据
-仍须与实际 Worklet、Creator400ms、metronome/S7 和物理验收分开。当前 B2 尚未新增
-JSON/SDK endpoint 或产品 caller，B3 必须接入全部 publication/owner-disposal 路径。
+仍须与实际 Worklet、Creator400ms、metronome/S7 和物理验收分开。Native Bridge/Control
+已消费这两个入口；strict protocol 与同一 Session 的 typed endpoint 仍由 B3 SDK
+后继 Task 交付。Native ticket、精确 clock、source adoption 和 retained terminal 边界见
+[Web Runtime Platform](./web-runtime-platform.mdx#pattern-tempo-preview-的-web-owner)。
 
 ## 6. 状态、错误与并发
 窄 `RuntimeFacade` 的开发源码增加 `stopped_peak_voices()`，返回当前已停止运行的

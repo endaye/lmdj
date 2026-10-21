@@ -791,6 +791,13 @@ if (typeof globalThis.window !== "undefined") {
     }
     const payload = request.payload;
     switch (request.operation) {
+      case "pattern.tempo.preview.status":
+      case "pattern.tempo.preview.cancel":
+        return exactKeys(payload, ["ticket"]);
+      case "pattern.tempo.preview.commit":
+        // Core still requires this exact ticket's already-frozen command.
+        // Neither begin nor set can enter the sealed transport.
+        return exactKeys(payload, ["ticket", "command_id"]);
       case "pattern.transport.input.inspect":
         return exactKeys(payload,
           ["command_id", "runtime_generation", "frame_epoch", "ticket", "consume"]);
