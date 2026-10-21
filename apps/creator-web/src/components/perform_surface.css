@@ -110,3 +110,46 @@
   }
 
 }
+
+/* Figure10: parameter drafts and explicit actions stay in separate groups.
+   Cards never become another scroll viewport or shrink the native hit area. */
+.hardware-workspace .perform-surface[data-page="slots"] .perform-pattern-editor {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 8px;
+}
+.hardware-workspace .perform-surface[data-page="slots"] :is(.perform-slot-card, .perform-slot-clear) {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  align-items: end;
+  gap: 8px;
+  min-width: 0;
+  padding: 8px;
+  border-radius: 6px;
+  background: var(--creator-base);
+}
+.hardware-workspace .perform-surface[data-page="slots"] .perform-slot-card:first-child {
+  grid-template-columns: minmax(0, 3fr) minmax(44px, 2fr);
+}
+.hardware-workspace .perform-surface[data-page="slots"] .perform-pattern-editor label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+  font: 400 10px/14px var(--creator-font-mono);
+}
+.hardware-workspace .perform-surface[data-page="slots"] .perform-pattern-editor select {
+  width: 100%;
+  padding: 6px;
+  font: 400 11px/15px var(--creator-font-mono);
+}
+.hardware-workspace .perform-surface[data-page="slots"] .perform-slot-card > :is(button, output) { grid-column: 1 / -1; }
+.hardware-workspace .perform-surface[data-page="slots"] .perform-slot-truth {
+  font: 400 11px/15px var(--creator-font-mono);
+  overflow-wrap: anywhere;
+}
+.hardware-workspace .perform-surface[data-page="slots"] .perform-slot-assign:not(:disabled) {
+  --control-fill: var(--creator-lime);
+  --control-text: var(--creator-ink);
+}
+.hardware-workspace .perform-surface[data-page="slots"] .perform-slot-clear button:not(:disabled) { color: var(--creator-rose); }

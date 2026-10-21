@@ -58,54 +58,72 @@ export function PatternLaunchStrip(props: PatternLaunchStripProps) {
   const slotOptions = props.slots.map((_value, index) => (
     <option value={index} key={index}>{index + 1}</option>
   ));
+  // Read only committed/refreshed Project mapping, never the draft Pattern
+  // choice or an action Promise (the controller reports failures separately).
+  const slotContent = (slot: number) => {
+    const id = props.slots[slot];
+    if (id === null) return "Empty";
+    const index = props.patterns.findIndex(pattern => pattern.patternId === id);
+    return index < 0 ? "Unavailable" : `Pattern ${String(index + 1).padStart(2, "0")}`;
+  };
   return (
     <section className="perform-patterns" aria-label="Pattern Launch">
       {props.view === "edit" ? <div className="perform-pattern-editor" role="group" aria-label="Pattern slot editing">
-        <label>Pattern assignment
-          <select aria-label="Pattern assignment" value={patternId}
-            disabled={props.mutationDisabled || props.patterns.length === 0}
-            onChange={(event) => setPatternId(event.currentTarget.value)}>
-            {props.patterns.map((pattern) => (
-              <option value={pattern.patternId} key={pattern.patternId}>
-                {pattern.patternId.slice(0, 8)}
-              </option>
-            ))}
-          </select>
-        </label>
-        <label>Pattern slot
-          <select aria-label="Pattern slot" value={assignmentSlot}
-            disabled={props.mutationDisabled}
-            onChange={(event) => setAssignmentSlot(Number(event.currentTarget.value))}>
-            {slotOptions}
-          </select>
-        </label>
-        <button type="button" disabled={props.mutationDisabled || patternId === ""}
-          onClick={() => props.onAssign(assignmentSlot, patternId)}>Assign Pattern</button>
-        <label>Clear Pattern slot
-          <select aria-label="Clear Pattern slot" value={clearSlot}
-            disabled={props.mutationDisabled}
-            onChange={(event) => setClearSlot(Number(event.currentTarget.value))}>
-            {slotOptions}
-          </select>
-        </label>
-        <button type="button" disabled={props.mutationDisabled}
-          onClick={() => props.onClear(clearSlot)}>Clear Pattern</button>
-        <label>Move Pattern from
-          <select aria-label="Move Pattern from" value={moveFrom}
-            disabled={props.mutationDisabled}
-            onChange={(event) => setMoveFrom(Number(event.currentTarget.value))}>
-            {slotOptions}
-          </select>
-        </label>
-        <label>Move Pattern to
-          <select aria-label="Move Pattern to" value={moveTo}
-            disabled={props.mutationDisabled}
-            onChange={(event) => setMoveTo(Number(event.currentTarget.value))}>
-            {slotOptions}
-          </select>
-        </label>
-        <button type="button" disabled={props.mutationDisabled || moveFrom === moveTo}
-          onClick={() => props.onMove(moveFrom, moveTo)}>Move Pattern</button>
+        <div className="perform-slot-card" role="group" aria-label="Assign Pattern slot">
+          <label>Pattern
+            <select aria-label="Pattern assignment" value={patternId}
+              disabled={props.mutationDisabled || props.patterns.length === 0}
+              onChange={(event) => setPatternId(event.currentTarget.value)}>
+              {props.patterns.map((pattern, index) => (
+                <option value={pattern.patternId} key={pattern.patternId}>
+                  Pattern {String(index + 1).padStart(2, "0")}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label>Slot
+            <select aria-label="Pattern slot" value={assignmentSlot}
+              disabled={props.mutationDisabled}
+              onChange={(event) => setAssignmentSlot(Number(event.currentTarget.value))}>
+              {slotOptions}
+            </select>
+          </label>
+          <output className="perform-slot-truth" role="status" aria-label="Selected Pattern slot">
+            Slot {String(assignmentSlot + 1).padStart(2, "0")} · {slotContent(assignmentSlot)}
+          </output>
+          <button type="button" className="perform-slot-assign"
+            disabled={props.mutationDisabled || patternId === ""}
+            onClick={() => props.onAssign(assignmentSlot, patternId)}>Assign Pattern</button>
+        </div>
+        <div className="perform-slot-card" role="group" aria-label="Move Pattern slot">
+          <label>From
+            <select aria-label="Move Pattern from" value={moveFrom}
+              disabled={props.mutationDisabled}
+              onChange={(event) => setMoveFrom(Number(event.currentTarget.value))}>
+              {slotOptions}
+            </select>
+          </label>
+          <label>To
+            <select aria-label="Move Pattern to" value={moveTo}
+              disabled={props.mutationDisabled}
+              onChange={(event) => setMoveTo(Number(event.currentTarget.value))}>
+              {slotOptions}
+            </select>
+          </label>
+          <button type="button" disabled={props.mutationDisabled || moveFrom === moveTo}
+            onClick={() => props.onMove(moveFrom, moveTo)}>Move Pattern</button>
+        </div>
+        <div className="perform-slot-clear" role="group" aria-label="Clear Pattern slot">
+          <label>Clear slot
+            <select aria-label="Clear Pattern slot" value={clearSlot}
+              disabled={props.mutationDisabled}
+              onChange={(event) => setClearSlot(Number(event.currentTarget.value))}>
+              {slotOptions}
+            </select>
+          </label>
+          <button type="button" onClick={() => props.onClear(clearSlot)}
+            disabled={props.mutationDisabled}>Clear Pattern</button>
+        </div>
       </div> : null}
       {props.view === "launch" ? <>
         <nav className="perform-launch-groups" aria-label="Pattern slot groups">
