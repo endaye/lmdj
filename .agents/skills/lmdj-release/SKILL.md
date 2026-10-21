@@ -138,6 +138,45 @@ The written files ship as a reviewed docs Pull Request under the current Git wor
 skill. Promotion requires a published intent and both Host deployments to have
 succeeded; it is a separate boundary from deployment and does not follow from it.
 
+## Operator host during a release
+
+The M1 workstation is the release operator's machine, the Release stress
+runner, the macOS gates runner and the host `prepare` builds on. During
+2.0.122.0 `fseventsd` held a core for 17 days, Spotlight re-indexed after
+every `npm ci`, other agent sessions ran proofs beside the release, and the
+runner executed a candidate batch while `prepare` built — two prepare proofs
+timed out at load 35–41 and passed at load 3–8 (#2422 item 7). Before `run`,
+`resume` or `prepare`, and whenever `doctor` fails, walk this list:
+
+1. **Spotlight off for the project and runner trees.** System Settings →
+   Siri & Spotlight → Spotlight Privacy, add `~/Projects` and
+   `~/actions-runner`. `mdutil -s /` shows the volume state; indexing stays on
+   for the rest of the volume. `doctor` fails when `mds_stores`/`mds` exceed
+   30% cpu.
+2. **Restart `fseventsd` when it is pegged.** Check with
+   `ps -o %cpu= -p "$(pgrep -x fseventsd)"`; above 50% run
+   `sudo killall fseventsd` (launchd respawns it at once), then rerun
+   `doctor`, which fails above the same limit.
+3. **No heavy work beside the release.** No local proof lanes, Core builds,
+   Playwright runs or other agent sessions on this host while a request is
+   driven; check `uptime` (1-minute load must stay below the cpu count,
+   `sysctl -n hw.ncpu`) and `pgrep -fl "creator-web.sh|web-runtime-host.sh|core.sh|playwright"`
+   before starting. `doctor` fails on load above the cpu count and on a
+   second release driver.
+4. **Pause the M1 runner while `prepare` builds.** Pause:
+   `launchctl bootout gui/$(id -u)/actions.runner.endaye-lmdj.endaye-mbp-m1`;
+   resume right after `prepare` reports its plan:
+   `launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/actions.runner.endaye-lmdj.endaye-mbp-m1.plist`.
+   Do not pause it for the rest of the request: the candidate batch a `run`
+   or an earlier `resume` waits on executes on this runner. `doctor` refuses
+   `prepare`, and a `resume` whose next step is `prepared`, while the runner
+   is loaded, and fails any command while it is executing a job.
+
+`scripts/release.sh doctor` checks items 2–4 and the volume's Spotlight cpu
+automatically and prints each failure with its remedy; the Spotlight Privacy
+exclusion itself (item 1) is not readable from the command line and stays an
+operator step.
+
 ## Full exact-main CI evidence
 
 Current prospective policy is `complete-test-v2`: the Owner explicitly references

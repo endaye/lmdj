@@ -37,6 +37,27 @@ class ReleaseSkillTest(unittest.TestCase):
         self.assertTrue(path.is_file(), f"missing release governance file: {path}")
         return path.read_text(encoding="utf-8")
 
+    def test_operator_host_checklist_names_each_step_with_its_command(self) -> None:
+        """The M1 checklist (#2422 item 7) is a section, not folklore.
+
+        Each host condition that cost 2.0.122.0 time has its own line with the
+        exact command the operator runs, and the section says which of them
+        `doctor` detects. A checklist without the commands sends the operator
+        back to a chat transcript at the worst moment.
+        """
+        source = self.read(SKILL)
+        self.assertIn("## Operator host during a release", source)
+        section = source.split("## Operator host during a release", 1)[1].split("\n## ", 1)[0]
+        for item, command in (
+                ("Spotlight", "Spotlight Privacy"),
+                ("fseventsd", "sudo killall fseventsd"),
+                ("heavy work", "uptime"),
+                ("runner", "launchctl bootout gui/$(id -u)/actions.runner."),
+                ("runner", "launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/actions.runner."),
+                ("doctor", "scripts/release.sh doctor")):
+            with self.subTest(item=item):
+                self.assertIn(command, section, f"the checklist lacks the {item} command")
+
     def test_cleanup_rules_name_every_release_owned_path(self) -> None:
         """A cleanup that does not know a path is release-owned deletes it.
 
