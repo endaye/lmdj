@@ -286,17 +286,29 @@ def reprove_requested(root: Path, git, request_id: str) -> bool:
 
 
 def record_reprove(root: Path, git, request_id: str) -> None:
-    """Durably record `--reprove` for this request (idempotent, private)."""
+    """Durably record `--reprove` for this request (idempotent, private).
+
+    Called only after the driver returned for the request, so the marker
+    never outlives a request the driver refused to create. A concurrent
+    writer creating the same level is not an error.
+    """
     marker = _reprove_marker(root, git, request_id)
     directory = marker.parent
     for level in (directory.parent.parent, directory.parent, directory):
-        if not level.is_dir():
-            level.mkdir(mode=0o700)
+        level.mkdir(mode=0o700, exist_ok=True)
     try:
         fd = os.open(marker, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
     except FileExistsError:
         return
     os.close(fd)
+
+
+def clear_reprove(root: Path, git, request_id: str) -> None:
+    """Forget a retired request's `--reprove` so a re-created scope starts clean."""
+    try:
+        _reprove_marker(root, git, request_id).unlink()
+    except FileNotFoundError:
+        pass
 
 
 def _resume_request(root: Path, git, request_id: str):
@@ -408,6 +420,7 @@ def _retire_request(root: Path, request_id: str, tag: str) -> int:
     with RequestJournal(directory) as journal:
         # The identity and audit were proven for this exact request.
         journal.retire(request_id, retirement, expected_request=request)
+    clear_reprove(root, GitRepository(root), request_id)
     print(f"release request retired: {request_id} superseded by {tag}")
     return 0
 
@@ -485,6 +498,7 @@ def _retire_unreleased_request(root: Path, request_id: str, build: str) -> int:
         print(line)
     with RequestJournal(directory) as journal:
         journal.retire(request_id, retirement, expected_request=request)
+    clear_reprove(root, GitRepository(root), request_id)
     print(f"release request retired: {request_id} ({reserved}, never published) superseded by Build {newer}")
     return 0
 
@@ -777,8 +791,6 @@ def main(argv: list[str] | None = None) -> int:
                 if options.command == "run"
                 else _resume_request(root, context.git, options.request_id)
             )
-            if request is not None and getattr(options, "reprove", False):
-                record_reprove(root, context.git, request["id"])
             if request is None:
                 # Let the driver report the missing request from its own
                 # journal evidence rather than composing against nothing.
@@ -806,6 +818,12 @@ def main(argv: list[str] | None = None) -> int:
                 driver.run(request)
                 if options.command == "run" else driver.resume(options.request_id)
             )
+            if getattr(options, "reprove", False):
+                # The driver returned, so the request exists (or was adopted):
+                # record the wish under the ID a later `resume` names and under
+                # this invocation's own ID when an alias was adopted.
+                for request_id in {result.request_id, request["id"]}:
+                    record_reprove(root, context.git, request_id)
             _print_drive_result(result, release_journal_root(root, context.git))
             return 0 if result.status == "complete" else 2
         if options.command == "prepare":

@@ -70,6 +70,7 @@ class WebVerificationModes(unittest.TestCase):
                    "verify_browser_fixture_generator run_audio_worklet_conformance "
                    "generate_project_fixture generate_sample_editor_fixture "
                    "clean_creator configure_creator build_creator package_creator test_creator test_creator_ui "
+                   "skip_playwright_requirement "
                    "clean_host configure_host build_host run_nonbrowser_tests "
                    "generate_browser_fixtures verify_proof_fixture_inventory python3 cmake").split()
         with tempfile.TemporaryDirectory() as directory:
@@ -192,10 +193,43 @@ fixture_source_root=/fixtures
                 self.assertEqual(checks[-len(expected):], expected)
                 self.assertLess(calls.index("diff -qr /proof/first-dist /dist"),
                                 calls.index(expected[0]))
+                if host == "creator":
+                    # No browser runs, so the Playwright tree is waived before
+                    # the dependency check; the Creator's own tree stays required.
+                    self.assertLess(names.index("skip_playwright_requirement"),
+                                    names.index("require_dependencies"))
                 self.assertIn("reproducibility: PASS", result.stdout)
                 self.assertIn("Reproducible: PASS", result.stdout)
                 self.assertNotIn("Proof: PASS", result.stdout)
                 self.assertNotIn("Quick: PASS", result.stdout)
+
+    def test_creator_dependency_check_waives_only_the_playwright_tree(self):
+        text = (REPO_ROOT / "scripts/creator-web.sh").read_text()
+        body = shell_function(text, "require_dependencies")
+        waiver = shell_function(text, "skip_playwright_requirement")
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            creator = root / "apps/creator-web"
+            (creator / "node_modules/vite").mkdir(parents=True)
+            (creator / "package-lock.json").write_text("{}")
+            (creator / "node_modules/vite/package.json").write_text("{}")
+            program = ("set -eu\nnpm() { :; }\nnode() { :; }\n"
+                       f"creator_root={creator}\nweb_test_root={root}/tests/platform/web\n"
+                       "require_playwright_tree=1\n"
+                       "skip_playwright_requirement() {\n" + waiver + "\n}\n"
+                       "require_dependencies() {\n" + body + "\n}\n")
+            strict = subprocess.run(["bash", "-c", program + "require_dependencies\n"],
+                                    capture_output=True, text=True)
+            self.assertEqual(strict.returncode, 2)
+            self.assertIn("run npm ci in tests/platform/web", strict.stderr)
+            waived = subprocess.run(["bash", "-c", program + "skip_playwright_requirement\nrequire_dependencies\n"],
+                                    capture_output=True, text=True)
+            self.assertEqual(waived.returncode, 0, waived.stderr)
+            (creator / "node_modules/vite/package.json").unlink()
+            missing = subprocess.run(["bash", "-c", program + "skip_playwright_requirement\nrequire_dependencies\n"],
+                                     capture_output=True, text=True)
+            self.assertEqual(missing.returncode, 2)
+            self.assertIn("run npm ci in apps/creator-web", missing.stderr)
 
     def test_reproducible_failure_is_not_a_pass_and_needs_no_audio_wrapper(self):
         for host, filename in (("creator", "creator-web.sh"), ("runtime", "web-runtime-host.sh")):

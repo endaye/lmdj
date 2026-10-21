@@ -104,6 +104,15 @@ activate_toolchain() {
   fi
 }
 
+# The Playwright tree under tests/platform/web is a build-time requirement
+# only for legs that drive a browser; `reproducible` runs none, so it waives
+# that part of the check and keeps the Creator's own locked tree required.
+require_playwright_tree=1
+
+skip_playwright_requirement() {
+  require_playwright_tree=0
+}
+
 require_dependencies() {
   [[ -f "$creator_root/package-lock.json" ]] || {
     echo "Creator Web error: Creator lockfile is missing" >&2
@@ -113,15 +122,17 @@ require_dependencies() {
     echo "Creator Web error: run npm ci in apps/creator-web" >&2
     exit 2
   }
-  [[ -f "$web_test_root/node_modules/@playwright/test/package.json" ]] || {
-    echo "Creator Web error: run npm ci in tests/platform/web" >&2
-    exit 2
-  }
-  local playwright_version
-  playwright_version="$(node -p "require('$web_test_root/node_modules/@playwright/test/package.json').version")"
-  if [[ "$playwright_version" != "1.62.1" ]]; then
-    echo "Creator Web error: Playwright 1.62.1 is required, got $playwright_version" >&2
-    exit 2
+  if [[ "$require_playwright_tree" == 1 ]]; then
+    [[ -f "$web_test_root/node_modules/@playwright/test/package.json" ]] || {
+      echo "Creator Web error: run npm ci in tests/platform/web" >&2
+      exit 2
+    }
+    local playwright_version
+    playwright_version="$(node -p "require('$web_test_root/node_modules/@playwright/test/package.json').version")"
+    if [[ "$playwright_version" != "1.62.1" ]]; then
+      echo "Creator Web error: Playwright 1.62.1 is required, got $playwright_version" >&2
+      exit 2
+    fi
   fi
   npm --prefix "$creator_root" ls --depth=0 >/dev/null
 }
@@ -574,6 +585,7 @@ PY
 proof_creator() {
   local mode="${1:-proof}"
   activate_toolchain
+  if [[ "$mode" == reproducible ]]; then skip_playwright_requirement; fi
   require_dependencies
   if [[ -n "$(git -C "$repo_root" status --porcelain=v1 --untracked-files=all)" ]]; then
     echo "Creator Web error: Proof requires a clean Git source tree" >&2

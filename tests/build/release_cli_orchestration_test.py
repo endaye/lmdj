@@ -761,6 +761,31 @@ class ReleaseEntryPointTest(unittest.TestCase):
         code, report = self.status()
         self.assertNotIn("--reprove", report)
 
+    def test_reprove_marker_follows_the_request_lifecycle(self):
+        # Unknown request: nothing is recorded. Retired request: the marker is
+        # cleared so a re-created identical scope starts without it.
+        output = io.StringIO()
+        self.assertEqual(self.run_cli(["resume", "release-" + "0" * 16, "--reprove"], capture=output), 2)
+        self.assertFalse((self.journal() / "operations" / ("release-" + "0" * 16)).exists())
+        request_id = self.unfinished_request()
+        cli.record_reprove(self.root, self.context.git, request_id)
+        cli.record_reprove(self.root, self.context.git, request_id)  # idempotent
+        marker = self.journal() / "operations" / request_id / "reprove-requested"
+        self.assertTrue(marker.is_file())
+        code, report, _ = self.retire_unreleased(request_id, "1.0.65.0")
+        self.assertEqual(code, 0, report)
+        self.assertFalse(marker.exists())
+        # The published-supersession retirement clears it too.
+        self.carriers["publication"].fail_after_write = True
+        self.assertEqual(self.run_cli(["run", "--authority", "issue:1301"]), 2)
+        (request_id,) = self.request_ids()
+        cli.record_reprove(self.root, self.context.git, request_id)
+        marker = self.journal() / "operations" / request_id / "reprove-requested"
+        self.assertTrue(marker.is_file())
+        code, report, _ = self.retire(request_id, "lmdj-v1.0.61.0")
+        self.assertEqual(code, 0, report)
+        self.assertFalse(marker.exists())
+
     def test_resume_of_an_unknown_request_fails_closed(self):
         output = io.StringIO()
         self.assertEqual(self.run_cli(["resume", "release-" + "0" * 16], capture=output), 2)
