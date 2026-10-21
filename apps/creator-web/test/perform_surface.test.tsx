@@ -1243,6 +1243,120 @@ test("stops capture, saves the named draft, then binds the WAV", async () => {
     .toContain("bound");
 });
 
+for (const [kind, invalid] of [["empty", ""], ["ASCII65", "x".repeat(65)],
+  ["Unicode65", "🎵".repeat(65)]] as const) {
+  test(`Performance name preflight refuses fresh ${kind} without touching its stopped WAV`, async () => {
+    const f = controllerFixture();
+    await f.controller.refreshRecovery();await f.controller.record();await f.controller.stop();
+    const stopped = f.controller.getState().recording;
+    expect(stopped.wav).not.toBeNull();
+    await f.controller.save(invalid);
+    expect(f.runtime.session.savePerformance, "an invalid fresh name must not enter the SDK")
+      .not.toHaveBeenCalled();
+    expect(f.runtime.session.inspectPerformance).not.toHaveBeenCalled();
+    expect(f.store.bind).not.toHaveBeenCalled();
+    expect(f.cleanupTemporary).not.toHaveBeenCalled();
+    expect(f.controller.getState().recording).toEqual(stopped);
+    expect(f.controller.getState().error).toBe("Use 1–64 characters for the Performance name.");
+    await f.controller.save("🎵".repeat(64));
+    expect(f.runtime.session.savePerformance).toHaveBeenCalledOnce();
+    expect(vi.mocked(f.runtime.session.savePerformance).mock.calls[0]![0].name).toBe("🎵".repeat(64));
+    expect(f.store.bind).toHaveBeenCalledOnce();
+    expect(f.controller.getState().bindingStatus).toBe("bound");
+  });
+}
+
+test("Performance name preflight leaves an invalid fresh recording explicitly discardable", async () => {
+  const f = controllerFixture();
+  await f.controller.refreshRecovery();await f.controller.record();await f.controller.stop();
+  await f.controller.save("x".repeat(65));
+  await f.controller.discard();
+  expect(f.store.discard).toHaveBeenCalledOnce();
+  expect(f.store.discard).toHaveBeenCalledWith(expect.objectContaining({performanceId: ids.performance}));
+  expect(f.runtime.session.savePerformance).not.toHaveBeenCalled();
+  expect(f.runtime.session.inspectPerformance).not.toHaveBeenCalled();
+  expect(f.controller.getState().recording.phase).toBe("idle");
+});
+
+test("Performance name preflight shows accessible feedback and admits an intact Unicode64 correction", async () => {
+  const f = controllerFixture();renderSurface(f);
+  await act(() => f.controller.refreshRecovery());
+  await act(() => f.controller.record());await act(() => f.controller.stop());
+  selectPerformPage("Takes");
+  const input = screen.getByRole("textbox", {name: "Performance name"});
+  const save = screen.getByRole("button", {name: "Save Performance"});
+  for (const value of ["x".repeat(65), "🎵".repeat(65), "", "   "]) {
+    fireEvent.change(input, {target: {value}});
+    expect((input as HTMLInputElement).value).toBe(value);
+    expect(save.hasAttribute("disabled"), "the fresh invalid name must not be submittable").toBe(true);
+    expect(input.getAttribute("aria-invalid")).toBe("true");
+    const description = document.getElementById(input.getAttribute("aria-describedby")!);
+    expect(description?.textContent).toBe("Use 1–64 characters for the Performance name.");
+    expect(screen.getByRole("alert")).toBe(description);
+    for (const action of ["Discard Performance", "Export Performance WAV"]) {
+      expect(screen.getByRole("button", {name: action}).hasAttribute("disabled")).toBe(false);
+    }
+  }
+  expect(f.runtime.session.savePerformance).not.toHaveBeenCalled();
+  expect(f.runtime.session.inspectPerformance).not.toHaveBeenCalled();
+  expect(f.store.bind).not.toHaveBeenCalled();
+  const legal = "🎵".repeat(64);
+  fireEvent.change(input, {target: {value: ` ${legal} `}});
+  expect(save.hasAttribute("disabled")).toBe(false);
+  expect(input.hasAttribute("aria-invalid")).toBe(false);
+  expect(screen.queryByRole("alert")).toBeNull();
+  await userEvent.click(save);
+  await waitFor(() => expect(f.controller.getState().bindingStatus).toBe("bound"));
+  expect(f.runtime.session.savePerformance).toHaveBeenCalledOnce();
+  expect(vi.mocked(f.runtime.session.savePerformance).mock.calls[0]![0].name).toBe(legal);
+});
+
+test("Performance name preflight never blocks the original UNKNOWN inspection with an invalid replacement", async () => {
+  const f = controllerFixture();
+  await f.controller.refreshRecovery();await f.controller.record();await f.controller.stop();
+  vi.mocked(f.runtime.session.savePerformance).mockRejectedValueOnce(Object.assign(
+    new Error("published Save reply invalid"), {code: "INVALID_ARGUMENT"}));
+  vi.mocked(f.runtime.session.inspectPerformance).mockRejectedValueOnce(new Error("inspection unavailable"));
+  await f.controller.save("Owned take");
+  expect(f.controller.getState().error).toContain("could not confirm the save");
+  expect(f.controller.getState().recording.phase).toBe("stopped");
+  expect(f.store.bind).not.toHaveBeenCalled();
+  vi.mocked(f.runtime.session.inspectPerformance).mockResolvedValueOnce({id: ids.performance,
+    name: "Owned take", createdBpm: 120, recordingArtifact: null, events: [], projectRevision: 9});
+  await f.controller.save("x".repeat(65));
+  expect(f.runtime.session.savePerformance).toHaveBeenCalledOnce();
+  expect(f.runtime.session.inspectPerformance).toHaveBeenCalledTimes(2);
+  expect(vi.mocked(f.runtime.session.inspectPerformance).mock.calls.map(([id]) => id))
+    .toEqual([ids.performance, ids.performance]);
+  expect(f.store.bind).toHaveBeenCalledOnce();
+  expect(f.controller.getState().bindingStatus).toBe("bound");
+});
+
+test("Performance name preflight keeps an UNKNOWN name read-only and its original retry reachable", async () => {
+  const f = controllerFixture();renderSurface(f);
+  await act(() => f.controller.refreshRecovery());
+  await act(() => f.controller.record());await act(() => f.controller.stop());
+  selectPerformPage("Takes");
+  fireEvent.change(screen.getByRole("textbox", {name: "Performance name"}),
+    {target: {value: "Owned take"}});
+  vi.mocked(f.runtime.session.savePerformance).mockRejectedValueOnce(Object.assign(
+    new Error("reply lost"), {code: "HOST_TIMEOUT"}));
+  vi.mocked(f.runtime.session.inspectPerformance).mockRejectedValueOnce(new Error("inspection unavailable"));
+  await userEvent.click(screen.getByRole("button", {name: "Save Performance"}));
+  await waitFor(() => expect(screen.getByRole("alert").textContent).toContain("could not confirm the save"));
+  const input = screen.getByRole("textbox", {name: "Performance name"});
+  expect(input.hasAttribute("disabled"), "the admitted name owns the pending retry").toBe(true);
+  expect((input as HTMLInputElement).value).toBe("Owned take");
+  expect(screen.queryByText("Performance saved", {exact: true})).toBeNull();
+  expect(screen.getByRole("button", {name: "Save Performance"}).hasAttribute("disabled")).toBe(false);
+  vi.mocked(f.runtime.session.inspectPerformance).mockResolvedValueOnce({id: ids.performance,
+    name: "Owned take", createdBpm: 120, recordingArtifact: null, events: [], projectRevision: 9});
+  await userEvent.click(screen.getByRole("button", {name: "Save Performance"}));
+  await waitFor(() => expect(f.controller.getState().bindingStatus).toBe("bound"));
+  expect(f.runtime.session.savePerformance).toHaveBeenCalledOnce();
+  expect(f.runtime.session.inspectPerformance).toHaveBeenCalledTimes(2);
+});
+
 test("keeps a busy save stopped and makes the same action explicitly retryable", async () => {
   const fixture = controllerFixture();
   (fixture.runtime.session.savePerformance as ReturnType<typeof vi.fn>)
