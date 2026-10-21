@@ -792,6 +792,140 @@ async function expectOverviewFits(overview, context) {
   expect(geometry.scrollHeight).toBeLessThanOrEqual(geometry.height);
 }
 
+// Text can stay inside the outer display while fields overlap or an encoder
+// label is ellipsized. Inspect actual drawn fragments against their own box
+// and every other field; do not infer readability from the console's size.
+async function overviewTextGeometry(overview) {
+  return overview.evaluate(root => {
+    const bounds = root.getBoundingClientRect();
+    const fields = [...root.querySelectorAll([
+      ".overview-context", ".overview-transport > *",
+      ".overview-summary-columns dt", ".overview-summary-columns dd",
+      ".encoder-readbacks dt", ".encoder-readbacks dd",
+    ].join(","))].filter(field => !field.closest(".visually-hidden"));
+    const errors = [];
+    const observations = fields.map((field, index) => {
+      const box = field.getBoundingClientRect();
+      const range = document.createRange();
+      range.selectNodeContents(field);
+      const fragments = [...range.getClientRects()].filter(rect => rect.width > 0 && rect.height > 0);
+      const text = field.textContent.trim();
+      const style = getComputedStyle(field);
+      if (style.visibility !== "visible" || box.width <= 0 || box.height <= 0) {
+        errors.push({kind: "hidden", text});
+      }
+      for (const rect of fragments) {
+        if (rect.left < bounds.left - 0.5 || rect.right > bounds.right + 0.5 ||
+            rect.top < bounds.top - 0.5 || rect.bottom > bounds.bottom + 0.5) {
+          errors.push({kind: "outside display", text});
+        }
+        if (rect.left < box.left - 0.5 || rect.right > box.right + 0.5 ||
+            rect.top < box.top - 0.5 || rect.bottom > box.bottom + 0.5) {
+          errors.push({kind: "clipped field", text});
+        }
+      }
+      if (field.classList.contains("overview-value") &&
+          field.closest('[aria-label="Project"], [aria-label="Audio"]') && fragments.length !== 1) {
+        errors.push({kind: "split identity or audio state", text});
+      }
+      return {index, text, fontSize: style.fontSize,
+        box: box.toJSON(), fragments: fragments.map(rect => rect.toJSON())};
+    });
+    for (const [index, field] of observations.entries()) {
+      for (const other of observations.slice(index + 1)) {
+        if (field.fragments.some(a => other.fragments.some(b =>
+          Math.min(a.right, b.right) - Math.max(a.left, b.left) > 0.5 &&
+          Math.min(a.bottom, b.bottom) - Math.max(a.top, b.top) > 0.5))) {
+          errors.push({kind: "overlapping fields", text: field.text, other: other.text});
+        }
+      }
+    }
+    return {bounds: bounds.toJSON(), observations, errors,
+      text: fields.map(field => field.textContent.trim())};
+  });
+}
+
+test("Project and System keep full readable facts and encoder labels on narrow portrait consoles", async ({page, browserName}, info) => {
+  test.skip(browserName !== "chromium");
+  test.setTimeout(360_000);
+  const report = {observations: [], pageErrors: []};
+  page.on("pageerror", error => report.pageErrors.push(error.message));
+  try {
+    await page.goto("/");
+    await waitForBootProject(page);
+    await importAndOpenProject(page);
+    const baseline = await inspectTruth(page);
+    report.baseline = baseline;
+    // The unchanged wide view is a positive control for the same instrument.
+    for (const audio of ["inactive", "running"]) {
+      if (audio === "running") {
+        await page.getByRole("button", {name: "Back to music", exact: true}).click();
+        await wakeAudioWithPad(page);
+      }
+      for (const viewport of [{width:1440,height:900}, {width:390,height:844},
+        {width:480,height:844}, {width:600,height:900}, {width:707,height:900},
+        {width:768,height:1024}]) {
+        await resizeViewport(page, viewport);
+        for (const mode of ["project", "system"]) {
+          if (await page.getByRole("button", {name: "Back to music", exact: true}).count()) {
+            await page.getByRole("button", {name: "Back to music", exact: true}).click();
+          }
+          await page.getByTestId("physical-controls").getByRole("button", {
+            name: mode === "project" ? "Project" : "System", exact: true,
+          }).click();
+          const overview = page.getByTestId("overview-display");
+          await expect(overview.locator(".overview-display")).toHaveAttribute("data-mode", mode);
+          await expect(overview.locator('[aria-label="Audio"] .overview-value')).toHaveText(audio);
+          await expect(overview.locator("button,input,select,[tabindex]")).toHaveCount(0);
+          const normal = await overviewTextGeometry(overview);
+          const label = `${mode}-${viewport.width}-${audio}`;
+          report.observations.push({label, viewport, presentationOnly:false, ...normal});
+          if (viewport.width === 390 || viewport.width === 1440) {
+            const path = info.outputPath(label + ".png");
+            await overview.screenshot({path});
+            await info.attach(label, {path, contentType:"image/png"});
+          }
+          await writeFile(info.outputPath("readable-overviews.json"), JSON.stringify(report, null, 2));
+          expect(normal.errors, label).toEqual([]);
+
+          // Stylesheet fixture only: this is the actual longest existing
+          // storage qualifier, not a manufactured Native prepare failure.
+          const storage = overview.locator('[aria-label="Project"] dt');
+          const saved = await storage.textContent();
+          try {
+            await storage.evaluate(element => {
+              element.textContent = "SAMPLE SAVED · AUDIO PENDING";
+            });
+            const qualified = await overviewTextGeometry(overview);
+            report.observations.push({label:label+"-qualified", viewport,
+              presentationOnly:true, ...qualified});
+            expect(qualified.text).toContain("SAMPLE SAVED · AUDIO PENDING");
+            await writeFile(info.outputPath("readable-overviews.json"), JSON.stringify(report, null, 2));
+            if (viewport.width === 390 || viewport.width === 1440) {
+              const path = info.outputPath(label + "-qualified.png");
+              await overview.screenshot({path});
+              await info.attach(label + " qualified", {path, contentType:"image/png"});
+            }
+            expect(qualified.errors, label+" qualified").toEqual([]);
+          } finally {
+            await storage.evaluate((element, text) => {element.textContent = text;}, saved);
+          }
+          expect(await inspectTruth(page)).toEqual(baseline);
+        }
+      }
+    }
+    await page.reload();
+    await waitForProjectReopen(page, "00000000");
+    report.reopened = await inspectTruth(page);
+    expect(report.reopened).toEqual(baseline);
+    expect(report.pageErrors).toEqual([]);
+  } finally {
+    const path = info.outputPath("readable-overviews.json");
+    await writeFile(path, JSON.stringify(report, null, 2));
+    await info.attach("readable overview facts", {path, contentType:"application/json"});
+  }
+});
+
 test("mode-specific overview stays read-only and fits every supported viewport", async ({page}, testInfo) => {
   await page.goto("/");
   await waitForBootProject(page);
