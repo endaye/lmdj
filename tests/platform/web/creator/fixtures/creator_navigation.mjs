@@ -9,6 +9,7 @@ export async function clickCreatorSystemAction(page, name) {
 }
 export async function openCreatorSlice(page) {
   await page.getByRole("button", {name: "Sample", exact: true}).click();
+  await showSamplePage(page, "Pad");
   await page.getByRole("button", {name: "Slice", exact: true}).click();
 }
 
