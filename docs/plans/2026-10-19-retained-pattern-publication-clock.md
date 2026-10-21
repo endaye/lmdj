@@ -5,6 +5,58 @@ publication and recording consumers. The target-note chase question remains
 pending; this Task retains existing publication facts and chooses no new Voice
 or cross-Pattern concurrency semantics.
 
+## Current main integration (2026-10-20)
+
+This section supersedes the historical Draft-only shipping hold below for P2.
+Owner partial unfreeze permits ordinary features/fixes/tests after Task proof,
+independent current-head review, full conversations/conflicts and live protection.
+The candidate remains fixed at `8c361623f`; `.github/workflows/`,
+`tools/release/`, `scripts/release.sh`, `scripts/cloudflare-host-deploy.sh`,
+`docs/release-evidence/` and `apps/docs-site/docs/releases/` remain frozen.
+None belongs to these ten declared P2 paths. No release/deployment/Channel or
+agent Git cleanup is included, and COUNT-IN UI remains withdrawn.
+
+Isolated branch `feat/retained-pattern-clock-main` starts at refreshed main
+`7bc7cd4fe551b19bf35e1300ffb14482eccd0e11`. P1 is actually delivered by #2427
+at that revision, so do not repeat its arithmetic. Original P2 #2379 remains
+on its published branch while this exact layer is independently integrated;
+no force push or published-history rewrite. Creator C4 and COUNT-IN are not
+P2 dependencies. The four owning Engine/header/component/stress files are
+byte-identical to #2379's original parent. Existing retained disposition/S and
+current-only tempo queries are present; per-publication historical N/geometry
+are absent at the authoritative declarations, definitions and tests. Live
+#2234 remains OPEN with no new product decision or successor implementation.
+The remaining current Draft inventory has no second implementation of P2.
+
+Baseline before edits: configure/build PASS; complete owning component 1.98 s
+and stress 1.75 s PASS (3.74 s CTest total). Integrate exactly the ten declared
+files below; keep all original journeys, budgets and 1000-iteration history
+checks. Repeat the actual producer mutation/restoration, complete owning dev
+and TSan selections, dependency and complete Portal checks, staged/committed
+ownership and exact-body declarations. No new binary/TU/workflow/gate or
+capacity/timeout change. Preserve full OFF/recording/restart/Host/Creator,
+#1973, candidate/device/listening and Voice-chase acceptance as outstanding.
+P2's concrete Engine storage is ABI MAJOR debt in #2237; integrating source
+neither allocates identities nor lowers that debt.
+
+Integration execution receipts: fixed complete dev component/stress PASS
+(5.409 s process total). Store zero for the actual retained numerator, rebuild
+ordinary/testable producers, and both original selections fail their independent
+literal assertions (`realtime_engine_test.cpp:8403` and stress line1065; CTest
+exit8). Restore byte-identical working bytes with fresh mtime and confirm both
+producers recompile; complete component/stress PASS (1.84 s /1.63 s). Core
+dependencies PASS. Complete TSan component/stress PASS (14.21 s /20.97 s),
+actual Engine/stress flags include `-fsanitize=thread`, no TSAN_OPTIONS override
+and no race diagnostic. Complete Portal PASS: 179 tests, 53 pages, 10 sources/
+20 outputs, 51 routes/internal links; official diagrams regenerated. Four owning
+code/test files are byte-identical to original P2. Precommit main remains
+`7bc7cd4fe551b19bf35e1300ffb14482eccd0e11`; governing and owning premises
+unchanged. Staged new-path ownership PASS (76 tests); body lint and required
+Portal-route declaration PASS. Committed ownership/scope and independent
+current-head review remain shipping prerequisites. No process pitfall recurrence: product
+metadata lifetime is covered by these tests and established proof procedures
+were followed without a new mechanism or relaxed budget.
+
 ## Refreshed authority and premises
 
 - Integration main: `fa1a402b0da4f043864b409d40e04e0821aefbf3`.

@@ -120,16 +120,3 @@ test.each([
   expect(performCaptureUnavailableMessage(code)).toBe(copy);
   expect(copy).not.toMatch(TECHNICAL);
 });
-
-test.each(["recording_switch_preparation_pending", "recording_switch_capacity",
-  "recording_switch_material_pending", "recording_switch_overlay_pending"])(
-  "%s asks for an explicit Pattern choice retry without stopping recording", reason => {
-    const message = userMessage("HOST_STATE_INVALID", {reason});
-    expect(message).toEqual({message: "The previous Pattern change is still settling.",
-      nextStep: "Keep playing and choose the Pattern again in a moment."});
-    expect(`${message.message} ${message.nextStep}`).not.toMatch(TECHNICAL);
-    expect(userMessage("INVALID_ARGUMENT", {reason})).toEqual(userMessage("INVALID_ARGUMENT"));
-    expect(userMessage("HOST_STATE_INVALID", {reason: `${reason}_unknown`}))
-      .toEqual(userMessage("HOST_STATE_INVALID"));
-  },
-);

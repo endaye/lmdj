@@ -12,8 +12,6 @@ source_paths:
   - packages/web-runtime-platform/web/input_adapters.mjs
   - packages/web-runtime-platform/web/runtime_session.mjs
   - apps/creator-web/src/runtime/input_controller.ts
-  - apps/creator-web/src/runtime/count_in_controller.ts
-  - docs/prd/decisions/2026-10-10-record-key-and-count-in.md
   - apps/web-runtime-host/src/main.mjs
   - docs/release-evidence/2026-08-27-web-runtime-l1-macos-safari-pointer-1.0.36.0.md
   - docs/release-evidence/2026-08-31-web-runtime-l2-macos-chrome-pointer-1.0.40.0.md
@@ -32,14 +30,6 @@ import {StatusBadge} from '@site/src/components/StatusBadge';
 
 ## 目标事件
 
-Creator 的 global Pattern COUNT-IN 只改变停止状态下 Record 的开录时机，不改变
-Pointer／Keyboard／MIDI 的 Pad Press/Release 入口。数拍中 BPM 和 Pattern authoring
-保持锁定，Pad 仍可演奏；实际 S 之前按住的手势及其跨 S 释放保持 live-only，
-新的 post-S 手势才按 Core 的实际录音 authority 进入 Journal。屏幕到达计划 S 不
-等于开录或持久化成功；Host 跟随 Applied、opening、cancel 和真实 consume 回执。
-Record／Play-Stop 在数拍中保持取消入口，不重新走音频激活；未知结果不生成第二个
-相反意图，也不提前放开锁。Sample capture 和 Performance Record 保留独立入口。
-
 Pointer、Keyboard、MIDI 汇入共享 Runtime Session 的 Sample inspect→`trigger(flatSlot, velocity, source)` admission，并保留归一化来源和 release/cancel identity。Project `{bank, pad}` 只在输入边界按 `bank * 16 + pad` 展平一次；adapter 不操作 Asset、Project Truth、Provider 或音频字节。在全局 Pattern transport 已 engaged 且录音中的 session，同一 trigger 路径在 enqueue 接受后把 press/release 注入 transport coordinator 的 admission 候选：watermark 单调分配、release 携带其归属 press 的 correlation；这一注入不改变返回给输入侧的 successful/failed/unknown 结果，unknown 输入绝不自动重 trigger。
 
 Creator 当前默认键盘 mapping 使用 `KeyboardEvent.code`，按[已批准的四排空间映射](https://github.com/endaye/lmdj/blob/main/docs/prd/decisions/2026-10-11-creator-keyboard-spatial-mapping.md)接线：`1 2 3 4` 对应当前 Bank 的 Pad 13–16，`Q W E R` 对应 Pad 9–12，`A S D F` 对应 Pad 5–8，`Z X C V` 对应 Pad 1–4。Pad 上的 `kbd` 提示与 accessible name 均从同一个导出 mapping 派生，不维护第二份 Creator 键表；切换 Bank 只改变稳定的 16-Slot offset。
@@ -54,16 +44,14 @@ Creator 左栏按 2026-10-09 决策绑定旋钮，上屏持续显示当前功能
 | Sample 裁剪 | Start | End | Pitch | 监听输出音量 |
 | Sample 声音 | 当前 Pad 音量 | Pan | Tone | 监听输出音量 |
 | Sequence | 小节滚动 | 上屏行滚动 | BPM | 监听输出音量 |
-| Perform PRIMARY | Cutoff（旧 producer 回退 Filter） | Delay | Reverb | 监听输出音量 |
-| Perform FILTER | Type | Cutoff | Resonance | 监听输出音量 |
-| Perform MORE | Crush | Stutter | Gate | 监听输出音量 |
+| Perform 主效果 | Filter | Delay | Reverb | 监听输出音量 |
+| Perform 更多效果 | Crush | Stutter | Gate | 监听输出音量 |
 | System | 未分配 | 未分配 | 未分配 | 监听输出音量 |
 
 - 滚轮累计每 50 px 一格，竖向拖动每 8 px 一格，聚焦后的方向键每按一次一格；向上和向右为顺时针。SHIFT + ENC1–3 细调，ENC4 始终每格 1%。导航仍每格一个项目／小节／行，整数 BPM 的最小步长仍为 1。
 - Project 旋钮只改变选择；明确按 OPEN PROJECT 才打开。Sample 的触摸键切换裁剪／声音组，同一 Pad 的工程参数共享一个转动预览：停止 400 ms 后合并为一次保存与撤销记录。离页、换 Pad／工程、打开 System、Esc 或 Undo/Redo 取消未提交的预览；已发出的保存保留实际结果。
 - Sequence ENC1 每格滚动一小节，到边界停止；SETUP 中禁用。ENC2 滚动上屏一行；Bank 键跳到该 Bank 首行。ENC3 立即显示预览 BPM，400 ms 后提交，录音或 transport 命令在途时锁定。Swing 留在 SETUP 的触摸滑块。
 - Sample 编辑对象、Sequence 当前行与 Perform 矩阵高亮共用一个当前 Pad。正常击打可用 Pad 会更新它；Bank 键只换演奏组，不改变该编辑地址。Record Sample 武装期间保持固定目标。Sequence 和 Perform 的 ↑/↓ 按 A01–D16 选择，首尾停止，必要时同步 Bank 与既有上屏可见行；不发声、不改音符选择、工程或历史。Perform 在 SHIFT 或 System 中不提供这次新增的 Pad 方向。
-- Perform ←/→ 切换 PRIMARY／FILTER／MORE，到首尾停止；SHIFT 仍是 Undo/Redo，System 暂不提供 Perform 组方向。触摸组按钮同步旋钮绑定；换组只释放被移除输入的 touch token，保留旋钮手势、HOLD、masks 和录制。Live Mute/Solo 使用相同当前 Pad，并列出真实全 64 槽地址；它不提供新的声音或 Project 命令。
 - Sequence ←/→ 在停止时选择 Pattern；播放且未录音时按设备 SEQ SNAP 的 1 BEAT／1 BAR／SEQ END 预约切换，默认 1 BAR，录音或命令结算中禁用。SETUP 的 SEQ SNAP、网格 Snap 和录音 Quantize 互相独立。SHIFT + ←/→ 始终是撤销/重做。
 - Project 单列卡片与 ENC1、左栏普通 ↑/↓ 共用同一选择；每次选相邻工程，首尾停止，并把所选卡片及 Open 滚入触摸区。普通 ←/→ 未分配。只选择，明确按卡片内 Open 才打开。Sample ↑/↓ 复用 Sequence 的 A01–D16 当前 Pad 选择、边界与 Bank 同步规则，←/→ 按 Trim／Playback／Tone/EQ／Pad 切现有子页，首尾停止。导航不触发 Pad、不写 Truth；换 Pad／子页先取消未提交旋钮和精确输入预览，已发出的保存保留真实结果。Project／Sample 的 SHIFT + ↑/↓ 未分配，SHIFT + ←/→ 保持 Undo/Redo；聚焦文本与旋钮的原键盘操作保持。
 - [2026-10-13 Interaction UI 决定](https://github.com/endaye/lmdj/blob/main/docs/prd/decisions/2026-10-13-creator-interaction-ui-baseline.md)取代先前 Project 三列、←/→ 相邻与 ↑/↓ 跨行规则；SHIFT + ←/→ 的 Undo/Redo 保持。新触摸动作和硬件键采用 32 可见面、至少 44 命中区，U01 须验证有效缩放尺寸、邻接命中与裁剪。owner 已批准小屏调整布局和外边距，使实际命中区至少 44 CSS px 且互不重叠，宽屏继续对齐图稿；具体断点按实测确定。新稿五类 Pad 色也已批准由 U02b 同步更新矩阵、Sequence 与颜色选择器，已有自定义颜色索引保持不变、显示色随新色板更新。两项仍是实施目标，本次批准不是实现或设备验收。
@@ -72,9 +60,6 @@ Creator 左栏按 2026-10-09 决策绑定旋钮，上屏持续显示当前功能
 - ENC4 与 Perform MASTER 共用 0–100% 设备监听增益，默认 100%，以 `monitor-volume.v1` 存在 IndexedDB 的 `lmdj.creator.host/settings`，包括 0% 在内重开恢复；恢复完成前显示等待并关闭 Pad 与首次音频激活。它位于 capture tap 之后，节拍器也接入该节点，不改变工程、历史、录音、重采样或导出电平。
 
 Creator 在用户明确授权 Web MIDI 后监听每个可用 input，在 channels 1–16 上接受 Note On `36..51` 并保留 velocity；Note On velocity `0` 与对应 Note Off 释放 Pad，范围外 note 仍忽略。共享 Platform adapter 保留可选的单 channel filter，Creator 不启用该限制，也不按设备名称分支。
-
-
-紧凑竖屏宽度不足708px时，Project／Sample／Sequence／Perform 及 System 共用独立左侧物理栏、上方 Pad 矩阵和下方单一触摸滚动区，触摸区不再盖住实体键。保留实际至少44px的实体键和 Pad 命中区；主模式切换与 System 返回沿用同一分区，挂载及窗口变化继续由原 stage fit 适配，实时数值更新不反复计算布局。Perform 组按钮、三根主推子保持原44px命中；其390px上屏旋钮读数仍用两行两列保留完整标签和值。公共输入几何验证与完整35屏样式、真实移动设备验收分别记录。
 
 ## 生命周期
 

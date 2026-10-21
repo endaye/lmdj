@@ -626,6 +626,40 @@ class ReleaseGitHubApiTest(unittest.TestCase):
         self.assertNotIn("fixture outage", str(captured.exception))
 
 
+    def test_only_an_incomplete_draft_asset_is_deleted(self) -> None:
+        from tools.release.github_api import GitHubAsset
+        def asset(identifier, state):
+            return GitHubAsset(
+                identifier, "host.zip", 10,
+                f"https://api.github.com/repos/{REPOSITORY}/releases/assets/{identifier}",
+                f"https://github.com/{REPOSITORY}/releases/download/v/host.zip",
+                77, None, "application/octet-stream", state)
+        def document(state):
+            return {"id": 9, "name": "host.zip", "size": 10, "label": None,
+                    "content_type": "application/octet-stream", "state": state,
+                    "url": f"https://api.github.com/repos/{REPOSITORY}/releases/assets/9",
+                    "browser_download_url": f"https://github.com/{REPOSITORY}/releases/download/v/host.zip"}
+        url = f"/repos/{REPOSITORY}/releases/assets/9"
+        self.transport.route(url, HttpResponse(200, {"Content-Type": "application/json"},
+                                               json.dumps(document("starter")).encode()),
+                             HttpResponse(204, {}, b""))
+        self.client.delete_incomplete_draft_asset(REPOSITORY, 77, asset(9, "starter"))
+        self.assertEqual([(m, u) for m, u, _ in self.transport.requests], [("GET", url), ("DELETE", url)])
+        # A projection that is already uploaded, or another Release's asset,
+        # never reaches the API.
+        for candidate, release_id in ((asset(9, "uploaded"), 77), (asset(9, "starter"), 78)):
+            with self.assertRaises(GitHubApiError):
+                self.client.delete_incomplete_draft_asset(REPOSITORY, release_id, candidate)
+        self.assertEqual(len(self.transport.requests), 2)
+        # A stale `starter` projection whose upload completed meanwhile is
+        # re-read and refused without a DELETE.
+        self.transport.requests.clear()
+        self.transport.route(url, HttpResponse(200, {"Content-Type": "application/json"},
+                                               json.dumps(document("uploaded")).encode()))
+        with self.assertRaises(GitHubApiError):
+            self.client.delete_incomplete_draft_asset(REPOSITORY, 77, asset(9, "starter"))
+        self.assertEqual([m for m, _, _ in self.transport.requests], ["GET"])
+
 class ReadRetryTest(unittest.TestCase):
     """A read survives a transient failure; a write is never repeated."""
 

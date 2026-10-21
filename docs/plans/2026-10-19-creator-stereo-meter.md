@@ -1,5 +1,48 @@
 # Creator stereo output meter consumer (#2231 / D04)
 
+## Current main integration (2026-10-21)
+
+The owner now authorizes sequential integration of the 19 open PRs under #2112.
+This section supersedes the historical Draft/freeze transition wording below;
+the original receipts remain historical evidence. Integration base is
+`54439f207926841b9411c805d70252c5df66b33f`, which already contains the meter
+producer through #2430, metadata query, capture progress and telemetry isolation.
+The producer is not reimplemented. Creator consumption remains outstanding at
+that exact base, as confirmed at App, OverviewDisplay and PerformOverview.
+
+Preserve the published #2384 head `8d85f862e08ee1f7306ecb27146dde35af490059`
+as the first parent of a normal main-integration merge. The resolved tree is
+current main plus this Task's original 16-file delta, with the two Overview
+conflicts resolved to retain only meter binding/test additions. COUNT-IN imports
+and tests that main withdrew in #2396 are not meter-Task additions and remain
+withdrawn; #2377 and its explicit acceptance decision remain separate. No other
+old stack ancestor is imported, no published history is rewritten, and every
+non-Task path must equal this integration base.
+
+Version impact: existing compatible Creator Host MINOR debt in #2237; no identity
+allocation. Documentation impact: required for /hosts/creator-web/ and
+/hosts/creator-interactions/. Retain all original meter journey legs and budgets.
+Re-run complete Creator UI, types, dependencies, pitfall/ownership checks,
+Portal, clean official production package and both packaged meter journeys.
+Current-head independent review and all conversation/conflict/protection checks
+remain required. Full candidate, physical-device and hearing acceptance remain
+unverified. No release, deployment, Channel or cleanup is included.
+
+The first integration browser run failed both initial stereo signal predicates.
+Retained traces show actual nonzero left and right output, sampled in different
+polls; the default 100/250/500/1000ms backoff can miss the shared steady interval
+of two asynchronously started one-second voices. Two unchanged-package full
+reruns passed, which does not establish a product fix or an environment cause.
+Keep those failed and passed receipts. Match the signal observer to the existing
+20ms silence/display polling cadence, retaining the 35s deadline, both exact
+Native started receipts, 50ms steady-window bound, literal PCM oracle, ratios
+and every downstream journey leg. Add passive first-signal/voice diagnostics
+for future failures. This addresses the test's sampling gap; Native input
+latency and the separate #2395 investigation remain unresolved.
+The current integration therefore declares one additional existing path,
+`.agents/pitfalls/live-phase-polling-alias.md`, for this recurrence and its
+already-open #2382 escalation: 17 net paths, with no additional product scope.
+
 One implementation Task, one Conventional Commit, above Draft #2383 full head
 `3cdf2ef9350e37d3ac4f0cb0e693e7d27362b083`. Main remains explicitly frozen:
 develop, verify, commit, push and Draft stack only. No merge/auto-merge, release,

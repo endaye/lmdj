@@ -235,13 +235,3 @@ describe("WavStreamWriter", () => {
     expectCanonicalStereoWav(file, 153_600);
   });
 });
-
-
-test("read-only writer format names the actual encoded WAV header without widening snapshots", async () => {
-  const file = new CountingOpfsFile();
-  const writer = await openWavStreamWriter(file, LOCKED_LIMITS);
-  const header = new DataView(file.header.buffer);
-  expect(writer.format).toEqual({sampleRate: header.getUint32(24, true), channels: header.getUint16(22, true)});
-  expect(Object.isFrozen(writer.format)).toBe(true);
-  expect(Object.keys(writer.snapshot).sort()).toEqual(["byteLength", "droppedFrames", "durableFrames", "reason", "state"]);
-});

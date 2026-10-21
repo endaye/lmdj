@@ -16,6 +16,7 @@ import sys
 import zipfile
 
 from .batch_reference import digest, sha
+from .commands import describe_failure
 from .dispatch_evidence import DispatchEvidenceConsumer
 from .dispatch_receipt import unique
 from .durable_dispatch import validate_spec
@@ -186,6 +187,6 @@ class DeploymentEffect:
             require(expires > now and receipt_expires > now, "artifact retention elapsed")
             return Observation("verified", {"sha256":canonical_sha256({"document":document, "artifact":artifact}),
                 "reference":document["github_actions"]["run_url"]})
-        except Exception:
+        except Exception as error:
             # Missing or malformed evidence never means the deployment was absent.
-            return Observation("unknown")
+            return Observation("unknown", diagnostic=describe_failure(error))

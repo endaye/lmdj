@@ -1,56 +1,50 @@
-# Performance capture progress producer — #2135 A prerequisite
+# Capture progress producer: current-main integration of #2391
 
-## Premises and ownership
+## Premises before implementation
 
-Integration main refreshed to `ba67a81d4200019f3e604bae2a69ea30f0354e91`;
-Task parent is frozen Draft #2390, `547032fddfc2a816489b0765c52f7a9c1dafc12b`.
-The live #2135 body/comments, parent and all ten open PRs were inspected.
-The other open PR is a release snapshot witness; none owns capture duration.
-Governance is identical at main and the stack head. The intervening SDK meter
-changes belong to the existing stack; capture/queue/writer behavior still
-matches the inspected main. Original C1/C2 have merged; no original C1 worktree
-or in-flight duration PR remains in the current inventory. This Task has one
-writer in its new isolated worktree; heavy verification runs serially.
+Integration and isolated worktree base:
+`9ff12bc7162a0884381b0135464ac83f2db953ec`.
+Original Draft #2391 source `e24072d0cbae9e56c442d95fe52ce87ff1f602f8`,
+parent #2390 `547032fddfc2a816489b0765c52f7a9c1dafc12b`.
+Live #2112/#2135/#2228/#2237 and comments, #2390/#2391/#2392/#2411 and actual
+source/diffs were refreshed. Seven governing files match current main. This
+Task has one writer in `feat/performance-capture-progress-main`; the root main
+worktree and original published stack remain untouched. All10 tracked symlinks
+are actual links. No subagents or concurrent heavy verification.
 
-| Premise | Disposition before source edits |
+| Premise | Disposition at the exact current base |
 | --- | --- |
-| Audio capture lacks an authoritative frame source | Already present internally: `performance_master_capture.mjs` admits only matching generation, exact started binding, contiguous validated stereo batches and finalSequence. Reuse that boundary; no new clock, worklet message or capture owner. |
-| Public progress fields exist | Outstanding: `WebPerformanceCaptureSession` exposes configuration and start/stop only; the public capture handle is exactly `{stop}` (explicit test). Add a separate read-only Session capability; preserve all old exact response/handle keys. |
-| Host may assume48k or use attempted/durable frames as live duration | Not authorized: context rate must be read from the actual AudioContext; received PCM and durable WAV are different facts. This prerequisite supplies received frames/rate/identity only. Host queue/writer durable projection remains #2135 A; saved verified metadata remains B. |
-| Meter can supply capture timing | Rejected: independent meter owner/windows are not capture identity, do not establish complete delivery and must remain separate. |
-| Old owner holds implementation admission | Historical note predates merged C1/C2 and the current authorized stack. Preserve its ownership history; do not edit another worktree or create a concurrent writer. Current #2135 explicitly allows the smallest missing public-field producer prerequisite. |
+| Public received-frame/rate/identity query exists | Outstanding: all three owning source/type files contain neither performanceMasterCaptureProgress nor captureProgress. Current API exposes capture configuration/status/start/stop, with exact old handle keys. Re-home only this additive optional Session query. |
+| Authoritative validated capture boundary is missing | Already present: exact started generation/binding, contiguous validated stereo batches and finalSequence drive capture. Reuse that real boundary and actual AudioContext sampleRate; no new owner, packet, clock or admission rule. |
+| Saved metadata and startup discovery still require these old ancestors | Already delivered independently through #2437/#2438/#2439, latest actual merge9ff12bc7. Preserve current Runtime metadata queue/owner retirement, public methods/types and Portal descriptions. None of these files equals the old Draft parent; never replace them with whole old blobs. |
+| Capture progress requires meter or Perform layout | Not required by the API: original parent additionally carries held meter #2383 and layout/Slots. Their original source is not current main. Migrate only the nine-file producer delta; do not import meter, restore withdrawn COUNT-IN or alter the pending #2430 owner exception. |
+| Received PCM establishes durable WAV or complete Performance duration | Rejected by approved #2135 A0/A/B scope: received, Host durable/drop/checkpoint, saved verified metadata, whole Performance elapsed and Replay event progress are distinct facts. Only the approved received producer is this Task; Host/UI consumers remain separate. |
+| Old Draft's full-main freeze still governs | Historical: user now permits sequential ordinary feature/fix/test integration with current-head review/protection and safe postmerge cleanup. Release-owned paths remain frozen; candidate8c361623f unchanged. |
 
-Baseline: three owning Node files,446 PASS, exit0. This is the required public
-producer prerequisite, not completion of A, B, U08b or #2135. Follow it with
-Host queue/writer projection, verified saved-WAV metadata and actual Creator
-Recording/Takes presentation. Replay keeps event progress and existing timing.
+Before any Task edit, all current Platform Node tests passed586/586 in1.865s
+(Node26.7.0), no skips. Original main already has valid legacy/null and headered
+ACK contracts; preserve both. A matching old-parent filename is not a reason to
+rewind current metadata or to include unrelated upstream Draft functionality.
 
-## API and lifecycle
+## Behavior and ownership
 
-Add `performanceMasterCaptureProgress()` and a separate optional capability
-interface. It is a synchronous immutable read with no RPC, I/O, new timer or
-effect on capture admission. Do not widen existing result schemas, capture
-handles, Worklet packets or manifest contracts.
+Add synchronous immutable `performanceMasterCaptureProgress()` through a separate
+optional capability interface. Existing configuration, public capture `{stop}`,
+Worklet messages, Facade keys and capture admission remain exact.
 
-- Before confirmed started ACK: unavailable. After ACK: actual sampleRate,
-  cumulative validated receivedFrames, captureId, generation and existing
-  begin binding. Silence counts; absent/delayed batches do not advance.
-- Phase recording→stopping→stopped follows the existing stop request and exact
-  finalSequence ACK; include the actual final partial batch. Retain the stopped
-  snapshot only until replacement start or owner close.
-- Failed capture retains only validated received frames. A valid Worklet
-  failure's droppedFrames is known; protocol errors, timeout, processor failure
-  or closure do not manufacture zero lost frames. These report unknown loss.
-- Identity is passive telemetry, never a second recording owner. Missing/bad
-  rate, identity or optional producer capability yields unavailable without
-  stopping/refusing an otherwise valid capture. Old callers work unchanged.
-- Snapshot copies are frozen and bind the same tap/generation/start identity;
-  late old traffic and a new capture cannot relabel old frames. Session close,
-  tap retirement and replacement revoke the old getter's current projection.
-- Received frames are not durable WAV frames, whole Performance elapsed,
-  saved completeness or Replay duration. No Project/persistence changes.
+- Before exact started ACK: unavailable. After ACK: capture identity/generation,
+  existing begin binding, actual context rate, validated cumulative receivedFrames.
+  Silence and the final partial batch count; delayed/unposted frames do not.
+- Recording/stopping/stopped/failed follow original lifecycle and exact stop ACK.
+  A reported Worklet post-message failure has known droppedFrames; protocol,
+  timeout, processor/stop failure have unknown loss, never invented zero.
+- Retain only a compact stopped snapshot, never a settled sink/queue. Replacement
+  start and Session/tap close revoke old projection. Late old batches cannot be
+  adopted or relabeled. Reads add no RPC, timer, I/O or capture owner.
+- Missing optional telemetry/rate/identity makes this read unavailable without
+  refusing or stopping valid capture. Host queue/writer drops remain separate.
 
-## Declared files — one atomic Task / Conventional Commit
+## Declared files: one atomic integration Task
 
 - `packages/web-runtime-platform/web/performance_master_capture.mjs`
 - `packages/web-runtime-platform/web/runtime_session.mjs`
@@ -62,109 +56,121 @@ handles, Worklet packets or manifest contracts.
 - `apps/docs-site/docs/platform/web-runtime.mdx`
 - `docs/plans/2026-10-19-performance-capture-progress.md`
 
-Expand this declaration before editing any additional file. No App/Creator UI,
-writer/queue, C++, worklet, schema, CI, manifest or version allocation change.
+No Creator UI/controller/queue/writer, C++/worklet, schema, CI, manifest, Product
+or version allocation edits. Preserve current main outside the exact delta.
 
-## Verification and defect ownership
+## Verification and independent oracles
 
-1. Node component tests fix independent facts: exactACK/identity, silence and
-   batch-only advancement, immutable snapshots, authoritative non48k rate,
-   final partial/stop, old generation isolation, replacement/close revocation,
-   reported versus unknown loss, optional capability/telemetry failure, and
-   unchanged old exact-key handles. Reuse the real Worklet VM and port parser;
-   injected public seams retain exact producer shapes.
-2. Run all Platform Node tests and Creator type checks for compatibility.
-   Source mutations must fail named counting/owner assertions, followed by
-   exact-byte fresh-mtime restore and a fresh-process green check. No broken
-   source mutation enters a commit.
-3. Build the Native CLI and official pinned Node26/Emscripten6.0.5 Creator
-   distribution. An unpublished clean source checkpoint permits packaging;
-   fold any browser fixes into the same atomic Task before publication.
-4. Packaged proof reads the public SDK on the real retained Session and real
-   tap batches. Assert received count equals the independently observed batch
-   sum, final sampleRate/count matches the real WAV header/PCM length, silent
-   audio contributes frames and Stop retains the final partial batch. New
-   capture changes identity; stopped/closed/reopened lifecycle cannot inherit
-   old counts. Persist actual JSON evidence by output path and read it back.
-5. Preserve the complete original Perform/touch-fit/meter selection, including
-   all PCM, failure-prefix, retry-bind, save/reopen/Replay, crash/owner-loss and
-   recovery legs and budgets. Run canonical locked WebKit refusal boundaries;
-   unsupported product UI is not a pass. Keep full candidate/device deferred.
-6. Complete Portal check, offline dependencies, new-file ownership/admission,
-   final body lint and parent-relative declaration checks. Refresh relevant
-   main/history, inspect exact staged/committed files and final clean status.
+1. Port all original new Node regressions while retaining every current main
+   test and method inventory entry. Full Platform selection covers exact ACK,
+   4800+64 real Worklet frames, non48k rate, immutable binding, replacement/late
+   owner traffic, reported versus unknown loss, optional old provider/identity
+   failure and unchanged old handle keys. Creator types and owning Perform
+   caller tests cover compatibility.
+2. Counting and identity mutations must each fail the intended semantic
+   assertion in fresh Node processes; restore exact working-file snapshots
+   with fresh mtimes, not HEAD (which lacks the uncommitted implementation).
+   Full owning/all-Platform GREEN follows. A third verification-only mutant
+   omits the real Worklet's final partial flush: the independently executed
+   batch-sum/getter parity must still agree at4800 while the absolute4864 oracle
+   fails. Snapshot and restore that exact owned Worklet file; no Worklet change
+   enters the nine-file implementation commit. The absolute4800/4864 real-VM
+   count catches the shared omission even when batch/getter/WAV agree.
+3. Build owning Native CLI and official pinned Emscripten6.0.5/Node26 Creator
+   configure/build/package serially. Use a clean unpublished source checkpoint
+   for production package provenance; amend only before first publication if
+   source verification needs correction. Published heads receive follow-ups.
+4. Preserve the original added packaged journey in full: real retained Session
+   and real port batches; silent frames and final partial batch; exact actual
+   started binding (including supported null), finalSequence; independently
+   observed batch sum and actual exported WAV header/frame/length/SHA; second
+   capture's distinct identity; discard; terminal cleanup; actual reload and
+   fresh idle projection. Persist output-path JSON and read it back.
+5. Run every current-main Perform/touch-fit journey plus that new journey with
+   original budgets/assertions, including original PCM/save/reopen/Replay,
+   failure-prefix/retry-bind/crash/owner-loss/recovery legs. Main has no meter
+   spec/UI, so the old mixed-ancestor33-case stack receipt cannot be reused as
+   current evidence: its additional meter/layout combination remains owed at
+   actual combined integration. Do not skip or truncate any available main
+   journey or the new producer journey. Run both canonical locked WebKit
+   capability-refusal boundaries; they do not establish product WebKit UI/PCM.
+6. Full Portal check; offline dependencies/source boundaries; staged and
+   committed ownership/admission; final committed scope and PR body/declaration;
+   exact-head authenticated independent review, all findings/conversations,
+   live protection and expected-head squash before actual merge/cleanup.
 
-Process guidance: existing complete-journey, real-primitive stubs, fresh restore,
-path-backed artifacts, load-correlation and live-polling cadence pitfalls apply.
-Pure progress reads must not submit requests or introduce sampled phase gates.
-Product regressions belong in owning tests, not duplicate process entries.
+Controlled PCM/fixtures and local speaker endpoint observations are not device
+hearing/captured external audio. Full candidate, sanitizer/batch debt, physical
+acceptance and missing consumer/combination journeys remain open; their closure
+requires the corresponding actual integration and full owning evidence.
+
+
+## Source verification before unpublished clean checkpoint
+
+Current-main baseline586/586 Node PASS1.865s. Initial delta application correctly
+rejected contexts belonging to old meter/Slots ancestors; those rejects are
+retained externally. Re-homed all progress hunks onto the current code, without
+meter restoration or metadata rollback. First new-only failures exposed absent
+old outputMeterFixture/VM clock; after the capture-only fixture was added, its
+old createRealMasterTap alias was also absent. Reuse the already imported real
+createPerformanceMasterTap and restore the real VM clock. These7- then6-case
+setup failures are retained, not counted as semantic producer RED or passes.
+
+Final complete Platform Node601/601 PASS1.873s, zero skips. All original586 tests
+and15 new tests remain. Owning capture24 and Runtime Session416 pass after exact
+snapshot restores. Three current-source mutations each produce semantic RED1:
+missing increment gives0 versus4800; retained first identity makes the next
+capture unavailable; omitted real Worklet final flush makes batch/getter parity
+still agree at4800 while the independent rendered4864 oracle fails, and the
+owning test rejects [4800] versus [4800,64]. Restored standalone parity and
+absolute oracle return [4800,64]/4864. Worklet bytes exactly match HEAD again;
+no Worklet implementation edit remains. All source snapshot/mutant/restored
+hashes and actual fresh-process exits are retained.
+
+Creator types PASS; existing Perform caller170/170 PASS12.466s; offline Creator,
+web and Portal dependencies, Core dependencies, Runtime/explicit-root Host
+boundaries and browser-spec syntax PASS. Native CLI configured and built from
+current main in16.633s. The unchanged authoritative embedded Creator fixture
+generator, current CLI/Assembly and real kick.wav produce two byte-identical
+bundles:767554 bytes, SHA66262c9187cb264a006e29d077751186acdeb02a30fc4bc497482049297e938f.
+Their hash also matches the separately retained original fixture; current
+readback has its own CLI/Assembly/source hashes, not an inherited build claim.
+Full Portal PASS62.442s:179 tests,53 pages,51 routes/internal links.
+
+Eight non-plan source/test/Portal input hashes are recorded. This checkpoint is
+unpublished and not completed shipping: clean-head official production configure/
+build/package, complete current-main packaged journeys/new capture evidence,
+WebKit refusal boundaries, committed ownership/scope, independent exact-head
+review and actual merge/cleanup still require their own positive receipts.
+No parent33-case mixed-stack result or full candidate/deferred lane is reused.
 
 ## Version Management
 
-Additive compatible Web Runtime Platform JS API MINOR debt, deduplicated in
-#2237 with the same compatibility domain's existing debt. No Native ABI,
-cross-language Contract, Host UI, persistence or Product/Assembly/Build
-allocation. Preserve prior Audio Runtime ABI MAJOR debt; no guessed version.
+Compatible additive Web Runtime Platform JS API MINOR debt under #2237,
+deduplicated within its actual compatibility domain. Preserve higher existing
+Audio Runtime ABI MAJOR debt. No Native ABI/cross-language Contract, persistence,
+Host UI, dependency, manifest, Product/Assembly/Build or snapshot allocation.
 
 ## Documentation Impact
 
-Documentation impact: required — `/core/modules/web-runtime-platform/` and
-`/platform/web-runtime/`. Describe actual read-only capture semantics and limits.
-Host pages change with their later real consumer Task. No Module boundary or
-diagram edge changes; existing diagrams stay accurate.
+Documentation impact: required
+Affected portal pages: /core/modules/web-runtime-platform/ /platform/web-runtime/
+Describe received-only optional progress, identity/ACK/lifecycle, known/unknown
+loss and missing Host/UI consumption. Preserve current metadata and all other
+facts. Module/diagram boundaries remain unchanged.
 
-## Delivery boundary
+## Historical evidence and delivery boundaries
 
-One Draft successor of #2390 on the same linear stack. Main remains frozen
-until explicit owner unfreeze. No merge/auto-merge, release, deployment,
-Channel or resource cleanup. Independent current-head review, integration,
-full candidate and physical acceptance remain pending. #2112/#2135 stay open.
+The [original immutable Task record](https://github.com/endaye/lmdj/blob/e24072d0cbae9e56c442d95fe52ce87ff1f602f8/docs/plans/2026-10-19-performance-capture-progress.md)
+and original Draft stay unchanged. Its615/616 Node, mixed33-case stack browser,
+Portal/production results are historical, not current-head passes. Preserve its
+initial public-method inventory failure, packaged headered-only assumption
+failure, counting/identity mutation RED/GREEN and all other negative evidence.
+Current startup-discovery/Save OOM and old B0 WebKit evidence remains in the
+prior immutable integration archives; this producer does not explain or erase it.
 
-
-## Results and retained evidence
-
-Source checks PASS: all Platform Node615 (before the final provider-loss guard); Perform caller components179;
-Creator TypeScript; offline Core dependencies; Native CLI; pinned official
-Creator configure/build; complete Portal179 tests/50 routes/internal links.
-No Creator-wide/full candidate lane or physical device pass is claimed.
-
-Two source mutation proofs each produced semantic RED1, followed by exact-byte
-fresh-mtime restore/fresh-process GREEN0: deleting the validated frame increment
-failed the real silent Worklet4800-frame assertion; keeping the first progress
-identity through replacement failed the real Session's new-generation available
-assertion. Both restored source hashes are retained in the proof receipts.
-
-Historical first-source check failed only the explicit public Session method
-inventory because the new additive method was not listed yet. Updated that
-inventory to declare the intended method; retained all old capture-handle,
-configuration, packet and response assertions. The complete615-case check then
-passed. Baseline446, intermediate owning458/all-Platform614 and final615 are
-separate observations, not a fixed future case-count gate.
-
-The clean unpublished checkpoint still requires real packaged frame/WAV/
-identity/reopen proof, the complete original Perform/touch-fit/meter selection,
-canonical WebKit boundaries, committed ownership and final body/declaration
-checks before publication. Bind their actual head and results in the Draft PR
-and canonical Issues. Host durable projection, saved metadata, UI, independent
-review, integration and candidate/device acceptance remain pending.
-
-
-Final staged source review tightened the optional provider boundary: only an
-explicit Worklet post-message-failed report may quantify loss; protocol/timeout/
-processor failures cannot turn unknown into zero. Its independent public
-contract test rejects the bad telemetry without stopping capture, then accepts
-null loss. Rerun all Platform Node tests and the official Creator build before
-the clean checkpoint; no response shape or capture admission changes.
-
-Final provider guard: complete Platform Node616 PASS and official Creator
-build (including TypeScript) PASS. All original public-handle/schema assertions
-remain; only the explicit Session method inventory admits the new capability.
-
-
-First packaged probe at `d2f2c12d` failed the new test's unconditional headered
-binding assumption. The actual capture was the already-supported legacy null
-binding; received frames/rate assertions passed before that line. Record the
-real started ACK independently and compare its exact actual binding (null only
-when the ACK is null), plus the real finalSequence. Preserve all frame/WAV/
-replacement/cleanup/reopen legs and budgets; do not force a different product
-profile, weaken SDK validation or count this interrupted journey as a pass.
+User authorizes ordinary protected main integration and safe postmerge cleanup;
+retain original refs/WTs needed downstream and both unrelated dirty WIPs. The
+release-owned workflow/tools/evidence/releases path freeze remains. No auto-merge,
+tag, Release, Runtime deployment or Channel operation. #2112/#2135/#2228 remain
+open until their full actual consumer/candidate/device acceptance is verified.

@@ -1,5 +1,18 @@
 # Retain the completed tempo receipt through ordinary audio suspension
 
+## Current main integration (2026-10-21)
+
+The owner's 19-PR integration request supersedes the historical Draft/freeze
+wording below. This correction is included with original #2418 in the single
+28-path Web producer integration Task declared in
+`2026-10-20-pattern-tempo-web-preview.md`, based on actual main
+`e1f6dfc3694ab04bcc1fb66599f8aa4015bc95d0`. Preserve the same published source,
+all original failure evidence and every same-Session/PCM/persistence leg. The
+combined original Native/sanitizer/browser selections are rebuilt and verified;
+current-head review and actual merged retention remain separate requirements.
+No Creator, release, deployment, Channel, cleanup or physical acceptance is
+implied by producer integration.
+
 ## Task and authority
 
 One corrective Task under #2235 / #2112, on `fix/tempo-suspend-receipt` in

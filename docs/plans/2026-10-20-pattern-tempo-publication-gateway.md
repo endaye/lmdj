@@ -1,5 +1,29 @@
 # I2b B1: Pattern tempo publication gateway
 
+## Current main integration (2026-10-21)
+
+The owner authorizes sequential integration of the 19 open PRs under #2112.
+This section supersedes historical Draft/freeze wording below. Refreshed base
+`eb8d5e581e750bc6726cd07c6150512796e72d87` has the existing Native continuous
+tempo primitive but no Pattern tempo gateway header/source or registration.
+Live #2235 and original #2415 retain this distinct B1 prerequisite; B2/B3 and
+Creator acceptance remain separate. No delivering successor exists at this base.
+
+Preserve original published head `bc60f952614faf9df89b87370aa894cf32e25359`
+through a normal main merge, resolving the tree as current main plus only the
+original ten declared paths. The original patches apply cleanly; source and
+tests retain their exact original bytes. No unrelated stack ancestor or withdrawn
+COUNT-IN consumer is imported. Run the complete six-item dev and three-item
+TSan owning selections, retaining the original SPSC stress and budgets; inspect
+actual sanitizer flags and outcomes. Verify dependencies, official diagrams,
+full Portal, staged/committed ownership, exact scope and PR declarations.
+
+Version impact remains additive Facade C++ MINOR debt in #2237. Documentation
+impact remains required for /core/modules/application-facade/ and its diagram.
+Independent current-head review and live conflict/conversation/protection checks
+precede guarded squash. No release, deployment, Channel, cleanup, B2/B3 or
+physical/hearing acceptance is implied.
+
 ## Refreshed premises before product edits
 
 Fresh main is `1c4462aa8436f81da1db2a9e6420d94f0e84ccb4`. This isolated

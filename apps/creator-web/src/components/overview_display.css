@@ -31,39 +31,6 @@
   font: 400 11px/15px var(--creator-font-mono);
   font-variant-numeric: tabular-nums;
 }
-@media (max-width: 480px) {
-  .overview-display.interaction-overview[data-mode="perform"] .overview-primary {
-    display: grid;
-    grid-template-columns: minmax(0, 1fr) 124px;
-    align-items: start;
-    gap: 6px;
-  }
-  .overview-display.interaction-overview[data-mode="perform"] .overview-context {
-    font-size: 10px;
-    line-height: 20px;
-  }
-  .overview-display.interaction-overview[data-mode="perform"] .overview-transport {
-    flex-wrap: wrap;
-    justify-content: flex-end;
-    gap: 0 6px;
-    font-size: 7px;
-    line-height: 10px;
-  }
-  .overview-display.interaction-overview[data-mode="perform"] .overview-transport > * {
-    font: inherit;
-  }
-  .overview-display.interaction-overview[data-mode="perform"] .overview-transport:has([aria-label="Count-in status"]) {
-    display: grid;
-    grid-template-columns: repeat(4, auto);
-    column-gap: 4px;
-    justify-content: end;
-  }
-  .overview-display.interaction-overview[data-mode="perform"] [aria-label="Count-in status"] {
-    grid-column: 1 / -1;
-    grid-row: 2;
-    justify-self: end;
-  }
-}
 .overview-display.interaction-overview[data-mode] :is(.overview-bpm, .overview-swing) {
   color: inherit;
   font: inherit;
@@ -92,24 +59,6 @@
 .overview-display.interaction-overview[data-mode] .encoder-readbacks dd {
   flex-shrink: 0;
   color: var(--creator-muted);
-}
-@media (max-width: 480px) {
-  .overview-display.interaction-overview[data-mode="perform"] .encoder-readbacks {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    grid-template-rows: repeat(2, 12px);
-    gap: 0 4px;
-    font-size: 7px;
-    line-height: 10px;
-  }
-  .overview-display.interaction-overview[data-mode="perform"] .encoder-readbacks > div {
-    padding: 1px 2px;
-    gap: 2px;
-  }
-  .overview-display.interaction-overview[data-mode="perform"] .encoder-readbacks dt {
-    flex-shrink: 0;
-    overflow: visible;
-    text-overflow: clip;
-  }
 }
 .overview-display.interaction-overview[data-mode] .overview-summary-columns {
   display: grid;
@@ -289,7 +238,7 @@
 }
 .perform-output-meter output { margin-top: -2px; white-space: pre; }
 html[data-creator-layout="compact"] .overview-display.interaction-overview[data-mode="perform"] { gap: 12px; }
-html[data-creator-layout="compact"] .perform-output-meter { grid-template-columns: minmax(0, 1fr) 124px; gap: 8px; }
+html[data-creator-layout="compact"] .perform-output-meter { grid-template-columns: minmax(0, 1fr) 132px; gap: 8px; }
 @media (max-width: 600px) {
   html[data-creator-layout="compact"] .overview-display.interaction-overview[data-mode="perform"] { gap: 8px; }
   html[data-creator-layout="compact"] .overview-display.interaction-overview[data-mode="perform"] .perform-overview-columns { gap: 8px; }

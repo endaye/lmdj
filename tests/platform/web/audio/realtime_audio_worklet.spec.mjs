@@ -1649,7 +1649,7 @@ opfsTest("thirty-minute recording Save and bind preserve full identity through t
           return response.result;
         };
         const root=await navigator.storage.getDirectory();
-        let admitted=null;
+        let admitted=null,startupListed=null;
         if(phase==="prepare") {
           await send("project.create",{project_id:projectId,bpm:120,
             initial_pattern:{pattern_id:patternId,bars:1,events:[]}});
@@ -1669,7 +1669,12 @@ opfsTest("thirty-minute recording Save and bind preserve full identity through t
             command_id:crypto.randomUUID(),expected_revision:revision-1,performance_id:performanceId,
             ...(admission==="save"?{name:"thirty minutes"}:{}),recording_artifact:artifact});
           admitted={receipt:admitted,elapsedMs:performance.now()-started};
-        } else await send("project.open",{project_id:projectId,pattern_id:patternId});
+        } else {
+          // Creator startup discovers on an unselected Session before opening.
+          // Keep the later post-open full physical digest oracle as well.
+          startupListed=await send("project.list",{});
+          await send("project.open",{project_id:projectId,pattern_id:patternId});
+        }
         const inspected=await send("performance.inspect",{performance_id:performanceId});
         const metadata=await send("performance.recording.metadata",{project_id:projectId,
           performance_id:performanceId,expected_revision:revision,recording_artifact:artifact});
@@ -1718,12 +1723,17 @@ opfsTest("thirty-minute recording Save and bind preserve full identity through t
         const inventoryDigest=await digest(new TextEncoder().encode(JSON.stringify(canonical(index))));
         if(phase==="prepare")await send("audio.suspend",{});
         const closed=await send("host.close",{});
-        return {admitted,inspected,metadata,physical,listed,inventory:{entries,total,digest:inventoryDigest},
+        return {admitted,startupListed,inspected,metadata,physical,listed,inventory:{entries,total,digest:inventoryDigest},
           closed,memoryBytes:window.Module.wasmMemory.buffer.byteLength};
       },{admission,phase,projectId,patternId,performanceId,revision,artifact,bundleContractVersion,
         header:Array.from(Buffer.from(headerHex,"hex"))});
       if(phase==="prepare")expect(report.admitted.receipt.project_revision).toBe(revision);
       else expect(report.admitted).toBeNull();
+      if(phase==="prepare") expect(report.startupListed).toBeNull();
+      else expect(report.startupListed.projects.find(value=>value.project_id===projectId)).toEqual({
+        project_id:projectId,pattern_id:patternId,revision,bpm:120,asset_count:0,assigned_pad_count:0,
+        bundle_digest:expect.stringMatching(/^[0-9a-f]{64}$/),
+      });
       expect(report.inspected).toEqual({performance:{id:performanceId,name:"thirty minutes",created_bpm:120,
         recording_artifact:artifact,events:[]},project_revision:revision});
       expect(report.metadata).toEqual({project_id:projectId,performance_id:performanceId,
@@ -1745,6 +1755,88 @@ opfsTest("thirty-minute recording Save and bind preserve full identity through t
   const evidencePath=testInfo.outputPath("thirty-minute-recording-save-bind-reopens.json");
   await (await import("node:fs/promises")).writeFile(evidencePath,JSON.stringify({journeys},null,2),{flag:"wx"});
   await testInfo.attach("thirty-minute-recording-save-bind-reopens",{path:evidencePath,contentType:"application/json"});
+});
+
+opfsTest("busy local Projects remain discoverable without taking foreign writer ownership", async ({context}, testInfo) => {
+  const schema=JSON.parse(await (await import("node:fs/promises")).readFile(
+    new URL("../../../../contracts/project/lmdj.project-bundle.v1.schema.json",import.meta.url),"utf8"));
+  const busyId=crypto.randomUUID(),busyPattern=crypto.randomUUID();
+  const freeId=crypto.randomUUID(),freePattern=crypto.randomUUID();
+  const busy=await context.newPage(),free=await context.newPage(),reader=await context.newPage();
+  const send=(page,operation,payload)=>page.evaluate(async ({operation,payload})=>
+    window.lmdjWebRuntimeHost.transport.send({protocol_version:1,request_id:crypto.randomUUID(),operation,payload}),
+    {operation,payload});
+  await waitForFormalHost(reader);
+  // Supported WebKit retains this run's earlier OPFS fixtures across contexts.
+  // Enumerate the physical pre-existing inventory independently of project.list.
+  const existingIds=await reader.evaluate(async ()=>{
+    const root=await navigator.storage.getDirectory();
+    const projects=await root.getDirectoryHandle("projects",{create:true});
+    const ids=[];
+    for await(const [name,entry] of projects.entries())
+      if(entry.kind==="directory"&&name.endsWith(".lmdj"))ids.push(name.slice(0,-5));
+    return ids.sort();
+  });
+  const seed=async (page,projectId,patternId,bpm)=>{
+    await waitForFormalHost(page);
+    const result=await send(page,"project.create",{project_id:projectId,bpm,
+      initial_pattern:{pattern_id:patternId,bars:1,events:[]}});
+    expect(result.ok).toBe(true);expect(result.result.project_revision).toBe(0);
+    const inspected=await send(page,"project.inspect",{});expect(inspected.ok).toBe(true);
+    return inspected.result.project.contract;
+  };
+  const busyContract=await seed(busy,busyId,busyPattern,120);
+  const freeContract=await seed(free,freeId,freePattern,126);
+  expect((await send(free,"host.close",{})).result.state).toBe("closed");
+  await free.close();expect(free.isClosed()).toBe(true);
+  const observed=await reader.evaluate(async ({projects,version})=>{
+    const response=await window.lmdjWebRuntimeHost.transport.send({protocol_version:1,
+      request_id:crypto.randomUUID(),operation:"project.list",payload:{}});
+    const root=await navigator.storage.getDirectory(),digests={};
+    const hash=async bytes=>Array.from(new Uint8Array(await crypto.subtle.digest("SHA-256",bytes)),
+      value=>value.toString(16).padStart(2,"0")).join("");
+    const canonical=value=>Array.isArray(value)?value.map(canonical):value!==null&&typeof value==="object"
+      ?Object.fromEntries(Object.keys(value).sort().map(key=>[key,canonical(value[key])])):value;
+    for(const project of projects) {
+      const directory=await (await root.getDirectoryHandle("projects")).getDirectoryHandle(project.id+".lmdj");
+      const entries=[];
+      const walk=async (folder,parent="")=>{
+        for await(const [name,entry] of folder.entries()) {
+          const path=parent+name;
+          if(entry.kind==="directory")await walk(entry,path+"/");
+          else {const file=await entry.getFile();entries.push({path,bytes:file.size,sha256:await hash(await file.arrayBuffer())});}
+        }
+      };
+      await walk(directory);entries.sort((a,b)=>a.path<b.path?-1:a.path>b.path?1:0);
+      let total=0;const indexed=entries.map(entry=>{const offset=total;total+=entry.bytes;return {...entry,offset};});
+      const index={compression:"none",contract:"lmdj.project-bundle.v1",contract_version:version,
+        entries:indexed,project_contract:project.contract,project_id:project.id,uncompressed_bytes:total};
+      digests[project.id]=await hash(new TextEncoder().encode(JSON.stringify(canonical(index))));
+    }
+    return {response,digests};
+  },{projects:[{id:busyId,contract:busyContract},{id:freeId,contract:freeContract}],version:schema["x-lmdj-contract-version"]});
+  expect(observed.response.ok).toBe(true);
+  expect(observed.response.result.projects.map(value=>value.project_id).sort()).toEqual(
+    [...existingIds,busyId,freeId].sort());
+  for(const [projectId,patternId,bpm] of [[busyId,busyPattern,120],[freeId,freePattern,126]])
+    expect(observed.response.result.projects.find(value=>value.project_id===projectId)).toEqual({
+      project_id:projectId,pattern_id:patternId,revision:0,bpm,asset_count:0,assigned_pad_count:0,
+      bundle_digest:observed.digests[projectId]});
+  const opened=await send(reader,"project.open",{project_id:freeId,pattern_id:freePattern});
+  expect(opened.ok).toBe(true);
+  const refused=await send(reader,"project.open",{project_id:busyId,pattern_id:busyPattern});
+  expect(refused.ok).toBe(false);expect(refused.error).toEqual({
+    code:"PROJECT_BUSY",details:{},message:"project is already open for writing"});
+  const kept=await send(reader,"project.inspect",{});expect(kept.ok).toBe(true);
+  expect(kept.result.project.project_id).toBe(freeId);
+  const owner=await send(busy,"project.inspect",{});expect(owner.ok).toBe(true);
+  expect(owner.result.project.project_id).toBe(busyId);
+  expect((await send(reader,"host.close",{})).result.state).toBe("closed");
+  expect((await send(busy,"host.close",{})).result.state).toBe("closed");
+  await reader.close();await busy.close();expect(reader.isClosed()).toBe(true);expect(busy.isClosed()).toBe(true);
+  const path=testInfo.outputPath("busy-project-discovery.json");
+  await (await import("node:fs/promises")).writeFile(path,JSON.stringify({existingIds,busyId,freeId,observed,opened,refused,kept,owner,closedPages:3},null,2),{flag:"wx"});
+  await testInfo.attach("busy-project-discovery",{path,contentType:"application/json"});
 });
 
 // The formal conformance Wasm has no application shell. Load the actual source

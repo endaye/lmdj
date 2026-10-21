@@ -13,6 +13,7 @@ from copy import deepcopy
 from pathlib import Path
 import re
 
+from .commands import describe_failure
 from .model import canonical_sha256
 from .orchestration_driver import Observation
 
@@ -190,9 +191,9 @@ class PreparedCarrier:
         before_write()
         try:
             self.prepare(self.spec["tag"])
-        except Exception:
+        except Exception as error:
             # prepare() owns its own durable recovery; never half-report.
-            return Observation("unknown")
+            return Observation("unknown", diagnostic=describe_failure(error))
         verified = self._read_back()
         if isinstance(verified, dict):
             return Observation("verified", verified["evidence"])
@@ -260,9 +261,9 @@ class AuthorizedPreparedCarrier:
         before_write()
         try:
             self.prepare(self.authorization["tag"])
-        except Exception:
+        except Exception as error:
             # prepare() owns its own durable recovery; never half-report.
-            return Observation("unknown")
+            return Observation("unknown", diagnostic=describe_failure(error))
         status, evidence = self._verified()
         return Observation(status, evidence)
 

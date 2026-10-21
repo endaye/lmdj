@@ -408,7 +408,9 @@ checked phase-mapping primitive: discard completed source loops before wrapping
 to target length. It does not enable OFF publication, recording, Host/SDK or
 Creator. Those follow-ups must retain actual per-publication anchors and settle
 the outstanding target-note chase/concurrency questions before affected work.
-All work remains in a linear Draft stack under the owner's main freeze.
+The remaining work stays on the Draft stack. Under the owner's partial
+unfreeze, independent verified layers may integrate to main after review;
+COUNT-IN withdrawal and the release-path exclusions remain in force.
 
 ## S6 — scheduled transport start for count-in (Core)
 

@@ -1,5 +1,52 @@
 # I2b B3: actual Web Pattern tempo preview producer
 
+## Current main integration (2026-10-21)
+
+The owner authorizes integration of the 19 open PRs under #2112. This section
+supersedes historical Draft/freeze wording below. Current main is
+`e1f6dfc3694ab04bcc1fb66599f8aa4015bc95d0`: B1/B2 are actually integrated
+through #2444/#2445 and their exact merged source trees are verified. Live
+#2235 still retains B3 and the known ordinary-Suspend correction. The complete
+current Bridge/Control/protocol/RuntimeSession source has no tempo-preview
+registration or caller. Do not repeat the existing Native gateway or B2 owner.
+
+Integrate original #2418 together with its corrective child #2419 as one
+complete Web producer Task, preserving published child head
+`27483b1f3df80d6dcd74b33c9e0efc6639c9f1e2` through a normal merge. The declared
+boundary is the original 27 B3 paths listed below plus
+`docs/plans/2026-10-20-tempo-suspend-receipt.md`: 28 unique paths. All five other
+Suspend correction paths are already in B3. No separate defective Suspend
+implementation is landed. Preserve both original plans and their negative proofs.
+
+Resolve to current main plus only that 28-path union. Product patches apply
+cleanly. Two append conflicts retain both complete sets: current capture
+telemetry/compatibility SDK tests plus original tempo tests; current busy-Project
+discovery browser journey plus every original tempo/Suspend journey. Official
+diagram generation resolves its two generated-output conflicts from the merged
+source diagram. No unrelated stack ancestors or withdrawn COUNT-IN UI return.
+The narrow existing exact-file routing addition preserves every prior path's
+classification and changes no frozen workflow, release or deployment path.
+
+Rebuild the complete original Native 25-item selection (including full Control),
+ASan/UBSan Web 17-item and TSan gateway/Facade/Web 24-item selections; retain
+both Web stresses and all original B1/B2 selections. Run the entire current
+Node SDK suite and existing Creator type consumer, dependencies, active-tree,
+Core entrypoint checks, official pinned Wasm build, full current Chromium
+AudioWorklet/failure specs and original three isolated OPFS WebKit journeys.
+Current main's additional browser test is retained, not filtered out. Inspect
+real PCM/Truth/Artifact/terminal/close/reopen JSON evidence with unchanged budgets.
+Run full Portal and staged/committed ownership before shipping. Heavy Native,
+sanitizer, Wasm/browser and Portal windows stay serial.
+
+Version impact remains Web Runtime Platform and Application Facade additive
+MINOR debt, with the same-domain Suspend PATCH deduplicated under #2237 and
+higher debt retained. Documentation impact is required for the three declared
+current Portal routes and official Web Runtime diagram. Creator I2c, fixed
+candidate/full lanes and physical/hearing acceptance remain separately pending.
+Current-head independent review, findings/conversations, live protection and
+conflict checks precede expected-head squash. No release/deployment/Channel or
+cleanup is included.
+
 ## Refreshed premises and responsibility
 
 Main refreshed to `1c4462aa8436f81da1db2a9e6420d94f0e84ccb4`.
