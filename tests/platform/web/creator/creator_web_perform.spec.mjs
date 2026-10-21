@@ -2808,6 +2808,8 @@ test("Perform groups, four slots and horizontal controls fit six viewports with 
     return status.available && !status.applied.filter.engaged && !status.applied.filter.frozen;
   },{timeout:LAUNCH_TRANSITION_TIMEOUT_MS}).toBe(true);
   await surface.getByRole("button", {name:"Live Mute / Solo",exact:true}).click();
+  await expect(page.getByTestId("physical-controls").getByRole("button",{name:"Encoder 1 — Crush",exact:true})).toBeVisible();
+  await expect(page.getByTestId("overview-display").locator('.encoder-readbacks dt').first()).toHaveText('ENC1 Crush');
   await surface.getByRole("button", {name:"Solo A01",exact:true}).click();
   await expect(surface.locator('.perform-pad-gate-summary')).toHaveAttribute('data-provenance','core', {timeout:LAUNCH_TRANSITION_TIMEOUT_MS});
   await expect(surface.locator('.perform-pad-gate-summary dd').nth(1)).toHaveText('A01');
@@ -2815,6 +2817,8 @@ test("Perform groups, four slots and horizontal controls fit six viewports with 
   expect(masks.applied.soloSlots).toEqual([0]);
   await surface.getByRole("button", {name:"Back to Filter",exact:true}).click();
   await expect(surface.getByRole("button", {name:"FILTER",exact:true})).toHaveAttribute('aria-pressed','true');
+  await expect(page.getByTestId("physical-controls").getByRole("button",{name:"Encoder 1 — Type",exact:true})).toBeVisible();
+  await expect(page.getByTestId("overview-display").locator('.encoder-readbacks dt').first()).toHaveText('ENC1 Type');
   expect(await inspectProjectTruth(page)).toEqual(truth);
   // System retains the mounted Perform composition; returning without a
   // resize must preserve every region and the one current parameter group.

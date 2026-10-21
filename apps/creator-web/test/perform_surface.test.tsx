@@ -4425,6 +4425,27 @@ test("exclusive groups share one MASTER and HOLD without producer calls", async 
   expect(onChange).not.toHaveBeenCalled();
 });
 
+test.each([
+  ["PRIMARY", ["Filter", "Delay", "Reverb"]],
+  ["FILTER", ["Type", "Cutoff", "Resonance"]],
+  ["MORE", ["Crush", "Stutter", "Gate"]],
+] as const)("Live Mute/Solo preserves %s encoder bindings until explicit Back to Filter", (group, labels) => {
+  const fixture = controllerFixture();
+  let current: ContextualEncoders | null = null;
+  render(<PerformSurface controller={fixture.controller} project={project} bank={0}
+    currentPad={0} onEncodersReady={value => { current = value; }} />);
+  fireEvent.click(screen.getByRole("button", {name: group}));
+  fireEvent.click(screen.getByRole("button", {name: "Live Mute / Solo"}));
+  expect(screen.getByRole("region", {name: "Current Pad live controls"})).toBeTruthy();
+  expect(Object.values(current!.bindings).map(binding => binding.label)).toEqual(labels);
+  fireEvent.click(screen.getByRole("button", {name: "Back to Filter"}));
+  expect(screen.getByRole("button", {name: "FILTER"}).getAttribute("aria-pressed")).toBe("true");
+  expect(Object.values(current!.bindings).map(binding => binding.label))
+    .toEqual(["Type", "Cutoff", "Resonance"]);
+  expect(fixture.runtime.calls.fx).not.toHaveBeenCalled();
+  expect(fixture.runtime.calls.liveControl).not.toHaveBeenCalled();
+});
+
 test("switching groups closes removed Primary touch while retaining rotary ownership", async () => {
   const {fixture} = renderSurface();
   act(() => fixture.controller.turnFx("reverb", 2));

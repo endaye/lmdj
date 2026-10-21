@@ -620,7 +620,7 @@ SEQ SNAP 决定切 Pattern 的时机，Grid tools 的 Snap 决定网格编辑吸
 | 演出录制正在启动、停止、保存、丢弃或处于失败阶段 | Pattern Launch | 暂不可用；等该操作完成或恢复。稳定的 idle／stopped 才可按全局 transport 选择／预约，recording／flushing 走演出 Launch。 |
 | 可用时 | Filter／Delay／Reverb 推子 | 按下、移动、松开即实时效果；Delay／Reverb 显示百分比，Filter 是独立滤波的 Cutoff，按 Core 读回显示 Hz（OFF／LP／20 kHz／0% 起；producer 不可用时不从百分比反推 Hz，FILTER 面板如实显示 unavailable）。演出录制中同时记录；触摸与旋钮调同一参数时共用拥有的手势。 |
 | 可用时 | PRIMARY／FILTER／MORE、←／→ | 互斥显示主三推子、独立 Filter、其他五个 FX；旋钮同步到 Cutoff／Delay／Reverb、Type／Cutoff／Resonance、Crush／Stutter／Gate。箭头到首尾停止；SHIFT 保留 Undo/Redo，System 不提供组导航。未持有触摸输入时切组不调用 producer，不改变旋钮效果或 HOLD；释放被移除触摸输入的 token。再次点击 MORE／FILTER 返回 PRIMARY，保留原收起释放行为。Filter 只读显示 Off／Engaged／Frozen／Pending／Unavailable，无旁路开关。 |
-| Live | Live Mute / Solo、Back to Filter | 查看当前 Pad 的 Mute/Solo 和全 64 槽实际 muted/solo 地址摘要；Mute 优先，多 Solo 可并存。Pending/Unavailable 不显示猜测的空列表。返回独立 Filter，不重置 masks、HOLD 或录制。 |
+| Live | Live Mute / Solo、Back to Filter | 打开面板保留当前旋钮组，查看当前 Pad 的 Mute/Solo 和全 64 槽实际 muted/solo 地址摘要；Mute 优先，多 Solo 可并存。Pending/Unavailable 不显示猜测的空列表。明确点击 Back to Filter 才返回独立 Filter，不重置 masks、HOLD 或录制。 |
 | 可用时 | HOLD | 开关 FX 保持：松开推子后效果按规则保留。与 Sample 的循环 Hold 不同。 |
 | 监听音量已恢复且可用时 | MASTER | 0–100% 的本设备监听音量，与 ENC4 共用，下次打开恢复。不写工程，不改变录音、重采样或导出电平，也不随演出录制／回放变化。 |
 | 可录制，其他录音空闲 | Record Performance | 开始记录演出操作和主输出 WAV；Launch 变为可用。准备失败时显示原因。 |

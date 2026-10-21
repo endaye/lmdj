@@ -482,3 +482,55 @@ The source tests and Portal results above still bind identical product/docs
 bytes; this merge adds only this plan record. A fresh official package and
 full browser verification bind the final merge head before push. Current-head
 independent review remains required. No merge to main has occurred here.
+
+### Current-head review integration — 2026-10-21
+
+Refreshed main is `d1096649d3b5953f1fd00881e78d42e3b4360933`, including
+Native/SDK tempo preview delivery. PR head
+`26920ff9a4c8e70b6d7db65b7a2e560b99a85236` is retained as an ancestor.
+Its clean composition with main is local verification checkpoint
+`426e4c058ebe553612567ce04d2cde009a10630c`, tree
+`3dd3580789d6f185750b86261381c2046e12a98a`; the full Creator component suite
+passes there (81 files / 1826 tests, exit 0). This is a composition baseline,
+not verification of the review correction below.
+
+The authenticated DeepSeek review of head `26920ff9` has four findings:
+
+- Persistent Filter status is intentional: all visible parameter groups consume
+  the same live Core provenance/state. PRIMARY uses the independent cutoff when
+  available, with the existing pinned legacy-gesture exception. Updated owning
+  tests retain actual status assertions; no group-local absence contract remains.
+- The mode-fit observer compares both element identity and current narrow
+  composition. A changed composition calls `fitStage`, which records both;
+  coalescing mutations cannot make unequal final composition pass that equality
+  check. Preserve this predicate and the complete mode-entry/exit proof.
+- **Fix:** entering Live Mute/Solo currently forces FILTER while hiding its group
+  selector. Preserve the selected encoder group on entry; only the explicit
+  Back to Filter action changes it to FILTER. Add a regression for entry from
+  PRIMARY, FILTER and MORE, with binding readback after opening and explicit
+  return. This is presentation/navigation state, with no producer or Truth change.
+- The geometry assertion reads actual DOM hit boxes, not painted tracks/dots.
+  The Task's scoped CSS gives every tested ordinary input at least 44 CSS px;
+  preserve that assertion, horizontal rails and the separate painted-face rules.
+
+The original exact 17-file declaration remains the final Task scope. This
+review correction touches only `perform_surface.tsx`, its existing test,
+`creator_web_perform.spec.mjs`, the two existing Host Portal pages and this
+plan. The existing real-browser mask journey also checks the physical and
+overview bindings after opening from MORE and after explicit Back to Filter.
+No COUNT-IN restoration, new
+product policy, SDK/Native change, identity allocation, release or cleanup.
+Creator MINOR debt remains in #2237; Documentation impact: required on the
+original current routes, with no diagram-edge change. The product regression
+expresses the defect; no new process-ledger entry is warranted.
+
+Verify the regression against the unchanged faulty entry first, then run the
+complete restored/fixed owning component selection, TypeScript, dependencies,
+ownership and full Portal. A new clean checkpoint must pass official pinned
+Creator configure/build/package and the same complete five-spec Chromium
+selection (Perform, touch-fit, meter, hardware/short-landscape, recovery/takeover),
+plus both canonical WebKit capability-refusal boundaries. Preserve all original
+failure/PCM/save/reopen/Replay legs, assertions and budgets, retain geometry/PNG
+evidence and inspect it. The prior startup timeout remains unexplained; another
+passing run does not resolve it. Current corrected-head independent review and
+live conversation/protection checks remain required before protected squash.

@@ -361,7 +361,7 @@ export function PerformSurface(props: PerformSurfaceProps) {
         </div>
       </dl></details> : null}
       {page === "live" && !padGatesOpen ? <button type="button" className="perform-pad-gates-entry"
-        onClick={() => { setEncoderGroup("filter"); setPadGatesOpen(true); }}>
+        onClick={() => { setPadGatesOpen(true); }}>
         Live Mute / Solo
       </button> : null}
       {page === "live" && padGatesOpen && currentPad !== undefined && currentGate !== null ? (

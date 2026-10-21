@@ -852,7 +852,7 @@ Launch 状态复位，监听音量仍保留当前值。监听响度包含节拍�
 
 PRIMARY、FILTER、MORE 互斥显示对应触摸参数；←／→ 按此顺序切换，到首尾停止，SHIFT 和 System 保留原优先级。组切换不主动创建声音控制，只有被移除输入尚未结束的 touch token 需要配对释放；旋钮接管、HOLD、实时 masks 与录制 session 不重置。Filter 状态为只读的 Off／Engaged／Frozen／Pending／Unavailable，没有旁路开关；Core provenance 保留在状态投影中。
 
-Live Mute / Solo 打开当前 Pad 面板，Mute 与 Solo 沿用同一 Core 状态和既有禁用条件；Muted Pads、Soloed Pads 列出 A01–D16 的真实地址，pending/unavailable 时不把旧列表冒充当前空 masks。Back to Filter 返回独立滤波组。多个 Solo 可以并存，Mute 始终优先。切页、停止、保存、重开和回放沿用既有行为。普通触摸 controls 的实际输入区域至少为 44 CSS px；标题、真实 meter、transport、保留 footer 与旋钮读数使用同一上屏。
+Live Mute / Solo 打开当前 Pad 面板并保留当前旋钮组，Mute 与 Solo 沿用同一 Core 状态和既有禁用条件；Muted Pads、Soloed Pads 列出 A01–D16 的真实地址，pending/unavailable 时不把旧列表冒充当前空 masks。只有明确点击 Back to Filter 才返回独立滤波组。多个 Solo 可以并存，Mute 始终优先。切页、停止、保存、重开和回放沿用既有行为。普通触摸 controls 的实际输入区域至少为 44 CSS px；标题、真实 meter、transport、保留 footer 与旋钮读数使用同一上屏。
 
 ### Measured stereo output level
 
