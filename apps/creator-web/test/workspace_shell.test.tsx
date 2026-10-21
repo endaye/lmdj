@@ -300,6 +300,12 @@ test("keeps Sample editing in touch and one Bank row and Pad matrix on the rail"
   expect(screen.getByRole("button", {name: "Record Sample"})).toBeTruthy();
   expect(within(screen.getByRole("region", {name: "Pad A01 management"}))
     .getByRole("button", {name: "Reset Pad to Defaults"})).toBeTruthy();
+  const management = screen.getByRole("region", {name: "Pad A01 management"});
+  expect(within(management).getAllByRole("button").map(button =>
+    button.getAttribute("aria-label") ?? button.textContent?.trim())).toEqual([
+    "Replace Sample", "Record Sample", "Slice", "Reset Pad to Defaults", "Delete Pad A01",
+  ]);
+  expect(management.lastElementChild).toBe(details);
   expect(screen.getByText("Tap a Pad to preview")).toBeTruthy();
   const visiblePads = screen.getAllByRole("button", {
     name: /^Pad A(?:0[1-9]|1[0-6]) — (?:assigned|empty) — Key [ZXCVASDFQWER1234]$/,
@@ -501,6 +507,15 @@ test("Record on an empty Pad opens the capture panel with no replacement prompt"
   await userEvent.click(screen.getByRole("button", {name: "Sample"}));
   await userEvent.click(screen.getByRole("button", {name: "Pad A02 — empty — Key X"}));
   await userEvent.click(await screen.findByRole("button", {name: "Add Sample to Pad A02"}));
+
+  const empty = screen.getByRole("region", {name: "Selected Pad Sample"});
+  expect(within(empty).getByText("Make room for a new sound.")).toBeTruthy();
+  expect(within(empty).getByText("Hold Pad A02 to record. Or choose an audio file below.")).toBeTruthy();
+  await userEvent.click(within(empty).getByRole("button", {name: "Record Sample"}));
+  expect(screen.queryByRole("dialog", {name: "Replace Pad A02?"})).toBeNull();
+  expect(screen.getByRole("dialog", {name: "Pad A02 Pad Capture"})).toBeTruthy();
+  await userEvent.click(screen.getByRole("button", {name: "Close"}));
+  expect(screen.queryByRole("dialog", {name: "Pad A02 Pad Capture"})).toBeNull();
 
   selectSamplePage("Pad");
   await userEvent.click(screen.getByRole("button", {name: "Record Sample"}));
@@ -1369,6 +1384,7 @@ async function candidatePlaybackFixture(runningAudio = false,
   render(<App initialState={ready} runtimeFactory={factory} />);
   await waitFor(() => expect(fixture.calls).toContain("reloadSnapshot"));
   await userEvent.click(screen.getByRole("button", {name: "Sample"}));
+  selectSamplePage("Pad");
   await userEvent.click(screen.getByRole("button", {name: "Slice"}));
   await screen.findByRole("option", {name: /Source 1/});
   await userEvent.selectOptions(screen.getByRole("combobox", {name: "Slice source"}), sourceId);
@@ -1414,6 +1430,7 @@ test("Slice returns from its footer to Sample and stops preview without adopting
   await userEvent.click(back);
   expect(screen.getByRole("button", {name: "Sample"}).getAttribute("aria-current")).toBe("page");
   expect(screen.queryByRole("region", {name: "Slice"})).toBeNull();
+  selectSamplePage("Pad");
   expect(screen.getByRole("button", {name: "Slice"})).toBeTruthy();
   await waitFor(() => expect(stop.mock.calls.length).toBeGreaterThan(stopsBefore));
   expect(fixture.inspectProject()).toEqual(before);
@@ -1447,6 +1464,7 @@ test("Slice fallback returns to Sample after its Project refresh fails without a
   expect(screen.getByRole("button", {name: "Sample"}).getAttribute("aria-current")).toBe("page");
   expect(document.querySelector(".sample-surface")).not.toBeNull();
   expect(screen.queryByText("Open a Project with candidate or Sound Set support.")).toBeNull();
+  selectSamplePage("Pad");
   expect(screen.getByRole("button", {name: "Slice"})).toHaveProperty("disabled", true);
   expect(screen.queryByRole("button", {name: "Back to Sample"})).toBeNull();
   expect(inspect).toHaveBeenCalledTimes(1);
@@ -1493,6 +1511,7 @@ test("Slice fallback returns to Sample after Runtime replacement loses Candidate
   expect(screen.getByRole("button", {name: "Sample"}).getAttribute("aria-current")).toBe("page");
   expect(document.querySelector(".sample-surface")).not.toBeNull();
   expect(screen.queryByText("Open a Project with candidate or Sound Set support.")).toBeNull();
+  selectSamplePage("Pad");
   expect(screen.getByRole("button", {name: "Slice"})).toHaveProperty("disabled", true);
   expect(screen.queryByRole("button", {name: "Back to Sample"})).toBeNull();
   expect(replacement.calls).toEqual(replacementCalls);
@@ -3155,6 +3174,7 @@ test("hardware Slice and Sound Sets stay in the touch workspace without extra ph
   expect(within(physical).queryByRole("button", {name: /^Sound Sets/})).toBeNull();
   expect(within(touch).queryByRole("button", {name: /Slice/})).toBeNull();
   await userEvent.click(screen.getByRole("button", {name: "Sample"}));
+  selectSamplePage("Pad");
   expect(within(touch).getByRole("button", {name: /Slice/})).toBeTruthy();
   await userEvent.click(screen.getByRole("button", {name: "Project"}));
   expect(within(touch).getByRole("button", {name: /Sound Sets/})).toBeTruthy();
@@ -5464,7 +5484,7 @@ test("recovery precedes page content and its direct Sequence exit leaves System"
   render(<App initialState={ready} runtimeFactory={() => session} />);
   const region = await interruptedRegion();
   await userEvent.click(screen.getByRole("button", {name: "Sample"}));
-  const navigation = screen.getByRole("navigation", {name: "Workspace navigation"});
+  const navigation = screen.getByRole("navigation", {name: "Sample pages"});
   expect(region.compareDocumentPosition(navigation) & Node.DOCUMENT_POSITION_FOLLOWING)
     .toBe(Node.DOCUMENT_POSITION_FOLLOWING);
   await userEvent.click(screen.getByRole("button", {name: "System"}));

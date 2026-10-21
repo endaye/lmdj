@@ -1,3 +1,4 @@
+import type {ReactNode} from "react";
 import type {PadColour, ProjectPadView} from "../runtime/runtime_types";
 import {
   PAD_PALETTE,
@@ -14,6 +15,7 @@ interface PadColourControlsProps {
   error: string | null;
   // A palette index sets the override; null restores the category default.
   onChoose(colour: PadColour | null): void;
+  children?: ReactNode;
 }
 
 // Five-colour choice and "Restore category default" for the selected Pad
@@ -25,6 +27,7 @@ export function PadColourControls({
   disabledReason,
   error,
   onChoose,
+  children,
 }: PadColourControlsProps) {
   const reason = pad === null
     ? "Select a Pad to choose its colour."
@@ -52,7 +55,7 @@ export function PadColourControls({
           <button
             type="button"
             key={entry.index}
-            className="pad-colour-swatch"
+            className="touch-control pad-colour-swatch"
             data-pad-colour={padColourAttribute(entry.index)}
             aria-label={`${entry.label} colour`}
             aria-pressed={pad?.colour === entry.index}
@@ -62,10 +65,11 @@ export function PadColourControls({
               onChoose(entry.index);
             }}
           >
-            {entry.label}
+            <span className="visually-hidden">{entry.label}</span>
           </button>
         ))}
       </div>
+      {children}
       <button
         type="button"
         className="touch-control pad-colour-restore"

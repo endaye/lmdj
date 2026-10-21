@@ -1,0 +1,127 @@
+.sample-pad-management,
+.empty-sample {
+  display: grid;
+  gap: var(--creator-group-gap);
+  min-width: 0;
+}
+
+.sample-pad-management .pad-colour-controls {
+  margin-top: 0;
+}
+
+.sample-pad-file-actions,
+.sample-pad-edit-actions {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--creator-group-gap);
+  min-width: 0;
+}
+
+.sample-pad-management .sample-controls {
+  margin: 0;
+  min-width: 0;
+}
+
+/* Reset's original single-column editor placement must not steal column one
+   from Slice in this two-action row. Its handler and native order stay put. */
+.hardware-workspace .sample-pad-management .sample-pad-edit-actions .reset-sample {
+  grid-column: auto;
+  justify-self: stretch;
+}
+
+.sample-pad-management button,
+.empty-sample button {
+  width: 100%;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+/* Only the painted face is rounded. The full reserved target owns its edges. */
+.hardware-workspace .hardware-console > [aria-label="Touch workspace"] .sample-surface :is(.sample-pad-management, .empty-sample) :is(button, summary) {
+  border-radius: 0;
+}
+
+/* A short panel cannot reserve a sticky 44px tab row and a complete 44px
+   action. Keep both in the one native scroller instead of covering targets. */
+@media (orientation: landscape) and (min-width: 648px) and (min-height: 364px) and (max-height: 599px) {
+  .hardware-workspace .sample-surface .sample-page-nav { position: static; }
+}
+
+.sample-pad-management .pad-colour-swatches {
+  grid-template-columns: repeat(auto-fit, minmax(var(--creator-control-hit), 1fr));
+}
+
+.hardware-workspace .hardware-console > [aria-label="Touch workspace"] .sample-surface .sample-pad-management .pad-colour-swatch {
+  --control-fill: var(--pad-colour);
+  --control-text: var(--creator-ink);
+  color: var(--control-text);
+  background: transparent;
+  border: 0;
+}
+
+.hardware-workspace .hardware-console > [aria-label="Touch workspace"] .sample-surface .sample-pad-management .pad-colour-swatch[aria-pressed="true"] {
+  --control-line: var(--creator-text);
+}
+
+.hardware-workspace .hardware-console > [aria-label="Touch workspace"] .sample-surface .sample-pad-management .pad-colour-swatch[aria-pressed="true"]::before {
+  border-width: 2px;
+}
+
+.sample-pad-management .selected-pad-actions {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: var(--creator-group-gap);
+}
+
+.sample-pad-management .sample-details {
+  width: 100%;
+}
+
+.sample-pad-management .sample-details summary {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  list-style: none;
+}
+
+.sample-pad-management .sample-details summary::-webkit-details-marker {
+  display: none;
+}
+
+.sample-pad-management .sample-details summary::after {
+  content: "+";
+  margin-left: var(--creator-group-gap);
+}
+
+.sample-pad-management .sample-details[open] summary::after {
+  content: "−";
+}
+
+.empty-sample-card {
+  display: grid;
+  gap: 6px;
+  padding: 12px;
+  border-radius: 7px;
+  background: var(--creator-base);
+}
+
+.empty-sample-card h2,
+.empty-sample-card p,
+.empty-sample-permission {
+  margin: 0;
+}
+
+.empty-sample-card h2 {
+  font: 500 var(--creator-value-size)/25px var(--creator-font-heading);
+}
+
+.empty-sample-card p {
+  color: var(--creator-muted);
+  font: 500 12px/17px var(--creator-font-heading);
+}
+
+.empty-sample-permission {
+  color: var(--creator-muted);
+  font: 400 10px/14px var(--creator-font-mono);
+  overflow-wrap: anywhere;
+}
