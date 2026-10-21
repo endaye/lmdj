@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="zh-Hans"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Web Runtime Platform Module</title><style>html,body{margin:0}body{background:#f7fafb}@media(prefers-color-scheme:dark){body{background:#071011}}body[data-theme=light]{background:#f7fafb}body[data-theme=dark]{background:#071011}main{min-width:760px}svg{display:block;width:100%;height:auto}</style></head><body><main><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1560 820" role="img" aria-labelledby="title description" data-source-sha256="1d9f1c66985fbe729ad87b4cf422dee9875c1ce9f4af8c0ebfb0ead408f32ce5">
+<html lang="zh-Hans"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Web Runtime Platform Module</title><style>html,body{margin:0}body{background:#f7fafb}@media(prefers-color-scheme:dark){body{background:#071011}}body[data-theme=light]{background:#f7fafb}body[data-theme=dark]{background:#071011}main{min-width:760px}svg{display:block;width:100%;height:auto}</style></head><body><main><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1560 820" role="img" aria-labelledby="title description" data-source-sha256="8a32e195b10de708fa1c300bc17360e22eb0dc1272f1723647e80ffc0f5baf6d">
   <title id="title">Web Runtime Platform Module</title><desc id="description">同一 frozen Session、strict companion、两张 S3 切换 lease；S6 原验收债与设备验收独立</desc>
   <defs><marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z"/></marker></defs>
   <style>
@@ -26,6 +26,8 @@
 <g class="connection"><path class="edge-mask" d="M 910 538 H 960 V 426 H 1010"/><path class="edge" d="M 910 538 H 960 V 426 H 1010" marker-end="url(#arrow)"/><text x="960" y="473">product monitor</text></g>
 <g class="connection"><path class="edge-mask" d="M 1260 426 H 1285 V 426 H 1310"/><path class="edge" d="M 1260 426 H 1285 V 426 H 1310" marker-end="url(#arrow)"/><text x="1285" y="417">same monitor gain</text></g>
 <g class="connection"><path class="edge-mask" d="M 940 216 H 975 V 538 H 1010"/><path class="edge" d="M 940 216 H 975 V 538 H 1010" marker-end="url(#arrow)"/><text x="975" y="368">capture status</text></g>
+<g class="connection"><path class="edge-mask" d="M 910 538 H 944 V 592 H 616 V 216 H 650"/><path class="edge" d="M 910 538 H 944 V 592 H 616 V 216 H 650" marker-end="url(#arrow)"/><text x="780" y="368">stereo peaks ↔ owner/ACK</text></g>
+<g class="connection"><path class="edge-mask" d="M 940 216 H 974 V 592 H 616 V 538 H 650"/><path class="edge" d="M 940 216 H 974 V 592 H 616 V 538 H 650" marker-end="url(#arrow)"/></g>
 
     <g class="component kind-host">
       <rect class="node-mask" x="36" y="141" width="218" height="100" rx="18"/>
@@ -73,7 +75,7 @@
       <rect class="node-mask" x="646" y="486" width="268" height="104" rx="18"/>
       <rect class="node" x="650" y="490" width="260" height="96" rx="14"/>
       <text class="node-title" x="666" y="522">Master Tap Worklet</text>
-      <text class="node-detail" x="666" y="548">product only · real PCM tap</text>
+      <text class="node-detail" x="666" y="548">PCM + L/R peaks · no cue</text>
     </g>
     <g class="component kind-core">
       <rect class="node-mask" x="1006" y="486" width="258" height="104" rx="18"/>

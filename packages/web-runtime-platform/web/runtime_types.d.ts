@@ -548,6 +548,35 @@ export interface MonitorOutputSession {
   setMonitorVolume(value: number): void;
 }
 
+/** Measured float PCM sample peaks, post-FX/pre-monitor and excluding click. */
+export type StereoOutputMeter = Readonly<{
+  state: "available";
+  /** Opaque Session/activation owner; not a capture generation or Project ID. */
+  owner: string;
+  sampleRate: number;
+  /** Canonical decimal AudioContext frames; end is exclusive. */
+  windowStartFrame: string;
+  windowEndFrame: string;
+  leftPeak: number;
+  rightPeak: number;
+  /** Real peak timestamps for a consumer hold; latest equal peak wins. */
+  leftPeakFrame: string;
+  rightPeakFrame: string;
+  renderQuantumFrames: number;
+  /** The same live AudioContext clock sampled when this getter was called. */
+  contextTimeSeconds: number;
+}> | Readonly<{
+  state: "unavailable";
+  reason: "unconfigured" | "not-running" | "pending" | "stale" |
+    "tap-unavailable" | "processor-failed" | "protocol-error" |
+    "clock-invalid" | "closed";
+}>;
+
+export interface StereoOutputMeterSession {
+  /** Pure synchronous read; missing measurement never substitutes numeric zero. */
+  outputMeter(): StereoOutputMeter;
+}
+
 /**
  * One synchronous sample of the session audio clock.
  *
