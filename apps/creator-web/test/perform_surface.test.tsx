@@ -1355,6 +1355,38 @@ test("managed WAV bind waits for older header reads without blocking unrelated m
   expect(fixture.controller.getState().bindingStatus).toBe("bound");
 });
 
+test("an acknowledged recovery discard preserves the pending WAV bind retry", async () => {
+  const f = controllerFixture();
+  await f.controller.refreshRecovery();await f.controller.record();await f.controller.stop();
+  f.store.bind.mockRejectedValueOnce(Object.assign(new Error("bind busy"), {code: "PROJECT_BUSY"}));
+  await f.controller.save("Retained WAV");
+  const stopped = f.controller.getState().recording;
+  const bindError = f.controller.getState().error;
+  expect(stopped.wav).not.toBeNull();
+  expect(bindError).toContain("Choose Retry WAV bind");
+  const discard = vi.mocked(f.runtime.session.discardPerformanceRecovery);
+  discard.mockImplementationOnce(async ({requestId, sessionId}) => ({requestId, sessionId,
+    performanceId: ids.pattern1, state: "stopped", pendingEventCount: 0,
+    replayed: false, projectRevision: null}));
+  const list = vi.mocked(f.runtime.session.listPerformances);list.mockClear();
+  await f.controller.discardRecovery(ids.pattern2);
+  expect(discard).toHaveBeenCalledOnce();
+  expect(discard).toHaveBeenCalledWith({sessionId: ids.pattern2, requestId: expect.any(String)});
+  expect(f.controller.getState().recoveryStatus).toBe("discarded");
+  expect(f.controller.getState().error,
+    "a refused saved-list observation must not replace the acknowledged discard or WAV retry").toBe(bindError);
+  expect(f.controller.getState().performancesStatus).toBe("unavailable");
+  expect(list).not.toHaveBeenCalled();
+  expect(f.controller.getState().recording).toEqual(stopped);
+  expect(f.cleanupTemporary).not.toHaveBeenCalled();
+  await f.controller.retryWavBind();
+  expect(f.store.bind).toHaveBeenCalledTimes(2);
+  expect(f.controller.getState().bindingStatus).toBe("bound");
+  expect(f.controller.getState().recording.phase).toBe("idle");
+  expect(list).toHaveBeenCalled();
+  expect(discard).toHaveBeenCalledOnce();
+});
+
 test("a failed WAV bind keeps later list observers away from its retained managed bytes", async () => {
   const fixture = controllerFixture();
   const disconnect = fixture.controller.connect();

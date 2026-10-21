@@ -258,6 +258,8 @@ recording status 确认 stopped、待提交事件为零且与当前 Project owne
 实际名称与录音引用，没有 WAV 时明确说明，不把丢失的 capture 当成已恢复音频。
 这些动作沿用现有 mutation／finalization 边界，过期或未知结果退回显式刷新。
 该 status 读取同样可能触发恢复，只在有候选时、在原 header／WAV 保护边界内执行。
+Discard recovery 已确认后，列表读取失败由 Saved Takes unavailable 和显式重查承接，
+不覆盖已确认的 discarded 状态或原有 Retry WAV bind 提示；原 WAV 归属和读取保护不变。
 
 当前录音的 Performance saved 只来自实际 Save 回执；匹配检查显示 Performance
 inspected，不把已存在的同名草稿当成 Save 确认。这些观察与 WAV bind 分开，名称

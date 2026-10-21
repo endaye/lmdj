@@ -42,6 +42,29 @@ Commit/push/current-head review/squash are authorized; release, deployment,
 Channel transitions and cleanup remain outside this work.
 
 
+## Current-head review repair (2026-10-21)
+
+Successor #2460 carries the same tested source after GitHub refused retargeting
+original #2413 while it belongs to a stack; the original branch remains intact.
+GLM review5601161537 on8ceedc8f identifies an added post-discard list refresh
+that can overwrite a retained WAV-bind retry error after recovery discard has
+already succeeded. Actual main remains44622c637e1eb46895c67881a910f2d03b65ae6a.
+The Core discard receipt and the optional saved-list observation are separate;
+the existing recovery status can retain the acknowledgement while the list's
+own unavailable state offers explicit refresh. Keep the read/install/bind
+barrier unchanged and retain the pending WAV and its original retry.
+
+Before changing product source, add a controller regression that obtains a
+mocked Facade discard acknowledgement through the actual controller during a retained failed bind, proves
+its existing error is not replaced, and completes the original WAV retry.
+Retain the semantic RED, then verify the correction with focused/full Creator,
+types, dependencies, ownership and full Portal; rebuild/package the clean new
+head and retain the full original35 Chromium journeys plus both canonical
+WebKit refusal boundaries. Only the existing state/test/Host-page/plan paths
+change; the original eleven-file Task boundary remains. The published commit
+will not be amended or force-pushed; the final squash retains one Task.
+
+
 ## Premises before product edits
 
 Integration main is `1c4462aa8436f81da1db2a9e6420d94f0e84ccb4`, freshly

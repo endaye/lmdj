@@ -2346,7 +2346,9 @@ export function createPerformController(options: PerformControllerOptions): Perf
       try {
         await session.discardPerformanceRecovery({sessionId, requestId: createId()});
         await loadRecovery("discarded");
-        await controller.refreshPerformances();
+        // Discard is acknowledged. The list owns its unavailable/retry state;
+        // an observation failure must not replace the pending WAV-bind action.
+        await controller.refreshPerformances().catch(report);
       } catch (error) { fail(error); }
     },
     beginReplay(performanceId) {
