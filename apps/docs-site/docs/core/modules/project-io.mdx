@@ -401,3 +401,16 @@ history action.
 撤销历史的 Pad 与 Asset 编码按同一规则携带 `colour` 与 `category`，因此 Undo/Redo 精确恢复整个 Pad。Domain 的历史 delta 准入拒绝把覆盖色恢复到空 Pad 或调色板之外的结果。事务里的 Asset 编码也携带 `category`，所以 Sound Set 安装重放后仍保留每个 slot 角色对应的类别。Facade 把 `map_soundset` 提议中的类别传给 `SoundSetInstallSlotRequest`。
 
 `ProjectStore::execute(SetPadColour)` 持久化内部 `SetPadColour` 事务（`colour` 为索引，或为 `null` 表示恢复类别缺省）。它按 `expected_revision` 与 `command_id` 重放，每次修改是一个 `Set Pad colour` 历史动作。`replace` 重装 Sound Set 时保留 Pad 的覆盖色，并为新 Asset 写入新的类别；删除 Pad 会清除覆盖色，撤销删除会恢复它。`project_io.project_store`、`project_io.authoring_history` 与 `project_io.soundset_install_commit` 覆盖以下情形：各种组合的往返、旧 checkpoint 拒绝、非法值、旧 Project 打开、保存后重开、设置/恢复/删除的 Undo/Redo，以及在覆盖色上重装 Sound Set。
+
+
+## Committed Project 的只读校验
+
+`ProjectStore::inspect_committed(bundle)` 在 owner lease 下读取 committed Truth，
+不执行 interrupted-write recovery 或 unpublished-file scavenging；原有 selector
+查询继续延后完整 Asset 字节校验。需要完整 Snapshot 准备的调用方使用
+`inspect_committed(bundle, true)`：复用 `load` 的全部 Asset 摘要／长度验证，
+包括未分配到 Pad 的 Asset，同时仍不恢复或清理文件。
+
+lease 必须在实际调用 realm 取得并释放。独立读取者使用私有 Store/history，不能
+把 live Application 的 history mutex 或控制线程取得的 writer token 借给 worker。
+只读返回值不构成 Journal／发布完成；最终使用前仍需校验原 Project/revision。

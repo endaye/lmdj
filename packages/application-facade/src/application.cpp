@@ -10265,10 +10265,20 @@ struct Application::Impl {
       const domain::ProjectState& project,
       const foundation::PatternId& pattern_id,
       std::optional<audio::RuntimePreparationLimits> limits = std::nullopt) {
+    return cook_project_from_store(projects, path, project, pattern_id, limits);
+  }
+
+  static foundation::Result<std::shared_ptr<const cooker::RuntimeSnapshot>>
+  cook_project_from_store(
+      project_io::ProjectStore& projects,
+      const std::filesystem::path& path,
+      const domain::ProjectState& project,
+      const foundation::PatternId& pattern_id,
+      std::optional<audio::RuntimePreparationLimits> limits) {
     auto cooked = cooker::cook(
         project,
         pattern_id,
-        [this, path, limits](const foundation::ArtifactRef& artifact) {
+        [&projects, path, limits](const foundation::ArtifactRef& artifact) {
           if (limits.has_value() &&
               !limits->allows_artifact_bytes(artifact.byte_length)) {
             return foundation::Result<std::vector<std::byte>>::failure(
@@ -12064,6 +12074,42 @@ Application::prepare_runtime_snapshot(
             "unexpected Application Facade Host API failure",
         });
   }
+}
+
+RuntimeSnapshotPreparer Application::make_runtime_snapshot_preparer() const {
+  // Capture only the platform, never Application, its mutable authoring
+  // history, session registries or a writer lease acquired on Control.
+  return [platform = impl_->storage_platform](const RuntimeSnapshotRequest& requested)
+      -> foundation::Result<std::shared_ptr<const cooker::RuntimeSnapshot>> {
+    using Result = foundation::Result<std::shared_ptr<const cooker::RuntimeSnapshot>>;
+    try {
+      const auto request = requested;
+      if (!valid_host_project_path(request.project_path) ||
+          !domain::is_valid_uuid(request.pattern_id.value())) {
+        return Result::failure({ErrorCode::invalid_argument,
+                                "runtime snapshot request is invalid"});
+      }
+      project_io::ProjectStore projects{platform};
+      auto loaded = projects.inspect_committed(request.project_path, true);
+      if (!loaded.has_value()) return Result::failure(loaded.error());
+      auto cooked = Impl::cook_project_from_store(projects, request.project_path,
+          loaded.value(), request.pattern_id, request.limits);
+      if (!cooked.has_value()) return cooked;
+      const auto current = projects.inspect_committed(request.project_path);
+      if (!current.has_value()) return Result::failure(current.error());
+      if (current.value().id != loaded.value().id ||
+          current.value().revision != loaded.value().revision) {
+        return Result::failure({ErrorCode::revision_conflict,
+            "Project changed during runtime preparation",
+            {{"expected_revision", loaded.value().revision},
+             {"actual_revision", current.value().revision}}});
+      }
+      return cooked;
+    } catch (...) {
+      return Result::failure({ErrorCode::internal_error,
+                             "unexpected Application Facade Host API failure"});
+    }
+  };
 }
 
 namespace {

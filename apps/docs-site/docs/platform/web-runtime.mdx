@@ -365,3 +365,24 @@ writer 自身的编码格式及 queue checkpoint/seal 回执显示 Local WAV／p
 前缀仍按其 take 保存，Save UNKNOWN／retry-bind 不提前清除。已保存 WAV 的有界验证
 metadata 已由独立 Facade/SDK 提供；完整 Takes 消费仍属 #2135 B，当前录音事实
 不能替代该保存后读回能力。
+
+
+## Record-off 后的 Pattern 准备
+
+全局 Pattern 录音的真实 F、分段 Journal 和耐久 close 先按原 owner 结算。随后
+`publication_pending` 保留独立的派生发布完成状态：每个 engagement 至多持有一个准备
+worker。worker 只拥有 Facade 创建的独立 Snapshot preparer、不可变 selector 和 heap
+结果；Project 读取、完整 Asset 校验、Snapshot／Pattern 准备及 tempo material 副本均
+在该 worker 上完成，不在触发 continuation 的短 inspect 或 cadence tick 中执行。
+
+控制线程观察实际 return 后才 join，再核对当前 Project/Pattern/revision，由控制线程
+发布 Engine 状态。延迟的旧目标不被采用；准备／发布拒绝保留原 pending close，不伪造
+Journal、Native 或调用者完成。Native 可能消耗被拒绝的 view，重试在 worker 重新准备
+派生值。正常旧准备入口、已批准的播放中发布边界和 stopped immediate 行为保留。
+
+Count-in 的原始 e1/e2、input consumer 和 `publication_pending` 仍是不同事实。普通
+`recording: false` 不代替派生发布完成；consume 及 Suspend／替换／Close 的原生命周期
+屏障仍等待其实际结算。取消观察或直接析构不构成 worker／物理 owner 已结束的证据。
+已锁存的 terminal failure 只在准备 worker 实际返回后回收其派生结果，不再发布到 Engine；
+这项回收不清除原始失败，也不代替 Native 停机、物理回调最后使用或调用方确认。
+短 RPC 原有 1000ms budget、wire 和错误边界不变；这项准备修复不恢复已撤回的 COUNT-IN UI。

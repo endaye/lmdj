@@ -958,9 +958,15 @@ void replace_sample_after_projection_load(void* opaque) noexcept {
 // construction failure, so the only way to observe it is to fail the storage
 // calls it makes.
 
-void test_web_runtime_limits_keep_oversized_projects_inspectable_and_prior_bank() {
+void test_web_runtime_limits_keep_oversized_projects_inspectable_and_prior_bank(
+    bool detached = false) {
   TempDirectory temp;
   Application application(config(temp.path()));
+  const lmdj::facade::RuntimeSnapshotPreparer prepare = detached
+      ? application.make_runtime_snapshot_preparer()
+      : lmdj::facade::RuntimeSnapshotPreparer{[&application](const auto& request) {
+          return application.prepare_runtime_snapshot(request);
+        }};
 
   auto prior = PreparedSampleBank::empty(ProjectId{std::string(kProjectId)}, 9);
   const std::array<float, 2> prior_pcm{0.5F, 0.5F};
@@ -1034,7 +1040,7 @@ void test_web_runtime_limits_keep_oversized_projects_inspectable_and_prior_bank(
       static_cast<std::uint64_t>(kArtifactBoundaryFrames) * sizeof(float),
       static_cast<std::uint64_t>(kArtifactBoundaryFrames) * sizeof(float),
   };
-  const auto exact_artifact = application.prepare_runtime_snapshot(
+  const auto exact_artifact = prepare(
       RuntimeSnapshotRequest{
           artifact_project,
           PatternId{artifact_pattern},
@@ -1067,7 +1073,7 @@ void test_web_runtime_limits_keep_oversized_projects_inspectable_and_prior_bank(
               .at("artifact")
               .at("byte_length") == 1'048'577);
   check_limit(
-      application.prepare_runtime_snapshot(
+      prepare(
           RuntimeSnapshotRequest{
               oversized_project,
               PatternId{oversized_pattern},
@@ -1093,7 +1099,7 @@ void test_web_runtime_limits_keep_oversized_projects_inspectable_and_prior_bank(
       960'004,
       0,
   };
-  const auto exact_decoded = application.prepare_runtime_snapshot(
+  const auto exact_decoded = prepare(
       RuntimeSnapshotRequest{
           decoded_project,
           PatternId{decoded_pattern},
@@ -1119,7 +1125,7 @@ void test_web_runtime_limits_keep_oversized_projects_inspectable_and_prior_bank(
               {"project_path", decoded_oversized_project.generic_string()},
           }),
       3);
-  const auto no_per_pad_cap = application.prepare_runtime_snapshot(
+  const auto no_per_pad_cap = prepare(
       RuntimeSnapshotRequest{
           decoded_oversized_project,
           PatternId{decoded_oversized_pattern},
@@ -1128,7 +1134,7 @@ void test_web_runtime_limits_keep_oversized_projects_inspectable_and_prior_bank(
   LMDJ_CHECK(no_per_pad_cap.has_value());
 
   check_quota(
-      application.prepare_runtime_snapshot(
+      prepare(
           RuntimeSnapshotRequest{
               decoded_project,
               PatternId{decoded_pattern},
@@ -1143,7 +1149,7 @@ void test_web_runtime_limits_keep_oversized_projects_inspectable_and_prior_bank(
       960'000,
       959'999);
   check_quota(
-      application.prepare_runtime_snapshot(
+      prepare(
           RuntimeSnapshotRequest{
               decoded_project,
               PatternId{decoded_pattern},
@@ -1159,7 +1165,7 @@ void test_web_runtime_limits_keep_oversized_projects_inspectable_and_prior_bank(
       959'999);
 
   const auto resident_is_not_a_generation_quota =
-      application.prepare_runtime_snapshot(
+      prepare(
           RuntimeSnapshotRequest{
               decoded_project,
               PatternId{decoded_pattern},
@@ -1173,11 +1179,62 @@ void test_web_runtime_limits_keep_oversized_projects_inspectable_and_prior_bank(
   LMDJ_CHECK(resident_is_not_a_generation_quota.has_value());
 }
 
+void test_detached_preparation_outlives_application() {
+  TempDirectory temp;
+  const auto path = temp.path() / "detached.lmdj";
+  const auto pattern = uuid(503);
+  lmdj::facade::RuntimeSnapshotPreparer prepare;
+  {
+    Application application(config(temp.path()));
+    create_single_asset_project(application, path, mono_pcm16_wav(480),
+        500, uuid(504), pattern);
+    prepare = application.make_runtime_snapshot_preparer();
+  }
+  const auto prepared = prepare({path, PatternId{pattern}});
+  LMDJ_CHECK(prepared.has_value());
+  LMDJ_CHECK(prepared.value()->pattern_id == PatternId{pattern});
+  LMDJ_CHECK(prepared.value()->project_revision == 3);
+  LMDJ_CHECK(prepared.value()->pads.size() == 1);
+  LMDJ_CHECK(prepared.value()->pads.front().sample->interleaved.size() == 480);
+}
+
+void test_detached_preparation_verifies_unassigned_asset_bytes() {
+  // Cooker only resolves assigned Pads: shared cooking could let both routes
+  // agree while missing corrupt retained Assets. Reject these actual bytes
+  // against INVALID_PROJECT independently of either Snapshot's contents.
+  TempDirectory temp;
+  Application application(config(temp.path()));
+  const auto path = temp.path() / "unassigned.lmdj";
+  const auto pattern = uuid(603), asset = uuid(604);
+  create_single_asset_project(application, path, mono_pcm16_wav(480),
+      600, asset, pattern);
+  const auto removed = application.delete_sample_pad({path,
+      CommandMeta{CommandId{uuid(610)}, 3}, PadSlotId{0, 0}});
+  LMDJ_CHECK(removed.has_value());
+  const auto inspected = application.query({{"operation", "project.inspect"},
+      {"project_path", path.generic_string()}});
+  check_success(inspected, 4);
+  const auto& truth = inspected.at("result").at("project");
+  LMDJ_CHECK(truth.at("assets").contains(asset));
+  const auto sha = truth.at("assets").at(asset).at("artifact").at("sha256").get<std::string>();
+  const auto blob = path / "assets" / (sha + ".wav");
+  { std::ofstream corrupt(blob, std::ios::binary | std::ios::trunc); corrupt.put('x'); }
+  LMDJ_CHECK(std::filesystem::file_size(blob) == 1);
+  const RuntimeSnapshotRequest request{path, PatternId{pattern}};
+  const auto ordinary = application.prepare_runtime_snapshot(request);
+  const auto detached = application.make_runtime_snapshot_preparer()(request);
+  LMDJ_CHECK(!ordinary.has_value() && ordinary.error().code == ErrorCode::invalid_project);
+  LMDJ_CHECK(!detached.has_value() && detached.error().code == ErrorCode::invalid_project);
+}
+
 }  // namespace
 
 int main() {
   try {
     test_web_runtime_limits_keep_oversized_projects_inspectable_and_prior_bank();
+    test_web_runtime_limits_keep_oversized_projects_inspectable_and_prior_bank(true);
+    test_detached_preparation_outlives_application();
+    test_detached_preparation_verifies_unassigned_asset_bytes();
   } catch (const std::exception& error) {
     std::cerr << error.what() << '\n';
     return 1;

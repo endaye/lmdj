@@ -2,7 +2,7 @@
   "schema_version": 1,
   "meta": {
     "title": "Application Facade Module",
-    "summary": "唯一 Core 入口；两张切换票据按真实 S 连接 serialized control 与单一 I/O owner"
+    "summary": "唯一 Core 入口；真实 S 连接 control 与 Journal owner，Snapshot 独立准备"
   },
   "boundaries": [],
   "components": [
@@ -39,7 +39,7 @@
     {
       "id": "facade",
       "label": "Application Facade",
-      "detail": "shared history · registry",
+      "detail": "shared history · detached reader",
       "kind": "core",
       "x": 680,
       "y": 250,
@@ -108,7 +108,7 @@
     },
     {
       "id": "io",
-      "label": "Single I/O Owner",
+      "label": "Journal I/O Owner",
       "detail": "durable S · source flush · clock",
       "kind": "core",
       "x": 1010,
@@ -191,7 +191,7 @@
   "cards": [
     {
       "title": "Facade / I/O owner",
-      "body": "Facade 保留两张切换票据；Host 持真实 lease，逐张复制 S；旧段 ACK 后收录目标输入。worker 独占 Store/Journal；Creator 待接线。"
+      "body": "Facade 保留切换票据；Journal worker 独占耐久 owner。close 后独立 reader 准备 Snapshot，Control 只收取结果并发布。"
     },
     {
       "title": "独立录音 release",
