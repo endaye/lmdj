@@ -54,6 +54,24 @@ const matrixColour = (address: string) =>
   screen.getByRole("button", {name: new RegExp(`^Pad ${address} `)})
     .getAttribute("data-pad-colour");
 
+test("Pad actions keep DOM order between the actual palette and category restore without a second colour writer", () => {
+  const choose = vi.fn(), action = vi.fn();
+  render(<PadColourControls pad={PADS[0]!} disabledReason={null} error={null} onChoose={choose}>
+    <button type="button" onClick={action}>Replace Sample</button>
+  </PadColourControls>);
+  const palette = screen.getByRole("group", {name: "Pad colours"});
+  const replace = screen.getByRole("button", {name: "Replace Sample"});
+  const restore = screen.getByRole("button", {name: "Restore category default"});
+  expect(palette.compareDocumentPosition(replace) & Node.DOCUMENT_POSITION_FOLLOWING).not.toBe(0);
+  expect(replace.compareDocumentPosition(restore) & Node.DOCUMENT_POSITION_FOLLOWING).not.toBe(0);
+  fireEvent.click(replace);
+  expect(action).toHaveBeenCalledTimes(1);
+  expect(choose).not.toHaveBeenCalled();
+  fireEvent.click(screen.getByRole("button", {name: "BASS colour"}));
+  fireEvent.click(restore);
+  expect(choose.mock.calls).toEqual([[1], [null]]);
+});
+
 test("Pad labels describe the Asset category even when a different colour is chosen", () => {
   const categories = ["drums", "bass", "melodic", "vocal", "texture"] as const;
   const labelledProject: ProjectView = {...project,

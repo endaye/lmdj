@@ -5,7 +5,9 @@ import {
   createSequencePattern,
   openCreatorSystem,
   sequencePattern,
+  stepCurrentPad,
 } from "./fixtures/creator_navigation.mjs";
+import {countInProjectInventory} from "./fixtures/count_in_helpers.mjs";
 import {wakeAudioWithPad} from "./fixtures/creator_audio.mjs";
 import {readFile, writeFile} from "node:fs/promises";
 
@@ -1998,6 +2000,132 @@ test("contextual Sample encoders merge one save, cancel old targets and restore 
   expect((await rawRequest(page, "project.inspect", {})).result).toEqual(truth);
   await noErrors();
 });
+
+async function recordPadLayoutGeometry(page, surface, receipt) {
+  receipt.controls = [];
+  const actions = surface.locator("button, summary");
+  for (let index = 0; index < await actions.count(); ++index) {
+    const action = actions.nth(index);
+    await action.scrollIntoViewIfNeeded();
+    const measured = await action.evaluate(element => {
+      const rect = element.getBoundingClientRect(), face = getComputedStyle(element, "::before");
+      const points = [[rect.left + 1, rect.top + 1], [rect.right - 1, rect.top + 1],
+        [rect.left + 1, rect.bottom - 1], [rect.right - 1, rect.bottom - 1],
+        [rect.left + rect.width / 2, rect.top + rect.height / 2]];
+      return {name: element.getAttribute("aria-label") ?? element.textContent.trim(),
+        rect: rect.toJSON(), overflow: element.scrollWidth - element.clientWidth,
+        hitRadius: getComputedStyle(element).borderRadius,
+        touchRect: element.closest('[aria-label="Touch workspace"]').getBoundingClientRect().toJSON(),
+        hitOwners: points.map(([x, y]) => {
+          const hit = document.elementFromPoint(x, y);
+          return hit?.closest("button, summary")?.textContent.trim() ?? hit?.tagName ?? null;
+        }),
+        faceHeight: parseFloat(face.height), faceFill: face.backgroundColor,
+        hits: points.map(([x, y]) => {
+          const hit = document.elementFromPoint(x, y); return hit === element || element.contains(hit);
+        })};
+    });
+    receipt.controls.push(measured); // Keep the failing far side before asserting.
+    expect(measured.rect.width, measured.name).toBeGreaterThanOrEqual(44);
+    expect(measured.rect.height, measured.name).toBeGreaterThanOrEqual(44);
+    expect(measured.faceHeight, measured.name).toBe(32);
+    expect(measured.overflow, measured.name).toBe(0);
+    expect(measured.hits, measured.name).toEqual([true, true, true, true, true]);
+  }
+  receipt.overflow = await surface.evaluate(element => ({
+    surface: element.scrollWidth - element.clientWidth,
+    touch: element.closest('[aria-label="Touch workspace"]').scrollWidth -
+      element.closest('[aria-label="Touch workspace"]').clientWidth,
+    page: document.documentElement.scrollWidth - innerWidth,
+  }));
+  expect(receipt.overflow).toEqual({surface: 0, touch: 0, page: 0});
+}
+
+for (const viewport of [{width: 1440, height: 900}, {width: 1280, height: 600},
+  {width: 768, height: 600}, {width: 768, height: 1024},
+  {width: 390, height: 844}, {width: 844, height: 390}]) {
+  test(`Pad and Empty Pad preserve target, real actions and focus at ${viewport.width}x${viewport.height}`, async ({page, browserName}, testInfo) => {
+    test.skip(browserName !== "chromium"); test.setTimeout(180_000);
+    const evidence = {viewport, assigned: {}, empty: {}};
+    try {
+      await page.addInitScript(() => {
+        const original = navigator.mediaDevices.getUserMedia.bind(navigator.mediaDevices);
+        window.__padLayoutMicrophoneCalls = 0;
+        navigator.mediaDevices.getUserMedia = (...args) => {
+          ++window.__padLayoutMicrophoneCalls; return original(...args);
+        };
+      });
+      await page.setViewportSize(viewport); await page.goto("/index.html");
+      await waitForBootProject(page); await activateAudio(page);
+      await chooseSampleFile(page, "Add Sample to Pad A01", "pad-layout.wav", pcm16Wav({frames: 4800}));
+      await commitLongSourceSelection(page); await expectProjectRevision(page, 1);
+      const before = (await rawRequest(page, "project.inspect", {})).result;
+      const projectId = before.project.project_id;
+      const inventory = await countInProjectInventory(page, projectId);
+      evidence.before = {before, inventory};
+      await showSamplePage(page, "Pad");
+      const management = page.getByRole("region", {name: "Pad A01 management"});
+      await recordPadLayoutGeometry(page, management, evidence.assigned);
+      for (const selector of [".sample-pad-file-actions", ".sample-pad-edit-actions"]) {
+        const row = management.locator(selector); await row.scrollIntoViewIfNeeded();
+        const boxes = await row.getByRole("button").evaluateAll(elements => elements.map(element => ({
+          top: element.offsetTop, left: element.offsetLeft, rect: element.getBoundingClientRect().toJSON(),
+        })));
+        (evidence.assigned.rows ??= []).push({selector, boxes});
+        expect(boxes).toHaveLength(2); expect(boxes[0].top).toBe(boxes[1].top);
+        expect(boxes[1].left).toBeGreaterThan(boxes[0].left);
+        const [a, b] = boxes.map(value => value.rect);
+        expect(a.right <= b.left || b.right <= a.left || a.bottom <= b.top || b.bottom <= a.top).toBe(true);
+      }
+      // Independent approved RGB values apply to the visible faces, not text.
+      expect(evidence.assigned.controls.slice(0, 5).map(value => value.faceFill)).toEqual([
+        "rgb(242, 181, 132)", "rgb(221, 244, 120)", "rgb(182, 160, 236)",
+        "rgb(149, 212, 223)", "rgb(229, 173, 196)",
+      ]);
+      const focusable = management.locator("button:enabled, summary");
+      await focusable.first().focus();
+      for (let index = 1; index < await focusable.count(); ++index) {
+        await page.keyboard.press("Tab"); await expect(focusable.nth(index)).toBeFocused();
+      }
+      await management.getByText("Sample details", {exact: true}).click();
+      await expect(management.getByText("48 kHz · Mono · 4,800 frames", {exact: true})).toBeVisible();
+      await management.getByText("Sample details", {exact: true}).click();
+      await management.getByRole("group", {name: "Pad colours"}).scrollIntoViewIfNeeded();
+      await page.screenshot({path: testInfo.outputPath("assigned-pad-layout.png")});
+      expect((await rawRequest(page, "project.inspect", {})).result).toEqual(before);
+
+      // Actual silent navigation selects an empty target without a Pad strike
+      // or a fabricated capture gesture. Its Record action uses the old owner.
+      await stepCurrentPad(page, 1); await page.getByRole("button", {name: "Sample", exact: true}).click();
+      const empty = page.getByRole("region", {name: "Selected Pad Sample"});
+      await expect(empty.getByText("Hold Pad A02 to record. Or choose an audio file below.")).toBeVisible();
+      await recordPadLayoutGeometry(page, empty, evidence.empty);
+      const chooser = page.waitForEvent("filechooser");
+      await empty.getByRole("button", {name: "Add Sample to Pad A02", exact: true}).click();
+      await (await chooser).setFiles([]);
+      const microphoneCalls = await page.evaluate(() => window.__padLayoutMicrophoneCalls);
+      await empty.getByRole("button", {name: "Record Sample", exact: true}).click();
+      const capture = page.getByRole("dialog", {name: "Pad A02 Pad Capture", exact: true});
+      await expect(capture).toBeVisible();
+      expect(await page.evaluate(() => window.__padLayoutMicrophoneCalls)).toBe(microphoneCalls);
+      await capture.getByRole("button", {name: "Close", exact: true}).click();
+      await expect(capture).toHaveCount(0);
+      await expect(empty.getByRole("button", {name: "Record Sample", exact: true})).toBeFocused();
+      expect((await rawRequest(page, "project.inspect", {})).result).toEqual(before);
+      expect(await countInProjectInventory(page, projectId)).toEqual(inventory);
+      await empty.scrollIntoViewIfNeeded();
+      await page.screenshot({path: testInfo.outputPath("empty-pad-layout.png")});
+      await page.reload(); await waitForProjectReopen(page, projectId.slice(0, 8));
+      evidence.reopened = (await rawRequest(page, "project.inspect", {})).result;
+      expect(evidence.reopened).toEqual(before);
+      expect(await countInProjectInventory(page, projectId)).toEqual(inventory);
+    } finally {
+      const path = testInfo.outputPath("pad-empty-layout.json");
+      await writeFile(path, JSON.stringify(evidence, null, 2));
+      await testInfo.attach("pad-empty-layout", {path, contentType: "application/json"});
+    }
+  });
+}
 
 for (const viewport of [{width: 1440, height: 900}, {width: 1024, height: 768},
   {width: 768, height: 600}]) {
