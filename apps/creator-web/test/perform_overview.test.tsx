@@ -22,6 +22,18 @@ const state = {
   project: {...initialCreatorState.project, phase: "ready", current: project},
 } as CreatorState;
 
+test("Perform forwards the actual meter capability while retaining its transport facts", () => {
+  const outputMeter = vi.fn(() => ({state: "available" as const,
+    owner: "11111111-1111-4111-8111-111111111111", sampleRate: 48_000,
+    windowStartFrame: "0", windowEndFrame: "2400", renderQuantumFrames: 128,
+    leftPeak: 0.5, rightPeak: 0.25, leftPeakFrame: "0", rightPeakFrame: "0",
+    contextTimeSeconds: 0.05}));
+  render(<PerformOverview state={{...state, audio: {phase: "running"}}}
+    outputMeterSource={{outputMeter}} transport={initialPatternTransportState} />);
+  expect(screen.getByLabelText("Stereo output readout").textContent).toBe("L −6.0  R −12.0 dBFS");
+  expect(screen.getByTestId("perform-counter").textContent).toBe("BAR 01 / 02 · BEAT 01 / 04");
+});
+
 test("stopped, the counter reads the Pattern's first beat", () => {
   render(<PerformOverview state={state} transport={initialPatternTransportState} />);
   expect(screen.getByTestId("perform-counter").textContent).toBe("BAR 01 / 02 · BEAT 01 / 04");

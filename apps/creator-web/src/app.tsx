@@ -3229,6 +3229,7 @@ function Workspace({
           overview={
             <OverviewDisplay
               performController={performController}
+              outputMeterSource={runtimePhase === "ready" ? session ?? null : null}
               state={state}
               activeMode={activeMode}
               sequence={sequence}

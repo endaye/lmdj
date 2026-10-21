@@ -19,6 +19,14 @@ const pad = (page) => page.getByRole("button", {name: /^Pad A01 — assigned —
 const readMeter = (page) => page.evaluate(() => window.lmdjWebRuntimeHost.outputMeter());
 const physical = (page, name) => page.getByTestId("physical-controls").getByRole("button", {name});
 
+async function retainJson(name, value) {
+  // The line reporter retains no success trace. Persist the actual evidence
+  // even when the entire journey passes; a body-only attachment is ephemeral.
+  const path = test.info().outputPath(`${name}.json`);
+  await writeFile(path, JSON.stringify(value, null, 2));
+  await test.info().attach(name, {contentType: "application/json", path});
+}
+
 test.afterEach(async ({page}, info) => {
   if (info.status === info.expectedStatus || page.isClosed()) return;
   try {
@@ -27,7 +35,10 @@ test.afterEach(async ({page}, info) => {
       const proof = window.__outputMeterProof;
       return {diagnostics: host?.session?.diagnostics(), meter: host?.outputMeter?.(),
         contextState: proof?.context?.state, ownerMessages: proof?.ownerMessages,
-        errorEvents: proof?.errorEvents, latestMeter: proof?.meters?.at(-1)};
+        errorEvents: proof?.errorEvents, latestMeter: proof?.meters?.at(-1),
+        renderedMeter: proof?.lastRenderedMeter, voiceEvents: proof?.voiceEvents,
+        hitStartOrdinal: proof?.hitStartOrdinal, hitMinimumSequence: proof?.hitMinimumSequence,
+        firstSignal: proof?.firstSignal};
     });
     await info.attach("meter-runtime-failure-observation", {contentType: "application/json",
       body: Buffer.from(JSON.stringify(observation))});
@@ -156,7 +167,126 @@ async function silence(page) {
   await expect.poll(async () => {
     const meter = await readMeter(page);
     return meter.state === "available" && meter.leftPeak === 0 && meter.rightPeak === 0;
-  }, {timeout: AUDIO_TRANSITION_TIMEOUT_MS}).toBe(true);
+  }, {timeout: AUDIO_TRANSITION_TIMEOUT_MS, intervals: [20]}).toBe(true);
+  if (await page.getByRole("group", {name: "Stereo output level"}).count()) await renderedMeter(page, "zero");
+}
+
+async function renderedMeter(page, expected = "signal") {
+  // Packet/display agreement alone could share a wrong logarithm or source
+  // assumption. The dry journey below also asserts independent literal PCM
+  // and literal -5.1/-17.1 dBFS; owning unit controls cover20log/hold separately.
+  await expect.poll(() => page.evaluate(expected => {
+    const proof = window.__outputMeterProof;
+    const root = document.querySelector('[aria-label="Stereo output level"]');
+    if (root === null) { proof.lastRenderedMeter = {missing: true}; return false; }
+    const rails = [...root.querySelectorAll('[role="meter"]')];
+    const text = root.querySelector("output")?.textContent;
+    const value = window.lmdjWebRuntimeHost.outputMeter();
+    const packet = proof.meters.findLast(packet => packet.owner === root.dataset.owner &&
+      packet.windowEndFrame === root.dataset.windowEndFrame);
+    proof.lastRenderedMeter = {attributes: {...root.dataset}, text, packet, value,
+      rails: rails.map(rail => ({...rail.dataset}))};
+    if (expected === "unavailable") return root.dataset.state === "unavailable" &&
+      text === "UNAVAILABLE" && rails.length === 0 && root.dataset.owner === undefined &&
+      root.querySelector(".perform-output-meter-hold") === null;
+    if (root.dataset.state !== "available" || rails.length !== 2 || packet === undefined ||
+        value.state !== "available" || value.owner !== packet.owner) return false;
+    const peaks = [packet.leftPeak, packet.rightPeak];
+    const display = peak => {
+      if (peak === 0) return "−∞";
+      const rounded = Math.round(Math.min(0, Math.max(-60, 20 * Math.log10(peak))) * 10) / 10;
+      return rounded < 0 ? `−${Math.abs(rounded).toFixed(1)}` : "0.0";
+    };
+    return peaks.every((peak, i) => Number(rails[i].dataset.peak) === peak) &&
+      text === `L ${display(peaks[0])}  R ${display(peaks[1])} dBFS` &&
+      (expected === "zero" ? peaks.every(peak => peak === 0) : peaks[0] > 0.01 && peaks[1] > 0.002);
+  }, expected), {timeout: AUDIO_TRANSITION_TIMEOUT_MS, intervals: [20]}).toBe(true);
+}
+
+async function observeRenderedHold(page) {
+  await page.evaluate(() => {
+    const proof = window.__outputMeterProof;
+    const root = document.querySelector('[aria-label="Stereo output level"]');
+    proof.uiHold = [];
+    const observe = () => {
+      const rails = [...root.querySelectorAll('[role="meter"]')];
+      if (rails.length !== 2) return;
+      proof.uiHold.push({owner: root.dataset.owner, windowEndFrame: root.dataset.windowEndFrame,
+        contextFrame: Math.round(proof.context.currentTime * proof.context.sampleRate),
+        rate: proof.context.sampleRate, channels: rails.map(rail => ({peak: Number(rail.dataset.peak),
+          held: Number(rail.dataset.heldPeak), frame: Number(rail.dataset.heldPeakFrame)}))});
+      if (proof.uiHold.length > 256) proof.uiHold.shift();
+    };
+    proof.uiHoldObserver = new MutationObserver(observe);
+    proof.uiHoldObserver.observe(root, {attributes: true, childList: true, subtree: true, characterData: true});
+    observe();
+  });
+}
+
+async function assertRenderedHoldAndExpiry(page) {
+  await expect.poll(() => page.evaluate(() => {
+    const proof = window.__outputMeterProof;
+    const held = proof.uiHold.find(value => value.channels.every(channel => channel.peak === 0 &&
+      channel.held > 0 && value.contextFrame - channel.frame >= 0 &&
+      value.contextFrame - channel.frame < value.rate));
+    if (held === undefined) return false;
+    const expired = proof.uiHold.find(value => value.owner === held.owner &&
+      value.channels.every((channel, i) => channel.peak === 0 && channel.held === 0 &&
+        value.contextFrame - held.channels[i].frame >= value.rate));
+    if (expired === undefined) return false;
+    proof.renderedHoldProof = {held, expired};
+    return true;
+  }), {timeout: AUDIO_TRANSITION_TIMEOUT_MS, intervals: [20]}).toBe(true);
+  await retainJson("real-rendered-one-second-hold",
+    await page.evaluate(() => window.__outputMeterProof.renderedHoldProof));
+}
+
+async function meterLayout(page) {
+  const measurements = [];
+  for (const viewport of [{width: 1440, height: 900}, {width: 1280, height: 720},
+    {width: 1024, height: 768}, {width: 820, height: 1180}, {width: 768, height: 1024},
+    {width: 390, height: 844}]) {
+    await page.setViewportSize(viewport);
+    await page.waitForFunction(({width, height}) => window.innerWidth === width && window.innerHeight === height, viewport);
+    await page.evaluate(() => new Promise(resolve => requestAnimationFrame(resolve)));
+    const geometry = await page.evaluate(() => {
+      const root = document.querySelector('[aria-label="Stereo output level"]');
+      const overview = root.closest('[data-testid="overview-display"]');
+      const box = element => {
+        const b = element.getBoundingClientRect(); return {x: b.x, y: b.y, width: b.width, height: b.height};
+      };
+      const overlaps = (a, b) => Math.min(a.x + a.width, b.x + b.width) - Math.max(a.x, b.x) > 0.5 &&
+        Math.min(a.y + a.height, b.y + b.height) - Math.max(a.y, b.y) > 0.5;
+      const meter = box(root), outer = box(overview), label = box(root.querySelector("output"));
+      const launch = box(overview.querySelector('.perform-overview-launch'));
+      const facts = box(overview.querySelector('.perform-overview-facts'));
+      const conflicts = [...overview.querySelectorAll('.perform-overview-columns dt,.perform-overview-columns dd,' +
+        '.perform-overview-launch,.perform-overview-facts,.perform-overview-progress,.encoder-readbacks')]
+        .filter(element => overlaps(meter, box(element))).map(element => ({name: element.textContent, box: box(element)}));
+      return {meter, outer, label, conflicts, footersOverlap: overlaps(launch, facts),
+        scroll: root.scrollWidth, width: root.clientWidth,
+        readoutScroll: root.querySelector("output").scrollWidth, readoutWidth: root.querySelector("output").clientWidth,
+        height: getComputedStyle(root).height,
+        railHeights: [...root.querySelectorAll('.perform-output-meter-rail')].map(rail => getComputedStyle(rail).height),
+        interactive: root.querySelectorAll('button,input,select,[tabindex]').length};
+    });
+    measurements.push({viewport, ...geometry});
+    expect(geometry.conflicts, JSON.stringify({viewport, geometry})).toEqual([]);
+    expect(geometry.footersOverlap).toBe(false);
+    expect(geometry.scroll).toBeLessThanOrEqual(geometry.width);
+    expect(geometry.readoutScroll).toBeLessThanOrEqual(geometry.readoutWidth);
+    expect(geometry.meter.x).toBeGreaterThanOrEqual(geometry.outer.x - 0.5);
+    expect(geometry.meter.y).toBeGreaterThanOrEqual(geometry.outer.y - 0.5);
+    expect(geometry.meter.x + geometry.meter.width).toBeLessThanOrEqual(geometry.outer.x + geometry.outer.width + 0.5);
+    expect(geometry.meter.y + geometry.meter.height).toBeLessThanOrEqual(geometry.outer.y + geometry.outer.height + 0.5);
+    expect(geometry.height).toBe("12px"); expect(geometry.railHeights).toEqual(["3px", "3px"]);
+    expect(geometry.interactive).toBe(0);
+    await page.getByTestId("overview-display").screenshot({path: test.info().outputPath(`meter-${viewport.width}x${viewport.height}.png`)});
+  }
+  await retainJson("meter-layout", measurements);
+  await page.setViewportSize({width: 1440, height: 900});
+  await page.waitForFunction(() => innerWidth === 1440 && innerHeight === 900);
+  await page.evaluate(() => new Promise(resolve => requestAnimationFrame(resolve)));
 }
 
 async function installUnequalStereo(page) {
@@ -219,6 +349,9 @@ async function nativeHit(page, assertion) {
 
 async function signal(page, {afterFrame = 0} = {}) {
   let meter;
+  // These are one-second one-shot voices. Poll within the 50ms meter window;
+  // Playwright's default backoff reaches 1s and can skip the entire interval
+  // where both asynchronous starts have a complete steady window.
   await expect.poll(async () => {
     const snapshot = await page.evaluate((minimumFrame) => {
       const meter = window.lmdjWebRuntimeHost.outputMeter();
@@ -240,18 +373,22 @@ async function signal(page, {afterFrame = 0} = {}) {
       // filter-onset transients. This is only a conservative witness bound;
       // it never changes producer freshness or claims a Native engine frame.
       const steadyFrame = admittedFrame + Math.ceil(proof.context.sampleRate / 20);
+      proof.firstSignal ??= {meter, bothStarted, steadyFrame,
+        voiceEvents: [...proof.voiceEvents], hitStartOrdinal: proof.hitStartOrdinal,
+        hitMinimumSequence: [...proof.hitMinimumSequence]};
       return {meter, qualifies: bothStarted && meter.state === "available" &&
         Number(meter.windowStartFrame) >= steadyFrame && meter.leftPeak > 0.01 && meter.rightPeak > 0.002};
     }, afterFrame);
     if (snapshot.qualifies) meter = snapshot.meter;
     return snapshot.qualifies;
-  }, {timeout: AUDIO_TRANSITION_TIMEOUT_MS}).toBe(true);
+  }, {timeout: AUDIO_TRANSITION_TIMEOUT_MS, intervals: [20]}).toBe(true);
   expect(meter.leftPeak / meter.rightPeak).toBeCloseTo(4, 1);
   const delivered = await page.evaluate((windowEndFrame) => window.__outputMeterProof.meters
     .findLast((message) => message.windowEndFrame === windowEndFrame), meter.windowEndFrame);
   expect(delivered).toMatchObject({owner: meter.owner, leftPeak: meter.leftPeak,
     rightPeak: meter.rightPeak, leftPeakFrame: meter.leftPeakFrame,
     rightPeakFrame: meter.rightPeakFrame, sampleRate: meter.sampleRate});
+  await renderedMeter(page);
   return meter;
 }
 
@@ -270,6 +407,7 @@ test("real stereo meter excludes monitor and click, survives capture and require
   await installAudioObserver(page);
   await page.goto("/index.html");
   await importWitnessProject(page);
+  await openPerform(page);
   if (process.env.LMDJ_METER_GRAPH_MUTATION_PROOF === "1") {
     const rewired = await page.evaluate(() => window.__outputMeterProof.graphMutations);
     expect(rewired).toEqual(["tap-after-monitor", "product-before-monitor"]);
@@ -280,6 +418,7 @@ test("real stereo meter excludes monitor and click, survives capture and require
   await silence(page); // Positive inactive-capture render; unavailable is not zero.
   expect(await page.evaluate(() => window.__outputMeterProof.batches.length)).toBe(0);
   await installUnequalStereo(page);
+  await observeRenderedHold(page);
   let baseline;
   await nativeHit(page, async () => {
     baseline = await signal(page);
@@ -288,8 +427,12 @@ test("real stereo meter excludes monitor and click, survives capture and require
     // one 16-frame period fits the 2400-frame window; no run calibrates it.
     expect(baseline.leftPeak).toBeCloseTo(0.55679399, 4);
     expect(baseline.rightPeak).toBeCloseTo(0.13919850, 4);
+    await expect(page.getByLabel("Stereo output readout")).toHaveText("L −5.1  R −17.1 dBFS");
+    await page.getByTestId("overview-display").screenshot({path: test.info().outputPath("meter-real-stereo-signal.png")});
   });
   await silence(page);
+  await assertRenderedHoldAndExpiry(page);
+  await meterLayout(page);
 
   await page.getByRole("button", {name: "HOLD", exact: true}).click();
   await expect(page.getByRole("button", {name: "HOLD", exact: true})).toHaveAttribute("aria-pressed", "true");
@@ -442,15 +585,14 @@ test("real stereo meter excludes monitor and click, survives capture and require
         window.leftPeak === 0 && window.rightPeak === 0 &&
         (i === 0 || window.windowStartFrame === windows[i - 1].windowEndFrame));
   }, audibleClick), {timeout: AUDIO_TRANSITION_TIMEOUT_MS, intervals: [20]}).toBe(true);
-  await test.info().attach("click-measurement-window-proof", {contentType: "application/json",
-    body: Buffer.from(JSON.stringify(await page.evaluate(start => {
+  await retainJson("click-measurement-window-proof", await page.evaluate(start => {
       const proof = window.__outputMeterProof;
       return {click: proof.audibleClick, clicks: proof.clicks.slice(start),
         observations: proof.clickObservations, rate: proof.context.sampleRate,
         windows: proof.meters.filter(window => window.owner === proof.audibleClick.owner &&
           Number(window.windowStartFrame) < proof.audibleClick.end &&
           Number(window.windowEndFrame) > proof.audibleClick.start)};
-    }, clickStart)))});
+    }, clickStart));
   await silence(page); // Real click output is nonzero while tap samples are zero.
   await physical(page, /^Play\/Stop/).click();
   // creator-phase is the Host audio lifecycle and stays running. The
@@ -465,6 +607,8 @@ test("real stereo meter excludes monitor and click, survives capture and require
   await clickCreatorSystemAction(page, "Suspend audio");
   await expect(page.getByTestId("audio-state")).toHaveText("Audio suspended", {timeout: AUDIO_TRANSITION_TIMEOUT_MS});
   expect(await readMeter(page)).toEqual({state: "unavailable", reason: "not-running"});
+  await physical(page, "Perform").click();
+  await renderedMeter(page, "unavailable");
   await wakeAudioWithPad(page, {padAddress: "A01"});
   await silence(page);
   expect((await readMeter(page)).owner).not.toBe(oldOwner);
@@ -479,6 +623,7 @@ test("real stereo meter excludes monitor and click, survives capture and require
     .filter(message => message.owner === null).length),
   {timeout: AUDIO_TRANSITION_TIMEOUT_MS}).toBeGreaterThan(revocations);
   expect((await readMeter(page)).state).toBe("unavailable");
+  await renderedMeter(page, "unavailable");
   await page.evaluate(() => window.__outputMeterProof.context.resume());
   await expect(page.getByTestId("audio-state")).toHaveText("Audio recovering", {timeout: AUDIO_TRANSITION_TIMEOUT_MS});
   expect((await readMeter(page)).state).toBe("unavailable");
@@ -706,13 +851,22 @@ test("actual render processorerror keeps monitor audio but never restores the ol
     expect(nativeErrors[0].trusted).toBe(true);
     expect(["error", "processorerror"]).toContain(nativeErrors[0].type);
     expect(await readMeter(page)).toEqual({state: "unavailable", reason: "processor-failed"});
+    await renderedMeter(page, "unavailable");
+    let fallbackPeak;
     await nativeHit(page, async () => {
-      await expect.poll(() => page.evaluate(() => window.__outputMeterProof.postMonitorPeak()),
+      await expect.poll(async () => {
+        fallbackPeak = await page.evaluate(() => window.__outputMeterProof.postMonitorPeak());
+        return fallbackPeak;
+      },
         {timeout: AUDIO_TRANSITION_TIMEOUT_MS}).toBeGreaterThan(0.01);
       expect(await readMeter(page)).toEqual({state: "unavailable", reason: "processor-failed"});
+      await renderedMeter(page, "unavailable");
     });
     expect(await page.evaluate(() => window.__outputMeterProof.context.state)).toBe("running");
     expect(await readMeter(page)).toEqual({state: "unavailable", reason: "processor-failed"});
+    await retainJson("native-fault-meter-ui", {nativeErrors, fallbackPeak,
+      contextState: await page.evaluate(() => window.__outputMeterProof.context.state),
+      meter: await readMeter(page), rendered: await page.evaluate(() => window.__outputMeterProof.lastRenderedMeter)});
   } catch (error) {
     const observation = await page.evaluate(() => {
       const proof = window.__outputMeterProof;

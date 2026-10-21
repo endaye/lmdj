@@ -5,6 +5,7 @@ import type {PatternTransportState} from "../state/pattern_transport_state";
 import {SEQUENCE_TICKS_PER_BAR, SEQUENCE_TICKS_PER_BEAT} from "../state/sequence_grid_model";
 import {transportStatusLabel} from "./transport_status";
 import {usePatternPlayheadTick} from "./use_pattern_playhead";
+import {StereoOutputMeter, type OutputMeterSource} from "./stereo_output_meter";
 
 const BANK_LABELS = ["A", "B", "C", "D"] as const;
 
@@ -14,6 +15,7 @@ interface PerformOverviewProps {
   selectedPatternId?: string | null;
   transport?: PatternTransportState;
   controller?: Pick<PerformController, "subscribe" | "getState"> | null;
+  outputMeterSource?: OutputMeterSource | null;
 }
 
 const noSubscription = () => () => {};
@@ -24,8 +26,8 @@ const two = (value: number) => String(value).padStart(2, "0");
 // D04's upper screen is read-only: the transport's BPM and state, the
 // playing Pattern's bar and beat with a progress strip, and the Bank,
 // Quantize and assigned-slot facts. The bar and beat come from the transport
-// frames, as on Sequence. The pictured output meters have no projection and
-// are not drawn.
+// frames, as on Sequence. The output meter reads the separate measured SDK
+// projection; neither Pattern nor Performance transport supplies its values.
 // The playhead's tick within the playing Pattern. A tick observed before a
 // Pattern length change can outlast it by one render, so it is held inside
 // the new length rather than overrunning the counter and the progress strip.
@@ -34,7 +36,8 @@ export function performPosition(tick: number | null, lengthTicks: number | null)
   return Math.min(Math.max(tick, 0), lengthTicks - 1);
 }
 
-export function PerformOverview({state, hideState = false, selectedPatternId, transport, controller}: PerformOverviewProps) {
+export function PerformOverview({state, hideState = false, selectedPatternId, transport, controller,
+  outputMeterSource}: PerformOverviewProps) {
   // Observes the same producer as the touch surface. Read-only displays never
   // connect, stop or leave a Performance session.
   const performance = useSyncExternalStore(controller?.subscribe ?? noSubscription,
@@ -89,6 +92,8 @@ export function PerformOverview({state, hideState = false, selectedPatternId, tr
             : project.sequenceSettings.quantizeEnabled ? "ON" : "OFF"}</output>
         </dd></div>
       </dl>
+      <StereoOutputMeter source={outputMeterSource ?? null} projectId={project?.projectId ?? null}
+        running={state.audio.phase === "running" && state.project.phase === "ready"} />
       <output className="perform-overview-launch" aria-label="Pattern launch cue" aria-live="polite">
         {performance?.lastLaunchAck == null ? "LAST LAUNCH —" :
           `ACKNOWLEDGED SLOT ${two(performance.lastLaunchAck.patternSlot + 1)}`}

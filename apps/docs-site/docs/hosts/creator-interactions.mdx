@@ -287,7 +287,7 @@ Bank A／B／C／D 把下边 16 个 Pad 换成该 Bank 的 A01–A16／B01–B16
 | 三页普通方向导航 | Project 单列 ↑/↓ 选相邻项、普通 ←/→ 未分配，卡片内 Open 才打开；Sample ↑/↓ 复用当前 Pad 选择、←/→ 切四子页。选择不演奏、不保存；切编辑上下文取消未提交预览。Project／Sample SHIFT＋↑/↓ 未分配，SHIFT＋←/→ 保持 history。Perform ↑/↓ 已接线为共享 current Pad 的静默选择，SHIFT/System 中不可用。 | Perform ←/→ 切 PRIMARY／FILTER／MORE 并保持效果，仍依赖真实滤波 producer/consumer。本次 Pad 轴接线不关闭完整 K2、#1822 或设备／听感验收。[决定](https://github.com/endaye/lmdj/blob/main/docs/prd/decisions/2026-10-11-creator-navigation-and-live-mute-tails.md)。 |
 | Perform 独立滤波 | C1 已接线主组 Cutoff／Delay／Reverb 与 FILTER 的 LP／HP／BP、Cutoff、Resonance；OFF 与已应用状态来自 Core，录制／保存／重新打开／Replay 的 packaged proof 已通过。 | 物理设备与听感验收仍未完成。[决定](https://github.com/endaye/lmdj/blob/main/docs/prd/decisions/2026-10-10-mixer-live-controls-and-meter.md)。 |
 | Perform live Mute/Solo | C2 当前 Pad 双开关消费 Core 64 槽 mask，多 Solo／Mute 优先，切 Bank／Pattern 保留；离页等待清空确认。初始 mask 与后续事件经录制／保存／重开／Replay 的双 Pad PCM 旅程验证。 | 物理设备与听感验收仍未完成；已进入共享 Delay／Reverb 的尾音自然衰减。[决定](https://github.com/endaye/lmdj/blob/main/docs/prd/decisions/2026-10-11-creator-navigation-and-live-mute-tails.md)。 |
-| 作品电平表 | 尚无常驻真实作品电平显示。 | Post-FX、Pre-ENC4，排除节拍器；L/R dBFS 峰值，−60…0，静音 −∞，峰值保持 1 秒，读数缺失显示 unavailable。[决定](https://github.com/endaye/lmdj/blob/main/docs/prd/decisions/2026-10-10-mixer-live-controls-and-meter.md)。 |
+| 作品电平表 | Perform 上屏消费常驻真实 SDK 测量，独立 L/R 读数和峰值保持线；不依赖录音或 Pattern 事件。 | Post-FX、Pre-ENC4，排除节拍器；−60…0 dBFS，静音 −∞，按真实 peak frame 保持 1 秒。不可用明确显示 UNAVAILABLE；自动化、候选和设备/听感验收分别记录。[决定](https://github.com/endaye/lmdj/blob/main/docs/prd/decisions/2026-10-10-mixer-live-controls-and-meter.md)。 |
 
 关闭的产品问答、底层能力和已经合并的代码各自说明不同进度，不代表本表的完整交互已经验收。具体实施和证据层级见[本次复核](https://github.com/endaye/lmdj/blob/main/docs/plans/2026-10-12-creator-interaction-audit.md)。
 
@@ -601,7 +601,9 @@ SEQ SNAP 决定切 Pattern 的时机，Grid tools 的 Snap 决定网格编辑吸
 | 上屏 | PATTERN PLAYING／PATTERN QUEUED／PATTERN POSITION／Bank 与 Quantize 四栏，前三栏都来自全局 Pattern transport。全局播放状态、bar／beat、进度、Performance phase、已分配槽数仍可见。独立 launch cue 保留 Performance pending launch／ACKNOWLEDGED 回执；它不覆盖 PATTERN QUEUED，也不代表 Performance 持续播放或录音时钟。 |
 | 触摸区 | Live、Slots、Takes、Replay 四个子页；缺少能力时显示还在等待音频或录音存储。 |
 
-- 上屏没有主输出电平表；演出录制 phase 只读显示，完整录制、WAV 和 Replay 的状态及操作仍在触摸区。
+- 四栏下方的 L/R 横条显示 FX 后、监听音量前的真实作品 dBFS，排除节拍器；ENC4／MASTER 不改变读数。范围 −60…0，真实静音为 −∞。每声道的细峰值线按该次测量的实际音频帧保持 1 秒；重复读取不延长，较低读数不加装饰性衰减。
+- 测量缺失、过期或失败时显示 UNAVAILABLE，不显示数字或旧峰值线。暂停、换工程、换 Session／owner 或 sample rate 会丢弃旧保持；恢复只显示新 owner 的实际测量。切页／System 不保留后台读数循环，不发送测量 RPC、不改工程或偏好。
+- 演出录制 phase 仍只读显示；完整录制、WAV 和 Replay 的状态及操作仍在触摸区。原 Pattern playing／queued、位置、进度与 launch cue 均保留。
 - 页首提示和录制状态里重复的最近一次 Launch 文字已合并到上屏；Launch 键及分组旁的提示保留。
 - 离开 Perform 会结束演出录制和 Replay，见 [1.2](#pages)。
 

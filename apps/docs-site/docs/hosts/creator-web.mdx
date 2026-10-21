@@ -830,7 +830,29 @@ Session 拒绝更新时，保留最后已接受的读数和偏好。MASTER 保�
 输入命中宽度，不参与 FX engage/move/release、HOLD 或 Performance 事件录制；
 切 FX / MORE 或离开 Perform 不重置监听音量。Stop Replay 将 FX、HOLD 与演出
 Launch 状态复位，监听音量仍保留当前值。监听响度包含节拍器，但录音、
-重采样、导出、Project Truth 与 Undo 历史不受 MASTER 影响。LP/HP/BP 与 Cutoff/Resonance 由上述 C1 独立滤波控制提供；live Mute/Solo 由上面的当前 Pad 控件消费；作品电平表另有自己的实施边界。
+重采样、导出、Project Truth 与 Undo 历史不受 MASTER 影响。LP/HP/BP 与 Cutoff/Resonance 由上述 C1 独立滤波控制提供；live Mute/Solo 由上面的当前 Pad 控件消费。
+
+### Measured stereo output level
+
+Perform's read-only upper display has separate L/R rails and dBFS readouts.
+They consume the SDK's synchronous `outputMeter()` measurement: actual sample
+peaks after FX, before the shared ENC4/MASTER monitor gain, excluding the separate
+metronome/cue output. Capture does not need to be recording. Changing monitoring
+volume changes neither the measured work level nor its captured PCM.
+
+Nonzero values use amplitude dBFS over -60..0; digital zero reads **−∞**.
+Each channel's thin peak marker holds for one second of the same AudioContext
+clock, from its actual peak frame. Equal/higher peaks refresh to their measured
+frame; repeated getter reads cannot extend the hold. Lower levels draw directly
+from measured windows, without decorative decay or transport-derived animation.
+The existing current/queued Pattern, counter, progress and launch receipt remain.
+
+Missing/stale/failed measurements say **UNAVAILABLE**, with no numeric meter or
+held marker. Session, Project, owner/rate replacement and suspension clear held
+state; a replacement never borrows the old readout. Only the visible, eligible
+Perform meter owns a cancel-safe animation-frame reader. It issues no command,
+adds no audio/gain node, and writes no Project, history or device preference.
+Browser/PCM verification is distinct from physical-device and acoustic acceptance.
 
 Ordinary Sequence touch buttons share the common 44 px target, 32 px
 painted face and 6 px face radius. Grid cells, note gestures and continuous
