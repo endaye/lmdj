@@ -1,85 +1,47 @@
 # Sample Pad and Empty Pad interaction layout (#2226)
 
-## Current ordinary-UI integration (2026-10-21)
+## Current full-width Delete correction (2026-10-22)
 
-The owner authorizes the remaining ordinary UI work while retaining COUNT-IN
-withdrawal and explicit restoration/acceptance debt. Actual main is
-`4b25c2e228fa248a98a0244e0516a9950f08c317`; original #2421 head
-`e90891e0673195e3206d6f06935e936bee0882b9` remains in the integration
-ancestry without published-history rewriting. The earlier frozen-stack
-premises and verification below remain historical.
+Concurrent integration #2462 delivered the thirteen-path Pad/Empty feature as
+`0e3f59a52a39715279980b0bbec4860f7a56a664` while this workstream verified
+its full-width follow-up. Retain that whole delivery and all of its plan
+history below. This follow-up now changes exactly three existing files:
 
-Current source already delivers the Pad colour/capture/assignment producers,
-common narrow layout, ordinary recording switch, Slots, Take audio, Replay and
-name validation. Preserve all of them. This Task groups the existing Pad card,
-palette and Slice action and clarifies the actual empty-Pad entry and draft
-lifecycle without adding another mutation owner or product capability.
+- `apps/creator-web/src/components/sample_pad_layout.css`.
+- `tests/platform/web/creator/creator_web_sample_editor.spec.mjs`.
+- This plan.
 
-The original fourteen-path declaration becomes thirteen current paths: defer
-only `tests/platform/web/creator/creator_web_metronome.spec.mjs`. Its sole
-original change adds Pad navigation to a now-withdrawn global COUNT-IN journey;
-the user explicitly excludes that restoration. Retain every other original
-path and original ordinary journey. Update current plan/Portal facts to state
-this scope before product edits and keep the debt explicit. The ordinary
-`openCreatorSlice` route still changes to the existing Pad page and all real
-Slice/Sample/SoundSet consumers remain covered.
+The remaining defect is concrete: Delete inherits flex-end alignment inside
+a grid with an implicit auto track, so it shrinks to its text instead of the
+already documented full-width action. One explicit `minmax(0, 1fr)` column
+restores that width. Add one exact rendered local row/button-width comparison
+to each of the original six complete Pad journeys; retain every other leg.
 
-Run the original owning component/type baseline before product edits. Preserve
-all tests and add the original real six-viewport palette/card/44px/corner-hit
-readback and complete empty-Pad Add/cancel/Trim/Commit/cold-reopen journey.
-Run complete Creator/types, dependencies/ownership, full Portal, official clean
-production build/package and complete Sample editor plus candidate Slice,
-real capture Trim/Commit/permission refusal and SoundSet journeys at their
-original budgets. Retain the original standalone Sample WebKit skip and the
-separate canonical capability-refusal checks. Verify current Pad/native focus,
-committed colour and exact full Project Truth after cancellation and actual
-completion; inspect path-backed JSON and desktop/phone images. No threshold,
-policy, timeout, ordinary acceptance leg or source boundary is reduced.
+Retained negative: unchanged clean `28dbc051` package fails all six new width
+assertions (exit1,32.634s),70px versus336/226/544px. Corrected `117fc1cb` has
+complete Creator1933/types/dependencies/ownership77/Portal179 PASS and an
+official clean current-Vite package. All47 original ordinary browser journeys
+and both canonical WebKit refusal boundaries pass; all six exact row/button
+widths match, source/package/fixtures stay unchanged, and phone/desktop images
+are inspected. These receipts stay bound to117fc1cb, not a future commit.
 
-Version impact: original compatible Creator Host version debt stays in #2237;
-no Product/Assembly/identity allocation. Documentation impact: required on the
-two original Host routes, no new Module/diagram edge. #2112, COUNT-IN
-restoration, full candidate/device/hearing and remaining EQ work stay open.
-Task commit/push/review/squash are authorized; cleanup, release, deployment and
-Channel operations remain outside this work.
+The normal merge reconciliation preserves the corrected product, every test,
+all other tracked files and all ten symlinks byte-for-byte from117fc1cb; only
+this plan changes. Verify that complete-tree difference before relying on
+retained functional receipts. Run current Portal/ownership/syntax before the
+normal merge commit, build/package the new clean head, require the entire
+ten-file distribution to match the verified117fc1cb distribution, then run
+all six complete Pad journeys again on that final head. Retain original
+trace/readback capsules. Independent current-head review, live conversations,
+conflicts and protection remain required before guarded squash of #2463.
 
-
-Current integration negative evidence: actual-main four complete component
-files266 and types passed before product edits. With only the original owning
-tests and this plan staged, all three selected assertions fail semantically:
-missing action child between palette/default, old management action order, and
-missing confirmed-empty target card. Product bytes remained actual main. The
-2.471s exit1 receipt is retained; original component and browser assertions
-remain intact. Current corrected verification is separate from historical
-receipts below. The complete Creator run includes all four owning files.
-
-Current integration visual correction: the clean `28dbc051` package passes
-all 47 ordinary browser journeys, but its desktop/phone screenshots and real
-geometry show Delete Pad shrinking to its text instead of occupying the
-declared full-width row. The Grid inherits the former flex-end alignment and
-has only an implicit auto column. Retain those limited-oracle receipts; they
-do not establish full-width layout. Within the same thirteen declared files,
-first add an exact rendered row/button-width assertion to all six original
-Pad journeys and require it to fail against this unchanged package. Then give
-the existing Delete row one explicit flexible column in its scoped stylesheet.
-Keep every original gesture, hit sample, RGB, focus, history and reopen leg.
-Rerun the complete declared source, package and ordinary-browser checks and
-inspect the corrected phone/desktop screenshots before push or integration.
-The actual unchanged-package negative exits1 in32.634s: all six viewports
-fail at the exact width assertion (70px versus336,226 or544 local row pixels).
-Source/package inventories remain unchanged; traces and measurements are kept.
-
-
-Current build-base refresh: another workstream merged #2452 as
-`4b25c2e228fa248a98a0244e0516a9950f08c317`, upgrading only Creator Vite
-and its lockfile. Retain both upstream dependency files exactly. The earlier
-`ce0183ee` baseline and `28dbc051` package negatives remain accurately bound
-to their old inputs; the one-column repair's pre-refresh source checks also
-remain retained at unpublished `75ab855a`. Reinstall the current locked
-Creator dependencies and repeat the complete source checks and fresh official
-package/browser verification on this refreshed base. No old Vite result is
-reported as a current-package result, and no extra dependency file enters this
-thirteen-path Task. All eight governance/protection helper files are unchanged.
+Version impact: compatible Creator Host PATCH debt is absorbed by existing
+MINOR/higher debt in #2237; no identity or persisted-format change.
+Documentation impact: none for current Portal pages: they already prescribe
+the full-width Delete action. This correction makes that existing fact true;
+this plan records the defect and proof. Full Portal verification is retained.
+COUNT-IN stays withdrawn by owner choice. Candidate/device/hearing acceptance,
+#2112/#2226, release/deployment/Channel and cleanup remain outside this fix.
 
 ## Task and authority
 
@@ -386,3 +348,94 @@ indices, Truth or test oracle changed; only the three scoped CSS selectors
 and this evidence ledger differ from9891adbd. Retain that source's successful
 functional journeys and failed selected-colour proof as separate receipts;
 the corrected formal package still must pass the original owning selections.
+
+
+## Current main integration — 2026-10-21
+
+The earlier freeze and stack receipt sections are historical evidence. The
+owner now prioritizes sequential integration of the existing #2112 PRs, with
+current-head independent review, Task checks, conflicts/conversations and live
+protection retained. No auto-merge or release/deploy/Channel operation. The
+explicit release/deployment paths remain frozen.
+
+Actual isolated base: `4b25c2e228fa248a98a0244e0516a9950f08c317`. Main advanced from
+`ce0183eeebd8e1e895114999369ea8ef73c7eabe` during worktree creation only through
+#2452's Creator Vite/lock update to8.3.4. Read that two-path diff: it delivers
+none of the Pad/Empty premises. Current verification uses the actual new lock.
+Original Task: #2421 / `e90891e0673195e3206d6f06935e936bee0882b9`, parent
+`3c67eea8eceb6acbdbbba823dfc5abc97f23de18`. Work only in isolated
+`feat/creator-pad-empty-main`; retain original published history and dirty or
+active worktrees. Root main, pinned `build/toolchains/`, prepared
+`build/release/` and release-owned state are preserved.
+
+### Refreshed premises before product edits
+
+- Outstanding at this base: SampleSurface's Pad JSX renders technical details
+  first, then ungrouped Replace/Delete/Record and colour last. Its default
+  non-Pad empty view has Add only. Read those actual branches and the existing
+  colour/Record callbacks; original e908 is the positive comparison for the
+  proposed grouped actions and actual empty-target Record card.
+- Already delivered: actual colour/ASSIGN/Replace/Capture/Reset/Delete/Slice
+  handlers, shared full/portrait/short-landscape layout, Runtime/SDK producers,
+  Perform/Slots/Takes/Replay integration. Reuse their owners and preserve all
+  current refusals, UNKNOWN/recovery, persistence, histories and data identities.
+- Superseded: the sole original change to
+  `tests/platform/web/creator/creator_web_metronome.spec.mjs` adds Pad navigation
+  inside the withdrawn global COUNT-IN six-page proof. #2396 withdrew that UI
+  and proof until #2394/#2395 are fixed. Do not restore the test/feature here;
+  the original source and historical pass remain retained above. No active
+  metronome proof is removed or skipped by this integration.
+
+### Current declaration and verification
+
+The complete current declaration is the original fourteen paths above EXCEPT
+`tests/platform/web/creator/creator_web_metronome.spec.mjs`: exactly13 paths,
+including this existing plan. Expand this declaration before another path is
+edited. No new Core/SDK/Contract/CI/manifest/product identity or architecture
+edge is introduced.
+
+Preserve all active original Sample, candidate/Slice, SoundSet, capture/denied
+permission and exact-byte/reopen journeys, plus the original six viewports,
+five hit samples,32px faces/44px actual targets, colours/focus/full Truth and
+file length/SHA observations. Run owning components and types, complete current
+Creator components for the shared App composition, dependencies, staged and
+committed ownership and full current Portal check. Official clean-source
+pinned Node26/Emscripten6.0.5 configure/build/package precedes browser proof;
+keep all successful and failed artifacts, do not widen deadlines or reduce
+assertions. An unpublished checkpoint is not browser or shipping completion.
+
+Creator Host compatible MINOR debt remains deduplicated in #2237. Documentation
+impact: required on the same two Host routes; source diagrams remain accurate.
+Complete candidate/full/35-screen/device/hearing and COUNT-IN reintroduction
+remain unverified. A merged source layer does not close #2112 or #2226.
+
+Before publication, refresh actual main, the live PR head/base and declared
+range. The read operational pitfall `pr-base-snapshot-behind-main` applies only
+when actual API receipts prove a stale snapshot; it is not a strict-update
+gate. Never rerun an unchanged complete-input refusal or trim real Task paths.
+
+
+### Current source checkpoint results
+
+Complete current Creator components:83 files /1933 PASS, actual exit0 /90.844s;
+TypeScript PASS1.663s; offline dependencies PASS0.720s. Full Portal check
+PASS61.638s, including179 tests,53 pages and51 routes/internal links. Staged
+new-path ownership/admission77/77 PASS12.402s. Official Native CLI and three
+fixture generations completed with exit0 /25.895s; both Project/Sample
+bundles passed byte reproducibility and the candidate fixture digest was
+retained. These receipts belong to the tested staged product/test/docs bytes;
+they are not commands run under a future commit identity.
+
+Before the clean-source package checkpoint, archive the exact staged tree and
+13-file binary patch. Start an ordinary ancestry-only merge of published
+`e90891e0673195e3206d6f06935e936bee0882b9`, then restore that verified staged
+tree before committing. The resulting two-parent commit retains the published
+head and has exactly the13-file current-main Task delta. No unrelated dirty
+work or old ancestor feature is imported, no published history is rewritten,
+and every product/test/Portal blob is checked unchanged across this operation.
+
+Official clean-source configure/build/package and all current owning browser
+selections remain pending at this local checkpoint. Do not publish a PASS or
+merge until their actual terminal successes and source/package readbacks.
+Current-head independent review, conflicts/conversations/protection remain
+required. Full/candidate/device and withdrawn COUNT-IN acceptance remain open.
