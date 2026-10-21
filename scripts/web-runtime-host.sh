@@ -522,8 +522,13 @@ proof_host() {
   if [[ "$mode" == reproducible ]]; then
     # The release `prepare` leg (#2422 item 4): the candidate batch already
     # proved this exact revision's tests and browser journeys on CI, so the
-    # local build only has to be the same bytes twice.
-    echo "Web Runtime Host Reproducible: PASS (two clean builds byte-identical; tests and browser journeys not run)"
+    # local build only has to be the same bytes twice — and a valid
+    # distribution: the same distribution check the proof runs keeps a
+    # reproducible but malformed dist from reaching the release archive.
+    cmake -E copy_directory "$dist_root" "$proof_root/dist"
+    LMDJ_WEB_HOST_DIST_ROOT="$proof_root/dist" \
+      python3 "$repo_root/apps/web-runtime-host/test/distribution_test.py"
+    echo "Web Runtime Host Reproducible: PASS (two clean builds byte-identical and packaged; unit tests and browser journeys not run)"
     return
   fi
   run_nonbrowser_tests

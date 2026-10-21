@@ -614,8 +614,13 @@ proof_creator() {
   if [[ "$mode" == reproducible ]]; then
     # The release `prepare` leg (#2422 item 4): the candidate batch already
     # proved this exact revision's tests and browser journeys on CI, so the
-    # local build only has to be the same bytes twice.
-    echo "Creator Web Reproducible: PASS (two clean distributions byte-identical; tests and browser journeys not run)"
+    # local build only has to be the same bytes twice — and a valid
+    # distribution: the two non-browser packaging checks keep a reproducible
+    # but malformed dist (missing manifest identity, broken layout) from
+    # reaching the release archive.
+    python3 "$creator_root/test/package_test.py"
+    python3 "$creator_root/test/deployment_smoke_test.py"
+    echo "Creator Web Reproducible: PASS (two clean distributions byte-identical and packaged; unit tests and browser journeys not run)"
     return
   fi
   if [[ "$mode" == smoke ]]; then

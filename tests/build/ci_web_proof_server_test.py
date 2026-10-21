@@ -84,6 +84,7 @@ diff() { printf '%s\\n' "diff $*" >> "$TRACE"; return "$DIFF_STATUS"; }
 run_browser_gate() { printf '%s\\n' "run_browser_gate $*" >> "$TRACE"; return "$BROWSER_STATUS"; }
 repo_root=/repo
 web_test_root=/repo/tests/platform/web
+creator_root=/repo/apps/creator-web
 dist_root=/dist
 fixture_source_root=/fixtures
 '''
@@ -181,6 +182,16 @@ fixture_source_root=/fixtures
                                 "generate_project_fixture", "generate_sample_editor_fixture",
                                 "generate_browser_fixtures", "require_playwright"):
                     self.assertNotIn(skipped, names, skipped)
+                # A reproducible but malformed distribution must not pass: the
+                # non-browser packaging checks run after the byte comparison.
+                checks = [call for call in calls if call.startswith("python3 ")]
+                expected = (["python3 /repo/apps/creator-web/test/package_test.py",
+                             "python3 /repo/apps/creator-web/test/deployment_smoke_test.py"]
+                            if host == "creator" else
+                            ["python3 /repo/apps/web-runtime-host/test/distribution_test.py"])
+                self.assertEqual(checks[-len(expected):], expected)
+                self.assertLess(calls.index("diff -qr /proof/first-dist /dist"),
+                                calls.index(expected[0]))
                 self.assertIn("reproducibility: PASS", result.stdout)
                 self.assertIn("Reproducible: PASS", result.stdout)
                 self.assertNotIn("Proof: PASS", result.stdout)
