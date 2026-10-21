@@ -558,8 +558,16 @@ foundation::Result<LocalProjectSummary> summarize_project(
     InventoryPurpose purpose = InventoryPurpose::transfer) {
   auto history_guard = history->acquire();
   auto lease = platform->acquire_writer(path);
-  if (!lease.has_value()) return foundation::Result<LocalProjectSummary>::failure(
-      sanitized_storage_error(lease.error(), "Project inventory writer could not be acquired"));
+  // Preserve ProjectStore::load's existing committed-read path under a busy
+  // foreign owner. Busy is no authority to recover, mutate or transfer.
+  // A successfully acquired lease remains alive through the complete hash.
+  const auto writer_busy =
+      !lease.has_value() && lease.error().details.is_object() &&
+      lease.error().details.value("storage_condition", std::string{}) ==
+          kStorageConditionProjectBusy;
+  if (!lease.has_value() && !writer_busy)
+    return foundation::Result<LocalProjectSummary>::failure(
+        sanitized_storage_error(lease.error(), "Project inventory writer could not be acquired"));
   ProjectStore store{platform, history};
   const auto loaded = store.load(path);
   if (!loaded.has_value()) {

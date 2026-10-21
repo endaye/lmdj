@@ -1,5 +1,35 @@
 # I2b B2: Facade-owned Pattern tempo preview session
 
+## Current main integration (2026-10-21)
+
+The owner authorizes integration of the 19 open PRs under #2112. This section
+supersedes historical Draft/freeze wording below. Refreshed base is
+`7910ee1db67537a751c0668de97c14b35b53b5c2`: B1 is delivered by #2444, with
+all ten tested blobs verified after squash. The complete current Facade source
+still has no bind/preview Application lifecycle; live #2235 and #2416 retain
+this distinct B2 obligation. Native timing and B1 are reused, not repeated.
+
+Preserve original published head `57c6d47a44908aefd80a983edea3062d586ceac8`
+through a normal main merge. Resolve to current main plus only this Task's
+original 19 changed paths; all original patches apply cleanly. Preserve all
+unrelated main paths and the withdrawn COUNT-IN consumer. No Creator layout
+or B3 wire/AudioWorklet implementation is imported.
+
+Rebuild and run the complete original nine-item dev and nine-item TSan
+selections, including all existing stress registrations; inspect actual
+sanitizer flags. Build the official pinned Wasm Project I/O artifact and run
+the original history plus both B2 save/reopen and save/Undo/reopen journeys
+on Chromium and isolated OPFS WebKit, with full Truth/Artifact/physical-close
+assertions and unchanged budgets. Preserve original negative evidence and
+every acceptance leg. Verify dependencies, official diagrams, full Portal,
+staged/committed ownership and exact range/body declarations.
+
+Version impact remains Facade C++ MINOR debt in #2237; Documentation impact
+remains required for /core/modules/application-facade/ and its diagram.
+Independent exact-head review and live protection/conversation/conflict checks
+precede guarded squash. B3, Creator, full candidate and device/hearing proof
+remain separate; no release, deployment, Channel or cleanup is included.
+
 ## Refreshed premises
 
 Fresh main is `1c4462aa8436f81da1db2a9e6420d94f0e84ccb4`. This isolated

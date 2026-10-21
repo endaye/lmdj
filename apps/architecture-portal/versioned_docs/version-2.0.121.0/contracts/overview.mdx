@@ -1,0 +1,30 @@
+---
+title: Contracts 总览
+area: contracts
+status: implemented
+owners: [core]
+source_paths: [contracts, products/lmdj/assembly.lock.json]
+---
+
+import {BuildIdentity} from '@site/src/components/BuildIdentity';
+
+<BuildIdentity />
+
+## Active Contract 集
+Product Assembly 固定 Project（v3 与 v4）、Project Bundle、Sound Set、Sound Set Catalog、Capability v2、Assembly v2、Error、Module Manifest 与 Product Version，共十个 active Contract。Sound Set 与 Sound Set Catalog 自 Product Build `1.0.44.0` 起进入 Assembly。Cardputer 测试候选另包含 `lmdj.cardputer-transfer.v1 · 1.0.0`，用于有界 USB framing；它不改变 Project Truth，也不宣称真实 USB 验收完成。
+## 版本规则
+Contract ID 表示稳定边界，Contract SemVer 表示该边界自身版本；Product Build 与 Contract 版本不是同一轴。
+## 运行态边界
+Runtime Snapshot 是从 Project 派生的内部不可变边界，目前不作为单独持久化 Contract。
+## 兼容性
+Project Bundle 是 transfer-only，导入后 Project Contract 仍是权威创作状态。新增代码只使用 Assembly Lock 中 active Contract；历史 Contract 只在 History 页面解释。
+
+## Cardputer transfer v1
+Cardputer 首版 transfer contract（Contract SemVer `1.0.0`）是 Cardputer 首版
+USB Serial/JTAG 的有界 framing envelope，不是 Runtime Content 或 USB Audio。
+每帧固定 `LMCP` header、1 KiB payload 上限、非零 request ID、16-byte session
+nonce 与 CRC-32/ISO-HDLC；未知版本、长度、opcode、CRC 和零 request ID 在进入
+业务处理前拒绝。规范参考实现为 `scripts/cardputer-transfer.py`，设备 C++
+边界为 `apps/cardputer-host/main/transfer.*`。当前 C1 交付已覆盖 framing 与
+正反例及带独立 transfer ID、重复块不续期的五秒停滞回收有序事务接收器；设备确认、
+session nonce/精确 next-request 序列及真实 USB 断连旅程和物理验收仍待后续实现。

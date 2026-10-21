@@ -398,10 +398,7 @@ export interface CreatorPadColourRuntimeSession extends CreatorRuntimeSession {
 export interface CreatorPerformanceRuntimeSession
   extends CreatorSampleRuntimeSession,
     PerformanceRuntimeSession,
-    WebPerformanceCaptureSession {
-  performanceMasterCaptureProgress?: import("@lmdj/web-runtime-platform/runtime_types")
-    .PerformanceMasterCaptureProgressSession["performanceMasterCaptureProgress"];
-}
+    WebPerformanceCaptureSession {}
 
 export type SequenceRecordState = "inactive" | "active" | "switching" | "recoverable";
 

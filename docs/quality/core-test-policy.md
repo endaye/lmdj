@@ -691,21 +691,28 @@ Web role: Playwright system libraries are installed once by root
 the persistent `LMDJ_EMSDK_CACHE_ROOT`, `LMDJ_BROWSER_CACHE_ROOT` and
 `npm_config_cache` directories, so `install-system-deps` stays `"false"`.
 
-Both overflow hosts reach GitHub through a shared Tailscale exit node whose
-throughput swings from MiB/s to tens of KiB/s. A runner admitted while that
-link is slow fails checkout or downloads (runs 38743432320 and 39007862259), so
-each host runs `scripts/ci/host/runner-network-admission` every 10 minutes:
-the bash version from launchd on the M4 Pro
-(`scripts/ci/host/com.lmdj.runner-network-admission.plist`) and the PowerShell
-twin as a Windows scheduled task on en-home. It downloads a fixed 10 MiB range
-over the CI egress and adds the admission label (`ci-macos-gates` or
-`ci-web-overflow`) through the Runner API only after two consecutive samples
-of at least 2 MiB/s, and removes it after one sample under 500 KiB/s or a
-failed download. An unreadable Runner API changes nothing. The selectors then
-route by the label as before, so a slow link returns work to netcup or the M1
-instead of failing it. `tests/build/ci_runner_network_admission_test.py` runs
-the bash script against stubbed `curl` and `gh` and pins the twin's thresholds.
-The Windows task must invoke the stable App Execution Alias
+Both overflow hosts are owner workstations whose egress runs through a shared
+Tailscale exit node with throughput that swings from MiB/s to tens of KiB/s; a
+runner admitted while the link is slow fails checkout or downloads (runs
+38743432320 and 39007862259). Each host therefore runs
+`scripts/ci/host/runner-network-admission` every minute (the bash version from
+launchd on the M4 Pro, `scripts/ci/host/com.lmdj.runner-network-admission.plist`;
+the PowerShell twin as a Windows scheduled task on en-home) and holds the
+admission label (`ci-macos-gates` or `ci-web-overflow`) only while every host
+condition holds. Owner policy (2026-10-18): the owner has been idle for at
+least 15 minutes; at least 30 GB is free; and the CI egress is fast, measured
+every 10 minutes by a fixed 10 MiB GitHub range, admitted after two
+consecutive samples of at least 2 MiB/s and withdrawn after one under 500 KiB/s
+or a failed download. The M4 Pro, a laptop, additionally needs AC power held
+for at least 10 minutes (never battery) and no thermal or performance
+warning; any network is allowed. en-home additionally needs no pending Windows
+Update or servicing reboot. Any failing condition withdraws the label within
+a minute; a job already running continues. An unreadable Runner API changes
+nothing, and a failed label write is logged as such and retried on the next
+run. The selectors route by the label as before, so an unavailable host's work
+returns to netcup or the M1. `tests/build/ci_runner_network_admission_test.py`
+runs the bash script against stubbed host tools and pins the twin's shared
+thresholds. The Windows task must invoke the stable App Execution Alias
 `%LOCALAPPDATA%\Microsoft\WindowsApps\pwsh.exe`; the versioned Store path
 disappears on update and the task then fails on every run.
 

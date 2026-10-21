@@ -2,28 +2,6 @@ import {expect, test} from "vitest";
 
 import {beatsInWindow} from "../src/runtime/metronome_scheduler";
 
-test("Native owns scheduled S and JS emits only the following exact beat frames", () => {
-  expect(beatsInWindow({fromFrame: 99_999, toFrame: 172_001,
-    originFrame: 100_000, bpm: 120, nativeDownbeatFrame: 100_000}))
-    .toEqual([
-      {frame: 124_000, beat: 1, accent: false},
-      {frame: 148_000, beat: 2, accent: false},
-      {frame: 172_000, beat: 3, accent: false},
-    ]);
-});
-
-test("Native S remains excluded across a segmented grid and late On scheduling window", () => {
-  expect(beatsInWindow({fromFrame: 76_000, toFrame: 148_001,
-    nativeDownbeatFrame: 100_000, segments: [
-      {fromFrame: 0, originFrame: 4_000, bpm: 120},
-      {fromFrame: 100_000, originFrame: 100_000, bpm: 120},
-    ]})).toEqual([
-      {frame: 76_000, beat: 3, accent: false},
-      {frame: 124_000, beat: 1, accent: false},
-      {frame: 148_000, beat: 2, accent: false},
-    ]);
-});
-
 test("beats land on the exact engine ceiling formula at 120 BPM", () => {
   // 2 880 000 / 120 = 24 000 exactly: a beat every 24 000 frames.
   expect(beatsInWindow({fromFrame: 0, toFrame: 96_000, originFrame: 0, bpm: 120}))

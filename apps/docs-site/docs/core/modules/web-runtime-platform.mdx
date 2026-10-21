@@ -776,8 +776,8 @@ Session 以真实 audio clock 拒绝超过 250 ms 的窗口或末帧年龄，并
 不安全时钟、tap 不可用与 processorerror 都明确返回 unavailable。恢复只有在
 匹配的 native voice-started receipt 进入 running 后才分配新 owner；旧包收到
 自己的 ACK，但不能复活新读数。meter 的独立消息和 ACK 不改变 capture 的
-`generation`、`sequence`、PCM、停止确认或失败处理。既有 capture start 尚未提供
-applied ACK，meter 包不能作为 capture-ready 证据。
+`generation`、`sequence`、PCM、停止确认或失败处理。capture-ready 仍由既有严格
+匹配的 `started` ACK 决定，meter 包不能充作 capture-ready 证据。
 
 最低层回归为三份 tap/capture/Runtime Session Node 套件；独立 packaged Creator
 旅程覆盖真实 PCM、FX、监听静音、click 隔离、capture 和生命周期，派生完整分发
@@ -811,7 +811,6 @@ monitor path once. A late meter packet cannot restore the failed tap.
 返回对象与 binding 冻结；新 capture 的 identity 和计数重新开始。停止的只读值
 保留到下一次 capture start 或 tap/Session 关闭，旧 getter 在关闭后不能读取新 owner。
 这些是接收音频事实，不是 durable WAV、保存完整性、Performance 总时长或 Replay
-时钟。Creator 当前消费同一 SDK snapshot，并由既有 writer/queue 的真实回执独立发布
-本地 WAV/prefix 的 durableFrames、编码格式及结算事实。只读 observer 失败不取得录音
-控制权；owner、Save UNKNOWN 与 retry-bind 边界保持。已保存 Artifact 的验证 metadata
-与完整 Takes 列表仍待 #2135 B／U08b；本接口不修改 Project 或持久化格式。
+时钟。已保存 Artifact 的有界验证 metadata 已由独立 Facade/SDK 前置交付；
+Writer/queue 的 durable prefix 与 Creator Recording/Takes 消费仍由 #2135 后续
+Task 交付。本接口不修改 Project 或持久化格式，也不替代已交付的 metadata。

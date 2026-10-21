@@ -1,6 +1,55 @@
 # SEQ SNAP OFF: current-loop phase anchor (S5 P1)
 
-Parent: #2112 / #2234. One implementation Task above Creator Draft #2377.
+Parent: #2112 / #2234. Original stack layer #2378; independently integrated
+from main after the owner's partial unfreeze.
+
+## Current main integration (2026-10-20)
+
+This section supersedes the historical stack-only shipping hold below for this
+Task. The owner permits ordinary feature/fix/test integration while the current
+release stays fixed at `8c361623f`. Frozen paths remain `.github/workflows/`,
+`tools/release/`, `scripts/release.sh`, `scripts/cloudflare-host-deploy.sh`,
+`docs/release-evidence/` and `apps/docs-site/docs/releases/`; none belongs to P1.
+No release, deployment, Channel or Git cleanup action is authorized here.
+
+Isolated branch `feat/seq-phase-anchor-main` starts at refreshed main
+`8126d401bae8681caca98af32594458edc4be9ba`. Preserve published #2378 and the
+remaining Draft stack without history rewriting. Integrate exactly P1's ten
+declared files below on a new main-target PR; keep #2377 Draft and COUNT-IN UI
+withdrawn until its existing blockers are addressed. P1 has no production call site and
+depends on neither Creator C4 nor COUNT-IN UI. Actual C3 was delivered by
+#2373 / `8c1ee714147b6ba64decb1036b46fd76c89ebf80`; do not repeat it.
+
+Fresh premise disposition: #2234 remains OPEN; no successor delivered this
+arithmetic on main. The three owning source/header/test files are byte-identical
+to #2378's original parent. Existing exact anchor helpers are present, while
+this new cross-Pattern mapping is absent at their authoritative declarations,
+definitions and owning tests. Preserve the approved loop example and unresolved
+Voice chase question; this layer cannot select or start a Voice. Version debt
+remains the existing Audio Runtime additive API MINOR debt under #2237, not a
+new allocation or a reduction of the P2 ABI debt.
+
+Unchanged main baseline: configure and existing test target build PASS;
+complete `audio.prepared_sample_bank` PASS (5.599 s). Repeat the full owning
+component, the rebuilt target-only mutation and restored producer, dependency
+check, official diagrams and complete Portal, then staged/committed ownership
+and exact-body declaration checks. Independent current-head review, complete
+conversations, conflicts and live protection are still required before merge.
+The original stack's evidence and unrun OFF/candidate/device journeys below
+remain historical evidence; they do not become full acceptance here.
+
+Integration owning receipts: fixed producer and complete component PASS
+(7.943 s). A fresh build with only the source-loop reduction removed fails
+the actual literal approved-example assertion at
+`prepared_sample_bank_test.cpp:541` (CTest exit 8, 5.145 s). Restore byte-identical
+source with a fresh mtime, confirm the producer recompiles, then the complete
+component PASS (5.945 s). Core dependencies PASS. Official diagrams and the
+complete Portal PASS (62.887 s): 179 tests, 53 pages, 10 sources/20 outputs and
+51 routes/internal links. Staged new-path ownership PASS (76 tests). Final
+precommit main remains `8126d401bae8681caca98af32594458edc4be9ba`; all applicable
+governance and owning premises are unchanged. Three owning code/test files
+are byte-identical to the original P1 head. No frozen path is included.
+Current-head independent review remains pending until the new PR is reviewed.
 
 ## Authority and refreshed premises
 

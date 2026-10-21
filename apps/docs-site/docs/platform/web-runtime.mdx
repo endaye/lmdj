@@ -75,9 +75,8 @@ Snapshot/Native publication 前。当前 Pattern 的选择撤回、排队重复�
 不留下等 Bar 的视图阻塞下次 Play。Stop 的实际 F、失败 I/O owner disposition、
 lease 释放与 Native 最终 quiescence 分别完成。Sequence 与 Performance active
 recording Journal 的现有互斥保持；普通 Perform Launch 走同一 Pattern switch，
-既有 Performance-record Launch/clock/event 路径保持。Creator C4 的箭头、GROOVE
-与普通 Launch 共用此请求，COUNT-IN 等实际 Applied 与 durable opening ACK 后才开放；
-取消／结算保持锁定。consumer、完整故障组合、候选和设备／听感分别验收。
+既有 Performance-record Launch/clock/event 路径保持。Creator 录音期选择控件及其
+packaged 完整旅程属于 C4；本层 producer 证明不等于设备或听感验收。
 
 已有录音的 Record-off 与 Stop 不借用开始录音的排队门禁：即使后继仍在排队，
 它们也先取得真实 F，再处理 `S < F` 的旧段或 `S >= F` 的取消，不为目标写入假事件。
@@ -93,8 +92,7 @@ S6 的 scheduled Record、生产 Facade I/O owner、strict Host/SDK companion �
 monitoring-only 双输出未在真实 MIDI 硬件或物理设备上验收，也未做听感验收。
 S7 的 global Record Creator 控件、Off/1/2 偏好、COUNT-IN 倒计时/灯、
 JS metronome handoff 与 scheduler exclusion 已由 #2359 接入。本层增加 S3
-Host 录音切换 producer 与 Creator C4 consumer；多切换 packaged、完整故障组合与
-设备验收仍须各自的实际证据，不能由已接线或 producer 测试推断。
+Host 录音切换 producer；其 Creator C4、多切换 packaged 与设备验收仍独立。
 
 Session 的 additive 公共方法为 `queryPatternCountInCapabilities`、
 `requestPatternCountIn`、`inspectPatternCountIn`、`cancelPatternCountIn`、
@@ -284,6 +282,31 @@ recovery: revoke the measurement, settle capture and reconnect the existing
 monitor path once. A late meter packet cannot restore the failed tap.
 
 
+## Saved recording metadata 的异步读取
+
+公共 SDK `queryPerformanceRecordingMetadata` 使用独立只读 RPC，把完整 Project/
+Performance/revision/Artifact selector 交给 Runtime；Host 不解析 Project bundle。
+Runtime 只移动公共 Facade reader 到 worker，bridge 保留原请求身份和原30秒预算，
+不会让完整 WAV hash 占住 Control 的 Asyncify dispatch 或 SDK action tail。
+SDK 的独立 metadata 队列限制为1条在途 RPC 加15条等待，保留普通 Control 的槽位。
+排队消耗原30秒预算，不重新起算；等待项取消/过期不进入 Native，超额明确拒绝。
+
+返回值保留已验证的 Project/recording revision 和 ArtifactRef；audioMetadata 是实际
+非零 WAV frames/rate/channels，audioError 的 UNSUPPORTED_AUDIO 只在完整 raw 验证后
+成立。摘要不符、storage/revision/owner 失败是独立外层拒绝；无 WAV 仍是原 null
+binding，旧保存文件的完整性仍未知。既有 Replay 仍按事件进度及原完成规则运行。
+
+Project replacement（包括同一 Project reopen）、close/failure、安全清理和 caller
+abort 退役旧结果，不隐式重试。取消和响应通过同一原 RPC atomic cell 结算，取消胜出
+后不发布 ready metadata。取消 observer 并不证明 worker 或 physical writer 已结束；
+原 reader 的实际返回、析构和线程 join 是正式 Module 释放的额外必要条件。未结束的
+worker 继续占有有界位置，不能靠取消/timeout 腾空所有权或声称清理成功。
+
+Native/TSan/stress 拥有真实 Control/取消/迟到结果与物理 custody 的并发验证；实际
+Wasm/OPFS RPC 与 SDK seam 验证分别记录。Take 实际展示、完整 Creator 录放/恢复
+旅程、候选及物理设备/听感验收仍是后续工作，不能由此只读 API 结算。
+
+
 ## Recording 的真实音频帧读数
 
 已发布的同一 retained Session 上，独立可选能力
@@ -302,35 +325,3 @@ recording／stopping／stopped／failed phase。调用只读本地投影，不�
 它不能证明 WAV 已 durable、Artifact 已绑定、保存结果已确定或演出完整。后续 Host
 必须继续区分 received PCM、writer durable prefix 和已验证的保存 WAV；不得把此值
 当作 Performance 总 elapsed、Replay 分母或现有事件回放规则的替代。
-
-
-Creator 的 Live／Takes 当前从同一 capture snapshot 显示 Captured audio，并从
-writer 自身的编码格式及 queue checkpoint/seal 回执显示 Local WAV／prefix。
-两个帧数独立；pending 写入不冒充 durable。可选 observer 只发布小型冻结数据，
-不改变原 Stop、清理、保存和恢复 owner。真实关闭／换 owner 清旧时钟，已确认本地
-前缀仍按其 take 保存，Save UNKNOWN／retry-bind 不提前清除。已保存并重开的 WAV
-验证 metadata 仍属 #2135 B，不能用这些当前录音事实结算该能力。
-
-## Saved recording metadata 的异步读取
-
-公共 SDK `queryPerformanceRecordingMetadata` 使用独立只读 RPC，把完整 Project/
-Performance/revision/Artifact selector 交给 Runtime；Host 不解析 Project bundle。
-Runtime 只移动公共 Facade reader 到 worker，bridge 保留原请求身份和原30秒预算，
-不会让完整 WAV hash 占住 Control 的 Asyncify dispatch 或 SDK action tail。
-SDK 的独立 metadata 队列限制为1条在途 RPC 加15条等待，保留普通 Control 的槽位。
-排队消耗原30秒预算，不重新起算；等待项取消/过期不进入 Native，超额明确拒绝。
-
-返回值保留已验证的 Project/recording revision 和 ArtifactRef；audioMetadata 是实际
-WAV frames/rate/channels，audioError 的 UNSUPPORTED_AUDIO 只在完整 raw 验证后
-成立。摘要不符、storage/revision/owner 失败是独立外层拒绝；无 WAV 仍是原 null
-binding，旧保存文件的完整性仍未知。既有 Replay 仍按事件进度及原完成规则运行。
-
-Project replacement（包括同一 Project reopen）、close/failure、安全清理和 caller
-abort 退役旧结果，不隐式重试。取消和响应通过同一原 RPC atomic cell 结算，取消胜出
-后不发布 ready metadata。取消 observer 并不证明 worker 或 physical writer 已结束；
-原 reader 的实际返回、析构和线程 join 是正式 Module 释放的额外必要条件。未结束的
-worker 继续占有有界位置，不能靠取消/timeout 腾空所有权或声称清理成功。
-
-Native/TSan/stress 拥有真实 Control/取消/迟到结果与物理 custody 的并发验证；实际
-Wasm/OPFS RPC 与 SDK seam 验证分别记录。Take 实际展示、完整 Creator 录放/恢复
-旅程、候选及物理设备/听感验收仍是后续工作，不能由此只读 API 结算。

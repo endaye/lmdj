@@ -1,3 +1,96 @@
+# Current-main integration of #2408
+
+## Refreshed premises before source edits
+
+Base main `bb5754faf4bd995536a94d1e73e8ae9168e2470d` now contains the actual
+range/scan/WAV/Facade producer merges #2432/#2434/#2435/#2436. Original #2408
+source `26a31132470e3a46dcd24b1ecd0885f970430cb4` remains published unchanged;
+its parent is `5b0fe0ef8b281ddd309d423a854eb5940e7a2506`. Live #2135, #2408,
+#2409, #2430, #2436 and comments were refreshed before editing. The authoritative
+operation, SDK, type and result inventories retain inspect as a positive control
+and still lack the metadata query on main. #2409 owns later save verification;
+the Take consumer and complete U08b/U08c remain separate work.
+
+Fourteen non-new inputs were compared with the original parent. Five changed:
+the two Portal pages and SDK Session/types/test. Their divergence is chiefly held
+output-meter and capture-progress work. Reconcile only the metadata delta onto
+actual main, retaining every original metadata acceptance leg and the current
+main API inventory plus this method. Never import those held ancestors, rewrite
+the original published stack, or restore the independently withdrawn COUNT-IN.
+The exact18-file declaration below remains the Task boundary. The one new Native
+test routing row retains all eight adjacent owning lanes; it changes no CI
+scheduling, required gate, workflow or release tooling.
+
+Before edits, actual Native baseline3/3 and Node26 Platform baseline576/576
+passed. An initial login-shell invocation selected Node20 and failed loading a
+TypeScript dependency; that environment failure is retained, not counted as a
+product pass. The corrected baseline names `/opt/homebrew/bin/node` explicitly.
+
+A pinned original-protocol probe reproduced acceptance of a zero-frame success,
+whereas Core WAV finish rejects empty data. Add one independent regression in
+the existing protocol test, capture its actual missing-exception RED, then
+require positive frames only for this new operation. Existing operation schemas,
+unsupported/null audio, persisted Contracts and product decisions are unchanged.
+The actual RED was observed before the lower-bound fix. Final current-main
+verification and independent review remain pending until their receipts exist.
+
+The user authorizes sequential normal squash integration and proven-safe cleanup.
+The explicit release-path freeze remains: no workflows, release tooling/evidence,
+release portal snapshots, tag, publication, deployment or Channel operation.
+Preserve root main, both dirty WIPs, the original stack and pending #2430 owner
+exception. Heavy Native/TSan/Wasm/browser/Portal phases run serially, retaining
+all old failures and all original journey legs, budgets and mutation controls.
+
+## Current-main verification receipts
+
+- Original Native baseline3/3 and Node26 baseline576/576 passed before edits.
+  Full current SDK586/586 passed after all three SDK controls were restored;
+  Creator strict typecheck passed. All original metadata tests, new Native test
+  and98-line browser addition are retained byte-for-byte. The extra tenth SDK/
+  protocol case is the independent zero-frame RED→positive-bound GREEN.
+- Final owning Native5/5 passed in87.182s after all three rebuilt C++ controls
+  and fresh restored recompiles; production Native Control and C API relinked.
+  TSan query/stress2/2 passed21.819s, including the original64-iteration race;
+  actual compile flags and linked runtime are retained, no TSAN_OPTIONS override.
+- Removing Project retirement, physical worker gate or atomic publication
+  settlement each fails its exact owning Native assertion. Bypassing SDK
+  admission gives16-versus1, serializing the metadata query holds the far-side
+  Control response, and renewing the budget gives30000 instead of28766.
+  Each source is restored exactly and each restored owning test passes.
+- Pinned Emscripten6.0.5 toolchain/formal Wasm and separate production Wasm
+  passed. Production conformance flag is OFF and the conformance global absent;
+  formal conformance is ON. These are separate actual builds, not a Product cut.
+- Dependencies, source boundary, original browser patch/timeline14 tests,
+  timeout policy and staged ownership76/76 passed. The scope-policy prerequisite
+  preserves the full original eight-lane ownership of the new Native test.
+
+- Actual pinned Wasm/OPFS selections passed: Chromium3/3 in8.314s and supported
+  OPFS WebKit2/2 in13.517s, no skips/flaky/retries. Each retains all original
+  selections and three metadata variants, each prepare/close/reopen/close/reopen/
+  close:9 reports and9 closed pages per browser. Query executes while audio is
+  running during prepare and core-ready after both reopens. Verified Project2
+  and recording0, exact48kHz/stereo/48017 frames or verified format refusal,
+  complete SHA-256/192124-byte identity/prefix/tail, and outer late mismatch
+  with no result remain separate facts. These use referenced fixture WAVs with
+  public begin/stop/save; they do not claim physically captured PCM.
+- Audio-output wrapper observed built-in MacBook speakers at both endpoints,
+  no warnings; it does not prove continuous route stability or physical hearing.
+
+Full Portal check passed63.234s:179 tests,53 pages,51 routes/internal links.
+Precommit main refreshedbb5754fa unchanged; all seven governing files match the
+read rules and all17 verified non-plan inputs retain their recorded SHA-256.
+Committed ownership, actual independent review and merge remain pending until
+their respective receipts. Original B0 WebKit lifecycle failures
+and original path/deadline/redactor/ownership/harness failures remain retained.
+No full candidate, device/hearing or whole #2135/#2112 completion claim.
+
+## Retained original Task record
+
+The following is the immutable-context original #2408 implementation record.
+Its old freeze, base, stack inventory and verification counts describe that
+published source; they do not claim current-main verification or supersede the
+current authorization and premises above.
+
 # Asynchronous saved-recording query — #2135 B
 
 ## Premises before implementation

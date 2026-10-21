@@ -1612,7 +1612,7 @@ function validPerformanceResult(operation, value) {
         error.code === "UNSUPPORTED_AUDIO" && typeof error.message === "string" && isPlainObject(error.details);
       return error === null && hasExactKeys(audio, ["sample_rate", "channels", "source_frames"]) &&
         [44100, 48000].includes(audio.sample_rate) && [1, 2].includes(audio.channels) &&
-        isUnsignedInteger(audio.source_frames) &&
+        isUnsignedInteger(audio.source_frames) && audio.source_frames > 0 &&
         audio.source_frames * audio.channels * 2 <= value.recording_artifact.byte_length;
     }
     case "pattern.slot.assign":

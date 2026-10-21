@@ -246,6 +246,30 @@ Defects the test catches: admission on a single fast sample; an admitted
 runner kept through a slow or failed sample; label writes after a failed
 Runner API read. Each was mutation-proven.
 
+## Q7 — Admit the overflow runners by host conditions (#2278, #2279)
+
+Owner request 2026-10-18: define fixed conditions for when en-home and the
+M4 Pro may act as runners. The M4 Pro is an everyday laptop that leaves home
+and must never take CI on battery. Owner choices: take work only after 15
+minutes idle ("空闲 15 分钟后才接"); any network for the M4 Pro ("任何网络都行").
+
+1. Both scripts run every minute and hold the label only while all
+   conditions hold. Shared: owner idle at least 15 minutes, at least 30 GB
+   free, and a fast egress probed every 10 minutes with Q6's thresholds. M4
+   Pro: AC held at least 10 minutes and no thermal or performance warning.
+   en-home: no pending Windows Update or servicing reboot.
+2. Any failing condition withdraws the label; the log names the blockers.
+3. The launchd job and the scheduled task run every 60 seconds.
+4. Rewrite `tests/build/ci_runner_network_admission_test.py` around stubbed
+   `pmset`, `ioreg`, `df`, `curl` and `gh` and a controlled clock.
+
+Declared files: the two scripts, the plist, the test, the policy, this plan.
+
+Defects the test catches, each mutation-proven: battery ignored; AC hold
+skipped; owner activity ignored; thermal warning ignored; low disk ignored;
+the network probed every run; admission on one fast probe; a failed revoke
+logged as a success.
+
 ## Completion criteria
 
 - No workflow carries the host-agnostic `lmdj-native-heavy` group.

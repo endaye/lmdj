@@ -107,6 +107,14 @@ class CarrierTest(unittest.TestCase):
         self.release = None
         self.creations = 0
         self.guards = 0
+        self.assets_complete = True
+        self.verified_ids = []
+
+    def verify_assets(self, release_id):
+        from tools.release.transitions import IncompleteAssetError
+        self.verified_ids.append(release_id)
+        if not self.assets_complete:
+            raise IncompleteAssetError("GitHub Release asset host.zip upload is incomplete (state=starter)")
 
     def create_draft(self, tag):
         self.creations += 1
@@ -117,7 +125,8 @@ class CarrierTest(unittest.TestCase):
 
     def carrier(self):
         return DraftCarrier(spec=spec(), create_draft=self.create_draft,
-                            release_by_tag=self.release_by_tag)
+                            release_by_tag=self.release_by_tag,
+                            verify_assets=self.verify_assets)
 
     def test_observe_reports_the_verified_status_with_its_evidence(self):
         # read_back returns a status with its evidence; observe must unpack it
@@ -147,7 +156,8 @@ class CarrierTest(unittest.TestCase):
         def failing(tag):
             raise RuntimeError("github unavailable")
         carrier = DraftCarrier(spec=spec(), create_draft=failing,
-                               release_by_tag=lambda: self.release)
+                               release_by_tag=lambda: self.release,
+                               verify_assets=self.verify_assets)
         self.assertEqual(carrier.advance({}, {"step": "draft"},
                                          before_write=lambda: None).status, "unknown")
         # The uncertain POST reconciled far-side; the next advance verifies
@@ -163,17 +173,84 @@ class CarrierTest(unittest.TestCase):
         def refusing(tag):
             raise TransitionError("published release intent cannot authorize a new Draft")
         carrier = DraftCarrier(spec=spec(), create_draft=refusing,
-                               release_by_tag=lambda: None)
+                               release_by_tag=lambda: None,
+                               verify_assets=self.verify_assets)
         with self.assertRaises(TransitionError):
             carrier.advance({}, {"step": "draft"}, before_write=lambda: None)
+
+    def test_a_draft_with_incomplete_assets_is_pending_work_not_verified(self):
+        # 2.0.122.0's Draft passed on its metadata while one asset was a stalled
+        # `starter` upload; publish-release.yml then failed at Reverify.
+        self.release = DRAFT
+        self.assets_complete = False
+        carrier = self.carrier()
+        self.assertEqual(carrier.observe({}, {"step": "draft"}).status, "pending")
+        self.assertEqual(self.verified_ids, [RELEASE_ID])
+
+        def repair(tag):
+            self.creations += 1
+            self.assets_complete = True
+        carrier.create_draft = repair
+        advanced = carrier.advance({}, {"step": "draft"}, before_write=lambda: None)
+        self.assertEqual(advanced.status, "verified")
+        self.assertEqual(self.creations, 1, "advance resumes create_draft to repair the assets")
+
+    def test_a_divergent_draft_is_a_named_conflict_with_no_write(self):
+        # Only an interrupted upload is repaired by create_draft; any other
+        # verification failure is a conflict that names its cause.
+        from tools.release.transitions import TransitionError
+        self.release = DRAFT
+
+        def divergent(release_id):
+            raise TransitionError("GitHub Release asset digest conflicts with the release plan")
+        carrier = DraftCarrier(spec=spec(), create_draft=self.create_draft,
+                               release_by_tag=self.release_by_tag, verify_assets=divergent)
+        observed = carrier.observe({}, {"step": "draft"})
+        self.assertEqual(observed.status, "conflict")
+        self.assertIn("digest conflicts with the release plan", observed.diagnostic)
+        guards = []
+        advanced = carrier.advance({}, {"step": "draft"}, before_write=lambda: guards.append(1))
+        self.assertEqual(advanced.status, "conflict")
+        self.assertEqual((self.creations, guards), (0, []), "a conflict is never retried as a write")
+
+    def test_an_unavailable_asset_read_is_unknown_and_never_repairs(self):
+        from tools.release.transitions import ReleaseReadUnavailable
+        self.release = DRAFT
+
+        def unavailable(release_id):
+            raise ReleaseReadUnavailable("GitHub Release asset download is unavailable")
+        carrier = DraftCarrier(spec=spec(), create_draft=self.create_draft,
+                               release_by_tag=self.release_by_tag, verify_assets=unavailable)
+        observed = carrier.observe({}, {"step": "draft"})
+        self.assertEqual(observed.status, "unknown")
+        self.assertIn("asset download is unavailable", observed.diagnostic)
+        self.assertEqual(carrier.advance({}, {"step": "draft"}, before_write=lambda: None).status,
+                         "unknown")
+        self.assertEqual(self.creations, 0, "an outage never triggers create_draft")
+
+    def test_an_outage_during_the_repair_is_unknown_with_its_cause(self):
+        from tools.release.transitions import ReleaseReadUnavailable
+        self.release = DRAFT
+        self.assets_complete = False
+
+        def outage(tag):
+            raise ReleaseReadUnavailable("GitHub Release asset inventory is unavailable")
+        carrier = DraftCarrier(spec=spec(), create_draft=outage,
+                               release_by_tag=self.release_by_tag, verify_assets=self.verify_assets)
+        advanced = carrier.advance({}, {"step": "draft"}, before_write=lambda: None)
+        self.assertEqual(advanced.status, "unknown")
+        self.assertIn("asset inventory is unavailable", advanced.diagnostic)
 
     def test_carrier_refuses_an_untrusted_composition(self):
         with self.assertRaises(DraftStepError):
             DraftCarrier(spec=spec(), create_draft=None,
-                         release_by_tag=lambda: None)
+                         release_by_tag=lambda: None, verify_assets=lambda i: None)
+        with self.assertRaises(DraftStepError):
+            DraftCarrier(spec=spec(), create_draft=lambda t: None,
+                         release_by_tag=lambda: None, verify_assets=None)
         with self.assertRaises(DraftStepError):
             DraftCarrier(spec=spec(**{"plan_sha256": "short"}), create_draft=lambda t: None,
-                         release_by_tag=lambda: None)
+                         release_by_tag=lambda: None, verify_assets=lambda i: None)
 
 
 if __name__ == "__main__":
