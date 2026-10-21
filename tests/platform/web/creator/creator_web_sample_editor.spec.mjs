@@ -2077,6 +2077,11 @@ for (const viewport of [{width: 1440, height: 900}, {width: 1280, height: 600},
         const [a, b] = boxes.map(value => value.rect);
         expect(a.right <= b.left || b.right <= a.left || a.bottom <= b.top || b.bottom <= a.top).toBe(true);
       }
+      evidence.assigned.deleteRow = await management.locator(".selected-pad-actions").evaluate(element => ({
+        rowWidth: element.clientWidth,
+        buttonWidth: element.querySelector("button").offsetWidth,
+      }));
+      expect(evidence.assigned.deleteRow.buttonWidth).toBe(evidence.assigned.deleteRow.rowWidth);
       // Independent approved RGB values apply to the visible faces, not text.
       expect(evidence.assigned.controls.slice(0, 5).map(value => value.faceFill)).toEqual([
         "rgb(242, 181, 132)", "rgb(221, 244, 120)", "rgb(182, 160, 236)",

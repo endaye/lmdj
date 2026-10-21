@@ -1,5 +1,48 @@
 # Sample Pad and Empty Pad interaction layout (#2226)
 
+## Current full-width Delete correction (2026-10-22)
+
+Concurrent integration #2462 delivered the thirteen-path Pad/Empty feature as
+`0e3f59a52a39715279980b0bbec4860f7a56a664` while this workstream verified
+its full-width follow-up. Retain that whole delivery and all of its plan
+history below. This follow-up now changes exactly three existing files:
+
+- `apps/creator-web/src/components/sample_pad_layout.css`.
+- `tests/platform/web/creator/creator_web_sample_editor.spec.mjs`.
+- This plan.
+
+The remaining defect is concrete: Delete inherits flex-end alignment inside
+a grid with an implicit auto track, so it shrinks to its text instead of the
+already documented full-width action. One explicit `minmax(0, 1fr)` column
+restores that width. Add one exact rendered local row/button-width comparison
+to each of the original six complete Pad journeys; retain every other leg.
+
+Retained negative: unchanged clean `28dbc051` package fails all six new width
+assertions (exit1,32.634s),70px versus336/226/544px. Corrected `117fc1cb` has
+complete Creator1933/types/dependencies/ownership77/Portal179 PASS and an
+official clean current-Vite package. All47 original ordinary browser journeys
+and both canonical WebKit refusal boundaries pass; all six exact row/button
+widths match, source/package/fixtures stay unchanged, and phone/desktop images
+are inspected. These receipts stay bound to117fc1cb, not a future commit.
+
+The normal merge reconciliation preserves the corrected product, every test,
+all other tracked files and all ten symlinks byte-for-byte from117fc1cb; only
+this plan changes. Verify that complete-tree difference before relying on
+retained functional receipts. Run current Portal/ownership/syntax before the
+normal merge commit, build/package the new clean head, require the entire
+ten-file distribution to match the verified117fc1cb distribution, then run
+all six complete Pad journeys again on that final head. Retain original
+trace/readback capsules. Independent current-head review, live conversations,
+conflicts and protection remain required before guarded squash of #2463.
+
+Version impact: compatible Creator Host PATCH debt is absorbed by existing
+MINOR/higher debt in #2237; no identity or persisted-format change.
+Documentation impact: none for current Portal pages: they already prescribe
+the full-width Delete action. This correction makes that existing fact true;
+this plan records the defect and proof. Full Portal verification is retained.
+COUNT-IN stays withdrawn by owner choice. Candidate/device/hearing acceptance,
+#2112/#2226, release/deployment/Channel and cleanup remain outside this fix.
+
 ## Task and authority
 
 One reviewable Task on `feat/creator-pad-empty-layout` in its isolated
