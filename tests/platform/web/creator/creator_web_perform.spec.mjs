@@ -2583,3 +2583,88 @@ test("live Pad masks prove two-Pad PCM, all-64 identity, recording, leave and re
   expect(replayed).toHaveLength(4);
   for (let index = 0; index < 4; index += 1) expect(replayed[index] / captured[index]).toBeCloseTo(1, 1);
 });
+
+
+test("real capture progress counts silent PCM, final WAV frames and only its current Session identity", async ({page,browserName},info) => {
+  test.skip(browserName!=="chromium");
+  test.setTimeout(180_000);
+  await observeMasterCaptureBatches(page);
+  await page.addInitScript(() => {
+    window.__captureProgressStarts=[];window.__captureProgressStops=[];
+    const NativeNode=window.AudioWorkletNode;
+    window.AudioWorkletNode=class extends NativeNode {
+      constructor(...args){
+        super(...args);
+        if(args[1]!=="lmdj-perform-master-tap")return;
+        this.port.addEventListener("message",({data})=>{
+          if(data?.type==="started")window.__captureProgressStarts.push(structuredClone(data));
+          if(data?.type==="stopped")window.__captureProgressStops.push(structuredClone(data));
+        });
+      }
+    };
+    const NativeContext=window.AudioContext;
+    window.AudioContext=class extends NativeContext {
+      constructor(...args){super(...args);window.__captureProgressContext=this;}
+    };
+  });
+  await importActivateAndPerform(page);
+  const read=()=>page.evaluate(()=>{
+    const value=window.lmdjWebRuntimeHost.session.performanceMasterCaptureProgress();
+    return {value,sampleRate:window.__captureProgressContext.sampleRate,
+      starts:window.__captureProgressStarts.filter(event=>event.generation===value.generation),
+      stops:window.__captureProgressStops.filter(event=>event.generation===value.generation),
+      batches:window.__performMasterBatchProof.filter(batch=>batch.generation===value.generation)};
+  });
+  const observations=[];
+  for(let index=0;index<2;index++) {
+    await beginRecording(page);
+    await expect.poll(async()=>{
+      const r=await read();return r.value.state==="available" && r.batches.filter(batch=>batch.peak===0).length>=2;
+    },{timeout:AUDIO_TRANSITION_TIMEOUT_MS,intervals:[20]}).toBe(true);
+    const active=await read();
+    expect(active.value.phase).toBe("recording");
+    expect(active.value.sampleRate).toBe(active.sampleRate);
+    expect(active.value.receivedFrames).toBe(active.batches.reduce((sum,batch)=>sum+batch.frames,0));
+    expect(active.starts).toHaveLength(1);
+    const actualBinding=active.starts[0].binding;
+    expect(active.value.binding).toEqual(actualBinding===null?null:{
+      controlEpoch:actualBinding.control_epoch,sessionId:actualBinding.session_id,
+      beginCommandId:actualBinding.begin_command_id});
+    if(actualBinding!==null){
+      for(const id of Object.values(active.value.binding))expect(id).toMatch(/^[0-9a-f-]{36}$/);
+    }
+    if(index)expect(active.value.captureId).not.toBe(observations[0].stopped.value.captureId);
+    await stopRecording(page);
+    const stopped=await read();
+    expect(stopped.value.state).toBe("available");
+    expect(stopped.value.phase).toBe("stopped");
+    expect(stopped.value.captureId).toBe(active.value.captureId);
+    expect(stopped.value.binding).toEqual(active.value.binding);
+    expect(stopped.value.droppedFrames).toBe(0);
+    expect(stopped.value.failure).toBeNull();
+    expect(stopped.value.receivedFrames).toBe(stopped.batches.reduce((sum,batch)=>sum+batch.frames,0));
+    expect(stopped.stops).toHaveLength(1);
+    expect(stopped.stops[0].finalSequence).toBe(stopped.batches.at(-1).sequence);
+    const wav=await exportPerformanceWav(page);const pcm=parsePcm16StereoWav(wav);
+    expect(stopped.value.receivedFrames).toBe(pcm.frames);
+    expect(stopped.value.sampleRate).toBe(wav.readUInt32LE(24));
+    expect(stopped.batches.filter(batch=>batch.peak===0).reduce((sum,batch)=>sum+batch.frames,0)).toBeGreaterThanOrEqual(9600);
+    observations.push({active,stopped,wav:{frames:pcm.frames,sampleRate:wav.readUInt32LE(24),byteLength:wav.byteLength,sha256:sha256(wav)}});
+    await page.getByRole("button",{name:"Discard Performance",exact:true}).click();
+    await expect(page.getByRole("status",{name:"Performance recording status"})).toContainText("idle",{timeout:PROJECT_TRANSITION_TIMEOUT_MS});
+    await showPerformPage(page,"Live");
+  }
+  const retired=await page.evaluate(async()=>{
+    const session=window.lmdjWebRuntimeHost.session;
+    await session.close();
+    return {cleanup:await session.waitForTerminalCleanup(),progress:session.performanceMasterCaptureProgress()};
+  });
+  expect(retired.cleanup).toBe(true);
+  expect(retired.progress).toEqual({state:"unavailable",reason:"closed"});
+  await page.reload();await openLocalProject(page);await activateAudio(page);await openPerform(page);
+  const reopened=await page.evaluate(()=>window.lmdjWebRuntimeHost.session.performanceMasterCaptureProgress());
+  expect(reopened).toEqual({state:"unavailable",reason:"idle"});
+  const path=info.outputPath("capture-progress-frames.json");
+  await writeFile(path,JSON.stringify({observations,retired,reopened},null,2));
+  await info.attach("real capture frames and Session identity",{path,contentType:"application/json"});
+});

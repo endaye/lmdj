@@ -11,7 +11,9 @@
 #include <optional>
 #include <span>
 #include <stdexcept>
+#include <stop_token>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include <cstring>
@@ -23,6 +25,7 @@
 #include <nlohmann/json.hpp>
 #include <picosha2.h>
 
+#include <lmdj/cooker/wav_metadata_inspector.hpp>
 #include <lmdj/domain/command_handler.hpp>
 #include <lmdj/foundation/artifact.hpp>
 #include <lmdj/foundation/json.hpp>
@@ -49,6 +52,10 @@ make_web_project_storage_platform_for_test(bool mounted);
 extern "C" int lmdj_opfs_append_flush_count();
 extern "C" int lmdj_opfs_immutable_write_count();
 extern "C" int lmdj_opfs_publication_max_chunk_bytes();
+extern "C" std::uint32_t lmdj_project_io_physical_writer_count();
+
+std::uintptr_t paint_unused_stack();
+nlohmann::json stack_report(std::uintptr_t painted_top);
 
 namespace {
 
@@ -1407,6 +1414,9 @@ nlohmann::json project_bundle_import(
       unavailable->byte_length(unavailable_path), "length query");
   require_mount_error(
       unavailable->read_complete(unavailable_path), "complete read");
+  const auto* range = dynamic_cast<const project_io::ProjectStorageRangeReader*>(unavailable.get());
+  require(range != nullptr, "unavailable platform lost its range capability");
+  require_mount_error(range->read_range(unavailable_path, 0, {}), "range read");
   require_mount_error(
       unavailable->create_immutable(unavailable_path, bytes("x")),
       "immutable creation");
@@ -1581,6 +1591,318 @@ nlohmann::json project_bundle_import(
   }
 }
 
+[[gnu::noinline]] nlohmann::json performance_scan_witness(
+    const std::shared_ptr<lmdj::project_io::ProjectStoragePlatform>& platform,
+    const std::filesystem::path& bundle) {
+  using namespace lmdj;
+  constexpr auto project_id = "00000000-0000-4000-8000-000000000001";
+  constexpr auto performance_id = "10000000-0000-4000-8000-000000000001";
+  const foundation::ArtifactRef artifact{
+      "d257cf3b0c9d53ca39e618938b660595fb3c80b8779c82f22b3a3075f04b4e55", "audio/wav", 131089};
+  constexpr std::array pattern{std::byte{97}, std::byte{98}, std::byte{0}, std::byte{255},
+                               std::byte{99}, std::byte{100}, std::byte{120}, std::byte{121}};
+  project_io::ProjectStore store{platform};
+  const auto phase = query("phase");
+  require(phase == "prepare" || phase == "inspect", "invalid Performance scan phase");
+  if (phase == "prepare") {
+    // Construct the Result directly on the heap: no ProjectState-sized return
+    // temporaries in this long-lived Web fixture frame.
+    auto initial = std::unique_ptr<Result<domain::ProjectState>>(new Result<domain::ProjectState>(
+        domain::create_project(foundation::ProjectId{project_id}, 120)));
+    require(initial->has_value(), "scan fixture initial Project failed");
+    initial->value().performances.emplace(domain::PerformanceId{performance_id},
+        domain::Performance{domain::PerformanceId{performance_id}, "recorded", 120, 0, artifact, {}});
+    success(store.create(bundle, initial->value()), "scan fixture Project create");
+    auto lease = value(platform->acquire_writer(bundle), "scan fixture seed lease");
+    std::vector<std::byte> payload(artifact.byte_length);
+    for (std::size_t i = 0; i < payload.size(); ++i) payload[i] = pattern[i % pattern.size()];
+    success(platform->create_immutable(bundle / "assets" / (artifact.sha256 + ".wav"), payload),
+            "scan fixture raw recording");
+    lease.reset();
+  }
+  require(lmdj_project_io_physical_writer_count() == 0, "scan fixture retained seed writer");
+  const auto writes_before = lmdj_opfs_immutable_write_count();
+  std::uint64_t bytes_seen = 0;
+  std::size_t calls = 0;
+  const project_io::PerformanceRecordingSelector selector{
+      foundation::ProjectId{project_id}, domain::PerformanceId{performance_id}, 0, artifact};
+  const auto verified = value(store.scan_performance_recording(bundle, selector, [&](auto input) {
+    require(lmdj_project_io_physical_writer_count() == 1, "scan lost physical writer custody");
+    require(!input.empty() && input.size() <= 65536, "scan exceeded its bounded window");
+    for (const auto byte : input) {
+      require(byte == pattern[bytes_seen % pattern.size()], "scan received incorrect recording byte");
+      ++bytes_seen;
+    }
+    ++calls;
+    return Result<void>::success();
+  }), "verified Performance recording scan");
+  require(bytes_seen == 131089 && calls == 3, "scan did not consume every recording window");
+  require(lmdj_project_io_physical_writer_count() == 0, "scan retained writer custody after return");
+  auto stale = selector;
+  stale.expected_revision = 1;
+  const auto refused = store.scan_performance_recording(bundle, stale, [](auto) {
+    throw std::runtime_error("stale recording selector reached consumer");
+    return Result<void>::success();
+  });
+  require(!refused.has_value() && refused.error().code == foundation::ErrorCode::revision_conflict,
+          "stale recording revision was accepted");
+  require(lmdj_project_io_physical_writer_count() == 0, "refusal retained writer custody");
+  require(lmdj_opfs_immutable_write_count() == writes_before, "read-only scan published Project bytes");
+  return {{"projectId", verified.project_id.value()}, {"performanceId", verified.performance_id.value()},
+          {"projectRevision", verified.project_revision}, {"recordingRevision", verified.recording_revision},
+          {"artifact", verified.artifact}, {"bytesSeen", bytes_seen}, {"consumerCalls", calls},
+          {"staleRevision", foundation::error_code_name(refused.error().code)},
+          {"writersAfter", lmdj_project_io_physical_writer_count()}, {"publishedWrites", 0}};
+}
+
+[[gnu::noinline]] nlohmann::json facade_recording_metadata_witness(
+    const std::shared_ptr<lmdj::project_io::ProjectStoragePlatform>& platform,
+    const std::filesystem::path& bundle, const lmdj::foundation::ArtifactRef& artifact) {
+  using namespace lmdj;
+  constexpr auto project_id = "00000000-0000-4000-8000-000000000001";
+  constexpr auto performance_id = "10000000-0000-4000-8000-000000000001";
+  facade::ApplicationConfig config{};
+  config.workspace_root = "/lmdj-workspace";
+  config.storage_platform = platform;
+  config.performance_replay_controller = facade::make_unavailable_performance_replay_controller();
+  auto application = std::make_unique<facade::Application>(std::move(config));
+  auto root = std::optional{value(application->acquire_project_writer(bundle), "metadata Control root writer")};
+  require(lmdj_project_io_physical_writer_count() == 1, "metadata Control root did not hold custody");
+  auto reader = application->make_performance_recording_metadata_reader();
+  application.reset(); // The detached reader must not borrow Application state.
+  const auto writes_before = lmdj_opfs_immutable_write_count();
+  struct State {
+    std::atomic<bool> exit_ready{false};
+    bool distinct = false, pre_cancelled = false;
+    std::string error;
+    nlohmann::json worker_stack;
+    std::optional<Result<facade::PerformanceRecordingRead>> result;
+  };
+  const auto state = std::make_shared<State>();
+  const auto control_thread = std::this_thread::get_id();
+  const facade::PerformanceRecordingMetadataRequest request{bundle, foundation::ProjectId{project_id},
+      domain::PerformanceId{performance_id}, 0, artifact};
+  std::thread worker([state, reader = std::move(reader), request, control_thread]() mutable {
+    const auto painted_top = paint_unused_stack();
+    try {
+      state->distinct = std::this_thread::get_id() != control_thread;
+      std::stop_source stopped;
+      stopped.request_stop();
+      const auto cancelled = reader->inspect(request, stopped.get_token());
+      state->pre_cancelled = cancelled.has_value() &&
+          std::holds_alternative<facade::PerformanceRecordingReadCancelled>(cancelled.value());
+      state->result.emplace(reader->inspect(request));
+    } catch (const std::exception& error) {
+      state->error = error.what();
+    } catch (...) {
+      state->error = "unknown metadata worker failure";
+    }
+    reader.reset(); // No worker-owned I/O or reader destruction after exit readiness.
+    state->worker_stack = stack_report(painted_top);
+    state->exit_ready.store(true, std::memory_order_release);
+  });
+  const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds{180};
+  while (!state->exit_ready.load(std::memory_order_acquire) &&
+      std::chrono::steady_clock::now() < deadline) emscripten_sleep(1);
+  if (!state->exit_ready.load(std::memory_order_acquire)) {
+    // All unfinished inputs and the reader are heap-owned. A timeout never
+    // claims cancellation, join or physical release of that worker.
+    worker.detach();
+    root.reset();
+    throw std::runtime_error("unfinished metadata worker; no exit or join witness");
+  }
+  worker.join();
+  require(state->error.empty(), state->error);
+  require(state->distinct && state->pre_cancelled && state->result.has_value(), "metadata worker proof missing");
+  require(lmdj_project_io_physical_writer_count() == 1, "metadata worker lost or retained Control custody");
+  root.reset();
+  require(lmdj_project_io_physical_writer_count() == 0, "metadata root retained physical custody");
+  require(lmdj_opfs_immutable_write_count() == writes_before, "metadata reader published Project bytes");
+  nlohmann::json report{{"requested", {{"projectId", project_id}, {"performanceId", performance_id},
+      {"projectRevision", 0}, {"artifact", artifact}}}, {"verification", nullptr},
+      {"metadata", nullptr}, {"failureCode", nullptr}, {"workerDistinct", state->distinct},
+      {"preCancelled", state->pre_cancelled}, {"applicationRetired", !application},
+      {"workerExitedBeforeJoin", true}, {"rootWritersDuring", 1}, {"writersAfter", 0}, {"publishedWrites", 0}};
+  report["workerStack"] = state->worker_stack;
+  const auto& result = *state->result;
+  if (!result.has_value()) {
+    require(result.error().code == foundation::ErrorCode::cook_failed &&
+        result.error().details.value("storage_condition", "") == project_io::kStorageConditionArtifactMismatch,
+        "metadata reader failed for an unexpected reason");
+    report["status"] = "artifact_mismatch";
+    report["failureCode"] = foundation::error_code_name(result.error().code);
+    return report;
+  }
+  const auto* metadata = std::get_if<facade::PerformanceRecordingMetadata>(&result.value());
+  require(metadata != nullptr, "uncancelled reader returned cancellation");
+  report["verification"] = {{"projectId", metadata->project_id.value()},
+      {"performanceId", metadata->performance_id.value()}, {"projectRevision", metadata->project_revision},
+      {"recordingRevision", metadata->recording_revision}, {"artifact", metadata->artifact}};
+  if (metadata->audio.has_value()) {
+    report["status"] = "verified";
+    report["metadata"] = {{"sampleRate", metadata->audio.value().sample_rate},
+        {"channels", metadata->audio.value().channels}, {"sourceFrames", metadata->audio.value().source_frames}};
+  } else {
+    report["status"] = "unsupported_audio";
+    report["failureCode"] = foundation::error_code_name(metadata->audio.error().code);
+  }
+  return report;
+}
+
+[[gnu::noinline]] nlohmann::json performance_wav_metadata_witness(
+    const std::shared_ptr<lmdj::project_io::ProjectStoragePlatform>& platform,
+    const std::filesystem::path& bundle, bool facade_reader = false) {
+  using namespace lmdj;
+  constexpr auto project_id = "00000000-0000-4000-8000-000000000001";
+  constexpr auto performance_id = "10000000-0000-4000-8000-000000000001";
+  const auto variant = query("variant");
+  const auto phase = query("phase");
+  require(variant == "valid" || variant == "unsupported" || variant == "mismatch",
+          "invalid WAV metadata variant");
+  require(phase == "prepare" || phase == "inspect", "invalid WAV metadata phase");
+  // Independent Python struct/hashlib oracle; the mismatch retains the valid
+  // reference but changes the very last PCM byte, after all header windows.
+  const foundation::ArtifactRef artifact{variant == "unsupported"
+      ? "62aedd330eea859b7e3725d842cf089a97177d8a0f2918ad0d151212230c9d19"
+      : "985ee1bbde8458eeb675cff7bb99b6bd61278b9646a127c7c39b1fb7634cb2d5",
+      "audio/wav", 192124};
+  project_io::ProjectStore store{platform};
+  if (phase == "prepare") {
+    auto initial = std::unique_ptr<Result<domain::ProjectState>>(new Result<domain::ProjectState>(
+        domain::create_project(foundation::ProjectId{project_id}, 120)));
+    require(initial->has_value(), "WAV fixture initial Project failed");
+    // Zero events: recorded silence still has real frames independent of replay.
+    initial->value().performances.emplace(domain::PerformanceId{performance_id},
+        domain::Performance{domain::PerformanceId{performance_id}, "silence", 120, 0, artifact, {}});
+    success(store.create(bundle, initial->value()), "WAV fixture Project create");
+    auto lease = value(platform->acquire_writer(bundle), "WAV fixture seed lease");
+    std::vector<std::byte> payload(artifact.byte_length);
+    const auto tag = [&](std::size_t at, std::string_view text) {
+      for (std::size_t i = 0; i < text.size(); ++i) payload[at + i] = static_cast<std::byte>(text[i]);
+    };
+    const auto number = [&](std::size_t at, std::uint32_t n, unsigned width) {
+      for (unsigned i = 0; i < width; ++i) payload[at + i] = static_cast<std::byte>(n >> (i * 8));
+    };
+    const std::uint32_t rate = variant == "unsupported" ? 32000 : 48000;
+    tag(0, "RIFF"); number(4, 192116, 4); tag(8, "WAVE");
+    tag(12, "fmt "); number(16, 16, 4); number(20, 1, 2); number(22, 2, 2);
+    number(24, rate, 4); number(28, rate * 4, 4); number(32, 4, 2); number(34, 16, 2);
+    tag(36, "JUNK"); number(40, 3, 4);
+    payload[44] = std::byte{1}; payload[45] = std::byte{2}; payload[46] = std::byte{3};
+    payload[47] = std::byte{0xab}; tag(48, "data"); number(52, 192068, 4);
+    if (variant == "mismatch") payload.back() = std::byte{1};
+    success(platform->create_immutable(bundle / "assets" / (artifact.sha256 + ".wav"), payload),
+            "WAV fixture raw recording");
+    lease.reset();
+  }
+  require(lmdj_project_io_physical_writer_count() == 0, "WAV fixture retained seed writer");
+  if (facade_reader) return facade_recording_metadata_witness(platform, bundle, artifact);
+  const auto writes_before = lmdj_opfs_immutable_write_count();
+  cooker::WavMetadataInspector inspector{artifact.byte_length};
+  std::optional<foundation::Error> format_error;
+  std::uint64_t bytes_seen = 0;
+  std::size_t calls = 0;
+  const project_io::PerformanceRecordingSelector selector{
+      foundation::ProjectId{project_id}, domain::PerformanceId{performance_id}, 0, artifact};
+  const auto scanned = store.scan_performance_recording(bundle, selector, [&](auto input) {
+    require(lmdj_project_io_physical_writer_count() == 1, "WAV scan lost physical writer custody");
+    require(!input.empty() && input.size() <= 65536, "WAV scan exceeded bounded window");
+    const auto fed = inspector.feed(input);
+    if (!fed.has_value() && !format_error) format_error = fed.error();
+    bytes_seen += input.size();
+    ++calls;
+    // A format refusal must not stop the independent full Artifact hash.
+    return Result<void>::success();
+  });
+  require(bytes_seen == 192124 && calls == 3, "WAV scan omitted a window");
+  require(lmdj_project_io_physical_writer_count() == 0, "WAV scan retained physical custody");
+  require(lmdj_opfs_immutable_write_count() == writes_before, "WAV inspection wrote Project bytes");
+  nlohmann::json report{{"requested", {{"projectId", project_id}, {"performanceId", performance_id},
+      {"projectRevision", 0}, {"artifact", artifact}}}, {"verification", nullptr},
+      {"metadata", nullptr}, {"failureCode", nullptr}, {"bytesSeen", bytes_seen}, {"consumerCalls", calls},
+      {"writersAfter", lmdj_project_io_physical_writer_count()}, {"publishedWrites", 0}};
+  if (!scanned.has_value()) {
+    require(scanned.error().code == foundation::ErrorCode::cook_failed &&
+        scanned.error().details.value("storage_condition", "") == project_io::kStorageConditionArtifactMismatch,
+        "WAV scan failed for an unexpected reason");
+    report["status"] = "artifact_mismatch";
+    report["failureCode"] = foundation::error_code_name(scanned.error().code);
+    return report; // Never publish the provisional parser state on hash failure.
+  }
+  const auto& receipt = scanned.value();
+  report["verification"] = {{"projectId", receipt.project_id.value()},
+      {"performanceId", receipt.performance_id.value()}, {"projectRevision", receipt.project_revision},
+      {"recordingRevision", receipt.recording_revision}, {"artifact", receipt.artifact}};
+  const auto parsed = inspector.finish();
+  if (!parsed.has_value() && !format_error) format_error = parsed.error();
+  if (format_error) {
+    require(format_error->code == foundation::ErrorCode::unsupported_audio, "unexpected format error");
+    report["status"] = "unsupported_audio";
+    report["failureCode"] = foundation::error_code_name(format_error->code);
+  } else {
+    report["status"] = "verified";
+    report["metadata"] = {{"sampleRate", parsed.value().sample_rate}, {"channels", parsed.value().channels},
+        {"sourceFrames", parsed.value().source_frames}};
+  }
+  return report;
+}
+
+[[gnu::noinline]] nlohmann::json bounded_range_witness(
+    const std::shared_ptr<lmdj::project_io::ProjectStoragePlatform>& platform,
+    const std::filesystem::path& bundle) {
+  using namespace lmdj;
+  const auto phase = query("phase");
+  require(phase == "prepare" || phase == "inspect", "invalid range witness phase");
+  const auto path = bundle / "raw.bin";
+  if (phase == "prepare") {
+    success(platform->ensure_directory(bundle), "range fixture directory");
+    auto lease = value(platform->acquire_writer(bundle), "range fixture writer");
+    require(lmdj_project_io_physical_writer_count() == 1, "range seed writer was not held");
+    const std::array data{std::byte{'a'}, std::byte{'b'}, std::byte{0}, std::byte{0xff},
+                          std::byte{'c'}, std::byte{'d'}, std::byte{'x'}, std::byte{'y'}};
+    success(platform->create_immutable(path, data), "range fixture binary seed");
+    lease.reset();
+  }
+  const auto before = lmdj_project_io_physical_writer_count();
+  require(before == 0, "range witness must not hold a writer");
+  const auto* range = dynamic_cast<const project_io::ProjectStorageRangeReader*>(platform.get());
+  require(range != nullptr, "Web bounded range capability missing");
+  std::array<std::byte, 6> output;
+  output.fill(std::byte{0x55});
+  const auto count = value(range->read_range(path, 2, std::span{output}.subspan(1, 4)),
+                           "range binary window");
+  require(count == 4 && output == (std::array{std::byte{0x55}, std::byte{0}, std::byte{0xff},
+      std::byte{'c'}, std::byte{'d'}, std::byte{0x55}}), "range binary window or canary mismatch");
+  const auto window = output;
+  output.fill(std::byte{0x55});
+  const auto tail = value(range->read_range(path, 7, std::span{output}.subspan(1, 4)),
+                          "range tail window");
+  require(tail == 1 && output == (std::array{std::byte{0x55}, std::byte{'y'}, std::byte{0x55},
+      std::byte{0x55}, std::byte{0x55}, std::byte{0x55}}), "range short tail changed unfilled bytes");
+  const auto tail_bytes = output;
+  for (const auto offset : std::array<std::uint64_t, 4>{8, 9, (1ULL << 32) + 1, UINT64_MAX}) {
+    require(value(range->read_range(path, offset, output), "range EOF") == 0,
+            "range EOF or high offset wrapped");
+    require(output == tail_bytes, "range EOF modified destination");
+  }
+  const auto empty = value(range->read_range(path, 0, {}), "range empty destination");
+  require(empty == 0, "range empty destination returned bytes");
+  const auto missing = range->read_range(bundle / "missing.bin", 0, {});
+  require(!missing.has_value() && missing.error().code == foundation::ErrorCode::not_found,
+          "range empty destination bypassed missing-file validation");
+  const auto after = lmdj_project_io_physical_writer_count();
+  require(after == before, "range acquired physical writer authority");
+  const auto integers = [](const auto& input) {
+    std::vector<unsigned int> result;
+    for (const auto byte : input) result.push_back(std::to_integer<unsigned int>(byte));
+    return result;
+  };
+  return {{"windowCount", count}, {"window", integers(window)},
+          {"tailCount", tail}, {"tail", integers(tail_bytes)},
+          {"eofWindows", 4}, {"emptyCount", empty}, {"missingErrorCode", "NOT_FOUND"},
+          {"writersBefore", before}, {"writersAfter", after}};
+}
+
 [[gnu::noinline]] nlohmann::json run_storage_fault_action() {
   using namespace lmdj;
   auto platform = project_io::make_web_project_storage_platform();
@@ -1591,6 +1913,18 @@ nlohmann::json project_bundle_import(
     require(!requested_bundle.empty(), "fault bundle is missing");
     const auto fault_bundle = std::filesystem::path{"/lmdj-workspace"} /
         (requested_bundle + ".lmdj");
+    if (action == "performance_facade_metadata") {
+      return {{"complete", true}, {"result", performance_wav_metadata_witness(platform, fault_bundle, true)}};
+    }
+    if (action == "performance_wav_metadata") {
+      return {{"complete", true}, {"result", performance_wav_metadata_witness(platform, fault_bundle)}};
+    }
+    if (action == "performance_artifact_scan") {
+      return {{"complete", true}, {"result", performance_scan_witness(platform, fault_bundle)}};
+    }
+    if (action == "bounded_range_read") {
+      return {{"complete", true}, {"result", bounded_range_witness(platform, fault_bundle)}};
+    }
     if (action == "cross_realm_writer") {
       return {{"complete", true}, {"result", cross_realm_writer_witness(platform, fault_bundle)}};
     }

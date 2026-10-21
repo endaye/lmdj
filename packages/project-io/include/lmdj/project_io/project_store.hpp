@@ -3,6 +3,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
+#include <functional>
 #include <memory>
 #include <optional>
 #include <span>
@@ -91,6 +92,30 @@ struct PerformanceMutationReceipt {
 
   bool operator==(const PerformanceMutationReceipt&) const = default;
 };
+
+struct PerformanceRecordingSelector {
+  foundation::ProjectId project_id;
+  domain::PerformanceId performance_id;
+  std::uint64_t expected_revision{};
+  foundation::ArtifactRef artifact;
+};
+
+struct PerformanceRecordingVerification {
+  foundation::ProjectId project_id;
+  domain::PerformanceId performance_id;
+  std::uint64_t project_revision{};
+  std::uint64_t recording_revision{};
+  foundation::ArtifactRef artifact;
+
+  bool operator==(const PerformanceRecordingVerification&) const = default;
+};
+
+// Synchronous provisional bytes, valid only during this callback. Consumers
+// must not retain the span, reenter the Store or mutate the Project. Discard
+// all consumer state if the enclosing scan fails: only its final receipt proves
+// the complete Artifact digest/length and committed owner/revision/binding.
+using ArtifactChunkConsumer = std::function<foundation::Result<void>(
+    std::span<const std::byte>)>;
 
 struct PerformanceFlushExecution {
   PerformanceFlushIdentity identity;
@@ -423,6 +448,19 @@ class ProjectStore {
   foundation::Result<std::vector<std::byte>> read_artifact(
       const std::filesystem::path& bundle,
       const foundation::ArtifactRef& artifact) const;
+
+  // Scans only the selected committed recording under one owner lease, without
+  // authoring recovery/scavenging, unrelated audio reads or a file-sized allocation.
+  // Requires ProjectStorageRangeReader; no whole-read fallback or retry. The
+  // original vector-reader size limit does not apply. This verifies raw bytes,
+  // not WAV encoding, recording completeness or Performance elapsed time.
+  // Bundle/selector are snapshotted at entry; callbacks cannot retarget a call
+  // by changing the caller's request objects through another alias.
+  foundation::Result<PerformanceRecordingVerification>
+  scan_performance_recording(
+      const std::filesystem::path& bundle,
+      const PerformanceRecordingSelector& selector,
+      const ArtifactChunkConsumer& consumer) const;
 
  private:
   struct PerformanceOwnerLocks;

@@ -27,7 +27,60 @@ Facade 提交 Project、Bundle stream、bounded Sample bytes 或 Sequence flush�
 `ProjectBundleTransfer::duplicate` 在调用方提供的新 Project ID 下复制一个本地 Project：全程持有源与目标 writer lease（其他进程或标签页持有任一方时返回 `project_busy`），源有 active Sequence 或 Performance Journal 时以 `sequence_session_active` / `performance_session_active` 拒绝；随后读取已提交 Project Truth，把每个被引用的 Asset 与 Performance 录音 Artifact 按 SHA-256 与长度校验后复制到 staging，以 revision 0 写出全新 history 并完整重载验证，最后在同一目标 lease 下 `publish_directory_if_absent`。副本不携带源 history、sealed recovery 或未引用 blob；Lineage 中的源 revision 原样保留为溯源。拒绝、失败或取消都不发布任何目录，staging 由同一次调用或启动清理删除。
 ## 5. API 与 Artifact 边界
 只持久化 Project Truth 与原始 WAV Artifact；`lmdj.project-bundle.v1` 只定义 transfer envelope；Workspace waveform cache 可丢弃重建，Runtime Snapshot 明确禁止持久化为创作真相。
+
+`ProjectStorageRangeReader` 是可选 C++ companion，不改变既有 storage platform
+vtable。`read_range(path, uint64 offset, span<byte>)` 返回实际写入的前缀长度，最多为
+调用方 buffer 大小；短尾、EOF 和空 buffer 保留未写部分，空读仍验证文件路径。
+Native 复用安全打开与共享文件锁，在 `pread` 后复核 metadata；OPFS 每次取得新的
+File，只读取 `slice` 窗口。每次调用独立，失败后的 buffer 内容不可信，没有跨调用快照。
+平台所有者必须在使用 companion 期间保持存活；缺少能力时没有整文件读取 fallback。
+
+这些是未校验的原始字节，不证明 Artifact digest、Performance 引用、writer authority
+或耐久性。已保存录音须通过下述 ProjectStore 扫描校验其 owner 和完整输入；WAV
+元数据可由 Project Cooker 的有界流式检查器解析；Facade/Host 查询仍属于后续任务，
+Host 继续只使用 Application Facade。
+
+`ProjectStore::scan_performance_recording` 在既有 history guard 和单次 writer lease
+内核对 Project ID、Performance ID、预期 Project revision 与精确录音 ArtifactRef，
+入口固定 bundle/selector 快照，回调改写调用方请求对象也不会改变本次读取身份；
+只扫描该录音；不执行 authoring recovery/scavenge，也不读取其他音频。它用64KiB heap
+buffer、连续 uint64 offset、完整 SHA-256、前后长度和 EOF 检查验证全部输入，结束时
+重新核对 committed owner/revision/binding。既有 vector reader 的64MiB限制不适用于
+这项有界扫描，原 reader 行为保留。
+
+同步 consumer 收到的是临时、未校验 span，不能保留或用于重入/修改 Project；失败后必须
+丢弃 consumer 状态。只有最终 `PerformanceRecordingVerification` 回执证明完整输入
+匹配该 owner 下的 Artifact，回执携带 Project/recording revision 和精确引用。缺少
+range companion 时返回 typed I/O unavailable，不退回全量读取。这项扫描不证明 WAV
+编码、录音完整性或演出 elapsed。consumer 可将窗口交给 Project Cooker 的
+`WavMetadataInspector`，保留格式错误并继续完整 hash；最终回执成功后才发布元数据
+或 unsupported encoding。摘要/owner 校验失败须丢弃 provisional parser 状态。
+真实 OPFS 测试分别验证有效静音、已校验但不支持的编码和尾部摘要损坏，并在两次
+实际重开后核对完整身份与元数据。Facade/SDK 异步查询与 owner retirement 已实现；实际 Take Host consumer 仍待。
+
+保存草稿／绑定 Performance 录音时，原有 writer lease 与 history guard 内的
+`verify_managed_wav_artifact` 也在 Native／OPFS 上使用64KiB heap 窗口，逐块校验
+完整 SHA-256、前后长度和 EOF，避免 OPFS 整文件分配后再复制成 C++ vector。
+短读继续推进；零进展、错误计数、读取失败、文件增长／截断或摘要不同均保留原有
+`performance_recording_artifact_unverified` 拒绝，不发布录音引用，停止草稿可重试。
+没有 range companion 的旧自定义平台保留既有 complete-read 行为；已提供 companion
+的读取失败不会回退整文件读取。这只验证原始 Artifact 身份，不验证 WAV 编码、
+录音完整性或演出总时长，也不改变 Save／bind 的幂等与 writer 生命周期。
+
 ## 6. 状态、错误与生命周期
+本地 `list_local_projects` 的完整 inventory 摘要使用64KiB heap 窗口、前后长度和
+EOF 检查。history guard 覆盖 Project load 与全部 hash；能取得 writer 时持有到扫描
+结束。foreign writer 繁忙时保留 `ProjectStore::load` 原有的已提交只读读取，不能因此
+恢复、修改或取得对方的 writer 权限，也不承诺跨 owner 的原子文件系统 snapshot。
+读取失败或观察到长度／EOF 变化仍拒绝，不发布部分摘要。单个已打开工程不会仅因
+其 writer 被占用而让整个列表失败；显式打开该繁忙工程仍保留原 `project_busy` 拒绝。
+它保留原有 summary keys 和 canonical digest；生产 Native／OPFS 可发现包含长录音
+的本地工程，不在发现阶段套用 Bundle 传输的单文件／总 payload 字节限额。
+路径、条目数量和整数溢出检查保留；读取失败不发布部分摘要，已有 range reader
+失败不回退整文件读取。旧平台的小文件 complete-read 路径保留，大文件缺少有界
+能力时在分配前明确拒绝。此发现回执不授权传输：Bundle 导入、commit 与复制仍保留
+原64MiB／512MiB 限额，未改变格式或持久化 Contract。
+
 故障矩阵验证验证、取消、超时与发布中断恢复；typed error 区分输入、平台、busy 与提交失败。
 ## 7. 产品使用方
 Application Facade 使用；Host 不直接解析 bundle。

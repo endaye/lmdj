@@ -25,6 +25,39 @@ RPC 后面。新 admission、普通 Host 操作和不属于本 Session 的 ticke
 
 ## 1. 目的与非职责
 为浏览器 Host 提供共享 Runtime Session、输入 adapter、Control bridge、manifest gate 与 Web Audio 接线；不拥有 Creator UI、诊断 UI、Project Truth 或产品专属身份。
+
+### 已保存录音的异步 metadata 查询
+
+`performance.recording.metadata` 是独立只读 operation；请求固定 Project/Performance
+ID、expected revision 和已绑定的完整 WAV ArtifactRef，bundle path 由 Runtime 的
+retained owner 提供。旧 list/inspect、录制、保存及 Replay 的 exact-key shapes 保留。
+Runtime 从公共 Application 工厂取得 reader，再把 reader 与不可变请求交给独立 worker；
+worker 不捕获 Runtime/Application、Engine 或 live AuthoringHistory，不阻塞串行 Control。
+
+bridge 保留原16槽 RPC 中的 RequestId 与原30秒 absolute deadline，并在 dispatch 外
+以短续接观察实际结果。最多16个 query owner；取消但尚未返回的 worker 仍占位置。
+成功返回精确 Project/recording revision、ArtifactRef，以及 WAV sample_rate/channels/
+source_frames 或完整 raw verification 后的 UNSUPPORTED_AUDIO。摘要不符是外层
+COOK_FAILED，其闭合的 `storage_condition: artifact_mismatch` 可公开；路径、任意
+底层错误文字仍被过滤。缺少有界能力的 IO_ERROR 可带闭合的 bounded_read_unavailable。
+
+`queryPerformanceRecordingMetadata(request, {signal})` 是 SDK 的 additive API。
+它不占用 Host/Project action tail，完整对照原请求的 owner/revision/ref 后才返回冻结值。
+独立 metadata 队列至多16个 observer：只有1条 Native RPC 在途，另15条有界等待，
+避免读取一组 Takes 时占满原 Control RPC 槽。等待计入原30秒预算；等待项取消或过期
+会在 Native admission 前移除，超额明确返回 WEB_RUNTIME_RESOURCE_LIMIT。
+调用方取消、Project create/open（包括重新打开同一 Project）、安全清理和 close
+会退役旧 observer；SDK 即使收到格式正确的迟到结果也拒绝。实际 Take consumer
+仍须将结果与其当前 owner/revision/ref 对照，不能把旧回执当成所有后续 revision 的事实。
+
+observer 取消与物理 worker 退出是两个边界。响应发布和取消通过原 RPC atomic cell
+决定赢家；取消在 ready result 组装期间胜出时不能发布 metadata。取消只能请求 stop，
+不能中断正在运行的平台调用。即使已返回取消/close，正式 Module disposal 仍需等
+reader 在 worker 析构、实际线程 join，再通过原 Pattern/audio/RPC 释放门禁。
+单纯 Native 直接析构的 heap-owned detach 不声称资源释放成功。
+
+这些事实不推断 capture 完整性、演出 elapsed 或 Replay 分母。无 WAV 沿用既有 null
+binding；实际 Take 界面和完整 U08b/U08c 仍由后续 consumer Task 交付。
 ## 2. 当前实现状态
 Creator Web 与诊断 Web Runtime Host 共用 Platform 和同一 Wasm Runtime。Platform 除 Sample surface 外，还桥接 revision-bound `sample.quota`、Sequence begin/event/flush/stop/next-Bar switch/status/settings/recovery，以及 Stage 10 的 Pattern Slot assign/clear/move 与整套 Performance 操作；当前 source 在 accepted event 后读取 Facade typed overlay projection，发布 committed snapshot + overlay；active-session BPM 更新保留同一 overlay/boundary，owner-loss seal 与 flush/Stop 发布 clean committed view，Stop publication failure 可由 exact replay 恢复。若 owner-loss clean publication 自身失败，Host 使用已安装 quiescence contract 停止并清空 Runtime Pattern 后才释放 owner。pointer、keyboard、MIDI admission 统一使用 Audio Runtime frame clock 与单调 `input_sequence`，JavaScript 不计算 musical time。本版新增 Platform 自有的 master tap 与录制通道。`web/performance_master_tap_worklet.js` 是注册为 `lmdj-perform-master-tap` 的 AudioWorklet processor：它把 master bus 直通到监听 gain，同时按 4800 帧成批向控制侧投递。监听 gain 由 Session 持有，最后连接物理输出；`monitorVolume`/`setMonitorVolume` 使用 0–100 的线性百分比，激活前即设置初值，运行中以 20 ms ramp 平滑变化。`monitorDestination` 让 Host 的非录制声音接入同一监听路径。tap 初始化失败或 processorerror 后，Core 输出仍恢复到同一 gain；重复恢复不叠加连接，跨 context 目的地拒绝。gain 不改变上游录制批次，也不写入 Project 或 Undo history；终止时断开并拒绝修改。`web/performance_master_capture.mjs` 是 tap 消息的唯一消费者，先分流独立 meter 消息，再对 capture 消息做精确键校验：批次为 `{type:"batch", channels:[Float32Array, Float32Array], generation, sequence}`，两个声道等长且不超过 `MAX_BATCH_FRAMES = 4800`，`sequence` 必须严格递增一格；停止确认为 `{type:"stopped", finalSequence, generation}`，失败为 `{type:"failed", reason:"post-message-failed", droppedFrames, generation}`；停止确认的等待上限是 `STOP_ACK_TIMEOUT_MS = 30000`，超时按失败结算。generation 不匹配的消息一律丢弃，Host 无法用陈旧 generation 复活已结束的录制。
 
@@ -743,8 +776,8 @@ Session 以真实 audio clock 拒绝超过 250 ms 的窗口或末帧年龄，并
 不安全时钟、tap 不可用与 processorerror 都明确返回 unavailable。恢复只有在
 匹配的 native voice-started receipt 进入 running 后才分配新 owner；旧包收到
 自己的 ACK，但不能复活新读数。meter 的独立消息和 ACK 不改变 capture 的
-`generation`、`sequence`、PCM、停止确认或失败处理。既有 capture start 尚未提供
-applied ACK，meter 包不能作为 capture-ready 证据。
+`generation`、`sequence`、PCM、停止确认或失败处理。capture-ready 仍由既有严格
+匹配的 `started` ACK 决定，meter 包不能充作 capture-ready 证据。
 
 最低层回归为三份 tap/capture/Runtime Session Node 套件；独立 packaged Creator
 旅程覆盖真实 PCM、FX、监听静音、click 隔离、capture 和生命周期，派生完整分发
@@ -756,3 +789,28 @@ Real tap render failures are accepted through both `processorerror` and the
 `error` ErrorEvent used by the pinned Chromium. Both enter the same idempotent
 recovery: revoke the measurement, settle capture and reconnect the existing
 monitor path once. A late meter packet cannot restore the failed tap.
+
+
+## Performance capture progress
+
+独立的 `PerformanceMasterCaptureProgressSession` 提供
+`session.performanceMasterCaptureProgress()`，同步只读返回同一真实 master tap
+的 `captureId`、generation、begin binding、实际 AudioContext `sampleRate`、
+`receivedFrames`、phase、drop 与失败原因。只有通过原 started ACK、generation、
+连续 sequence 和声道校验的已投递 PCM 才累计；静音也计帧，尚未投递的部分或
+延迟回调不补数。Stop 的最后 partial batch 计入后，只有 exact finalSequence
+确认才进入 stopped。读数不发送 RPC、不读音频时钟、不新增 I/O、计时器或录制 owner。
+
+这是独立的可选能力，原配置、capture `{stop}` 句柄及所有 Worklet/Facade 回执键
+保持不变。缺少新能力、实际采样率或 passive identity 时只令进度 unavailable，
+不拒绝原录音。协议缺口、Stop 超时、processor failure 的丢帧量未知时为 null；
+只在实际 Worklet failure 明确报告时给出已知 droppedFrames。这里的 phase/drop/failure
+只描述 tap→SDK 传输，不涵盖 Host queue/writer 的失败或丢帧。失败时的 received
+仍只描述验证过的 PCM，不能与未知 loss 相加重建完整录音。
+
+返回对象与 binding 冻结；新 capture 的 identity 和计数重新开始。停止的只读值
+保留到下一次 capture start 或 tap/Session 关闭，旧 getter 在关闭后不能读取新 owner。
+这些是接收音频事实，不是 durable WAV、保存完整性、Performance 总时长或 Replay
+时钟。已保存 Artifact 的有界验证 metadata 已由独立 Facade/SDK 前置交付；
+Writer/queue 的 durable prefix 与 Creator Recording/Takes 消费仍由 #2135 后续
+Task 交付。本接口不修改 Project 或持久化格式，也不替代已交付的 metadata。

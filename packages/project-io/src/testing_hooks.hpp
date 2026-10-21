@@ -35,6 +35,7 @@ enum class FaultPoint {
   sequence_journal_completion,
   sequence_journal_deletion,
   complete_read,
+  range_read_complete,
   journal_layout_checked,
   journal_layout_manifest_locked,
 };

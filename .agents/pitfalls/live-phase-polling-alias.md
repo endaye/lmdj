@@ -9,6 +9,9 @@ recurrences:
   - date: 2026-10-18
     occurrence: https://github.com/endaye/lmdj/issues/2231
     observed_by: Codex primary
+  - date: 2026-10-21
+    occurrence: https://github.com/endaye/lmdj/pull/2384
+    observed_by: Codex primary
 exit: none
 ---
 
@@ -57,3 +60,17 @@ the period/window/request-cost judgment into the formal verification skill.
 Keep this entry open until that mechanism actually lands. No deterministic
 generic cadence gate is claimed. Original failures and all control traces
 remain retained; a later pass does not erase the missed-window evidence.
+
+## Stereo one-shot observation recurrence
+
+During #2384 main integration, both initial signal predicates failed with the
+default backoff. The retained trace sampled actual left-only output at context
+14.448s and right-only output at 15.456s; the second journey sampled left-only
+at 14.005333s and a decaying left with full right at 15.013333s. The two
+one-second voices start asynchronously, so their shared steady interval can
+fall between those one-second polls. Native input latency remains separately
+under investigation in #2395; two unchanged-package passes do not explain it.
+The signal observer now uses the existing 20ms meter-observation cadence with
+the same 35s deadline, exact Native start identities, 50ms steady bound and
+literal PCM assertions. Both complete journeys passed. Keep #2382 as the
+existing escalation and retain all failures; no environment cause is claimed.

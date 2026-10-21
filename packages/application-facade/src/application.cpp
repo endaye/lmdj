@@ -11991,6 +11991,12 @@ Application::acquire_project_writer(
   }
 }
 
+std::unique_ptr<PerformanceRecordingMetadataReader>
+Application::make_performance_recording_metadata_reader() const {
+  return std::unique_ptr<PerformanceRecordingMetadataReader>(
+      new PerformanceRecordingMetadataReader(impl_->storage_platform));
+}
+
 std::unique_ptr<PatternTransportController>
 Application::make_pattern_transport_controller(
     PatternTransportAudioPort& audio, PatternTransportControllerConfig config) {

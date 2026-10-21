@@ -6,6 +6,105 @@ import {webcrypto} from 'node:crypto';
 
 const source = await readFile(new URL('../../../../packages/project-io/src/web/library_opfs_storage.js', import.meta.url), 'utf8');
 
+function rangePlatform(getFile) {
+  const library = {};
+  const context = {LibraryManager: {library}, mergeInto: Object.assign,
+    DOMException, TextEncoder, UTF8ToString: value => value,
+    HEAPU8: new Uint8Array(32).fill(0x55),
+    _malloc() {assert.fail('range reads must not allocate a complete Wasm file');},
+    setValue() {assert.fail('range reads return their count directly');},
+    Asyncify: {State: {Normal: 0}, state: 0, currData: 0,
+      handleAsync(work) {return work();}}};
+  runInNewContext(source, context);
+  context.LmdjOpfs = library.$LmdjOpfs;
+  context.LmdjOpfs.root = {
+    async getDirectoryHandle(name, options) {assert.equal(options.create, false); return this;},
+    async getFileHandle() {return {getFile};},
+  };
+  assert.equal(typeof library.lmdj_opfs_read_range, 'function', 'bounded range entry must exist');
+  return {context, read: (offsetLow, offsetHigh, capacity, path = '/lmdj-workspace/raw.bin') =>
+    library.lmdj_opfs_read_range(path, path.length, offsetLow, offsetHigh, 4, capacity)};
+}
+
+test('range read copies only the requested binary Blob window', async () => {
+  const file = new File([new Uint8Array([97, 98, 0, 255, 99, 100, 120, 121])], 'raw.bin');
+  const windows = [];
+  const fixture = rangePlatform(async () => ({size: file.size,
+    arrayBuffer() {assert.fail('whole File.arrayBuffer is forbidden');},
+    slice(start, end) {windows.push([start, end]); return file.slice(start, end);}}));
+  assert.equal(await fixture.read(2, 0, 4), 4);
+  assert.deepEqual(windows, [[2, 6]]);
+  assert.deepEqual(Array.from(fixture.context.HEAPU8.slice(3, 9)), [85, 0, 255, 99, 100, 85]);
+});
+
+test('range tail leaves the unfilled buffer and EOF windows untouched', async () => {
+  const file = new File(['abcd'], 'raw.bin');
+  const windows = [];
+  const fixture = rangePlatform(async () => ({size: file.size,
+    slice(start, end) {windows.push([start, end]); return file.slice(start, end);}}));
+  assert.equal(await fixture.read(3, 0, 5), 1);
+  assert.deepEqual(Array.from(fixture.context.HEAPU8.slice(3, 10)), [85, 100, 85, 85, 85, 85, 85]);
+  for (const [low, high] of [[4, 0], [5, 0], [1, 1], [-1, -1]]) {
+    assert.equal(await fixture.read(low, high, 5), 0);
+  }
+  assert.equal(await fixture.read(0, 0, 0), 0);
+  assert.deepEqual(windows, [[3, 4]]);
+});
+
+test('range offsets above 4GiB preserve both unsigned words', async () => {
+  const windows = [];
+  const fixture = rangePlatform(async () => ({size: 2 ** 32 + 16,
+    slice(start, end) {windows.push([start, end]); return new Blob([new Uint8Array([7, 0, 255])]);}}));
+  assert.equal(await fixture.read(3, 1, 3), 3);
+  assert.deepEqual(windows, [[4294967299, 4294967302]]);
+  assert.deepEqual(Array.from(fixture.context.HEAPU8.slice(3, 8)), [85, 7, 0, 255, 85]);
+  assert.equal(await fixture.read(-1, -1, 3), 0);
+  assert.equal(windows.length, 1);
+});
+
+test('range reads resolve a fresh File for each call', async () => {
+  let content = 'abcd';
+  let snapshots = 0;
+  const fixture = rangePlatform(async () => {snapshots += 1; return new File([content], 'raw.bin');});
+  assert.equal(await fixture.read(1, 0, 2), 2);
+  assert.deepEqual(Array.from(fixture.context.HEAPU8.slice(4, 6)), [98, 99]);
+  content = 'wxyz';
+  assert.equal(await fixture.read(1, 0, 2), 2);
+  assert.deepEqual(Array.from(fixture.context.HEAPU8.slice(4, 6)), [120, 121]);
+  assert.equal(snapshots, 2);
+});
+
+test('range empty and nonempty reads preserve path and I/O failures', async () => {
+  for (const [name, status] of [['NotFoundError', -2], ['QuotaExceededError', -6],
+    ['NotReadableError', -1], ['InvalidStateError', -5]]) {
+    const fixture = rangePlatform(async () => {throw new DOMException('', name);});
+    assert.equal(await fixture.read(0, 0, 0), status);
+    assert.equal(await fixture.read(0, 0, 3), status);
+    assert.deepEqual(Array.from(fixture.context.HEAPU8), new Array(32).fill(85));
+    assert.equal(fixture.context.LmdjOpfs.leaseTokens.size, 0);
+  }
+  const fixture = rangePlatform(async () => {assert.fail('invalid path must not reach getFile');});
+  assert.equal(await fixture.read(0, 0, 0, '/lmdj-workspace/../raw.bin'), -5);
+});
+
+test('range copy resolves the current heap after an awaited Blob read', async () => {
+  let fixture;
+  let oldHeap;
+  fixture = rangePlatform(async () => ({size: 4,
+    slice(start, end) {
+      assert.deepEqual([start, end], [1, 3]);
+      return {async arrayBuffer() {
+        await Promise.resolve();
+        oldHeap = fixture.context.HEAPU8;
+        fixture.context.HEAPU8 = new Uint8Array(64).fill(85);
+        return new Uint8Array([0, 255]).buffer;
+      }};
+    }}));
+  assert.equal(await fixture.read(1, 0, 2), 2);
+  assert.deepEqual(Array.from(oldHeap), new Array(32).fill(85));
+  assert.deepEqual(Array.from(fixture.context.HEAPU8.slice(3, 7)), [85, 0, 255, 85]);
+});
+
 // Only the browser file boundary is injected. Exercise the production writer
 // acquisition and public status mapping, including failure before token creation.
 function platform(file) {

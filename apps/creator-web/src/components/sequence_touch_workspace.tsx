@@ -21,7 +21,6 @@ import {
 } from "../state/pattern_transport_state";
 import {padColourOf} from "../state/pad_colour";
 import type {SeqSnap} from "../state/seq_snap_preference";
-import type {CountInBars} from "../state/count_in_preference";
 import {SequenceGrid} from "./sequence_grid";
 import {PatternSelector, TouchSegment, type TouchSegmentOption} from "./touch_kit";
 import "./sequence_setup_layout.css";
@@ -61,12 +60,6 @@ interface SequenceTouchWorkspaceProps {
   settingsActive?: boolean;
   metronomeOn: boolean;
   onToggleMetronome(): void;
-  countInBars?: CountInBars;
-  onCountInBarsChange?(bars: CountInBars): void;
-  countInLocked?: boolean;
-  // Selection may open after COUNT-IN's durable opening while authoring stays
-  // locked. Omission retains the conservative legacy count-in lock.
-  patternSelectionLocked?: boolean;
   // #1958 S4: the device's SEQ SNAP boundary. A per-device preference like
   // the metronome — never a Transport setting, never Project Truth — so it
   // stays reachable while recording (switches while recording are S3) and is
@@ -117,15 +110,11 @@ export function SequenceTouchWorkspace(props: SequenceTouchWorkspaceProps) {
   // failed commit resyncs the base to the committed truth.
   const requestedBpmRef = useRef<number | null>(null);
   const requestedSwingRef = useRef<number | null>(null);
-  const selectionDisabled = selectTransportBusy(transport) || props.settingsActive === false ||
-    (props.patternSelectionLocked ?? props.countInLocked) === true;
   const disabled = selectTransportBusy(transport) || selectTransportRecording(transport) ||
-    props.settingsActive === false || props.countInLocked === true;
+    props.settingsActive === false;
   // Grid editing is refused while the transport records (the Core refuses it
   // too); a busy transport holds the commit instead, and the app retries it.
-  const editReason = props.countInLocked === true
-    ? "Count-in — wait for recording or cancellation to settle."
-    : selectTransportRecording(transport)
+  const editReason = selectTransportRecording(transport)
     ? "Recording — stop recording to edit the grid."
     : null;
   const selectedPatternId = state.selectedPatternId ?? project.patternId;
@@ -190,10 +179,11 @@ export function SequenceTouchWorkspace(props: SequenceTouchWorkspaceProps) {
     <section className="sequence-touch-workspace" aria-label="Sequence editor"
       data-layer={layer}>
       <header className="sequence-editor-header">
-        {/* Playing and opened recording queue the same selected SNAP boundary;
-            authoring controls retain their separate recording lock. */}
+        {/* #1958: a press while playing queues the transport's Pattern switch
+            at the engine's next Bar; recording (until S3) and a settling
+            transport still lock selection. */}
         <PatternSelector index={patternIndex} patternIds={project.patterns.map((item) => item.patternId)}
-          patternId={headerPatternId} disabled={selectionDisabled} queuedIndex={queuedIndex}
+          patternId={headerPatternId} disabled={disabled} queuedIndex={queuedIndex}
           onSelect={props.onSwitch} />
         <TouchSegment<SequenceLayer> label="Layer" className="sequence-layer" options={LAYER_OPTIONS}
           value={layer} onChange={setLayer} />
@@ -359,16 +349,6 @@ export function SequenceTouchWorkspace(props: SequenceTouchWorkspaceProps) {
             onClick={props.onToggleMetronome}>
             METRONOME <span aria-hidden="true">{props.metronomeOn ? "On" : "Off"}</span>
           </button>
-        </div>
-        <div className="sequence-setup-row sequence-setup-seq-snap">
-          <span>COUNT-IN</span>
-          <TouchSegment<CountInBars> label="Count-in" options={[
-            {value: 0, label: "OFF", ariaLabel: "Count-in Off"},
-            {value: 1, label: "1", ariaLabel: "Count-in 1 bar"},
-            {value: 2, label: "2", ariaLabel: "Count-in 2 bars"},
-          ]} value={props.countInBars ?? 0}
-            disabled={props.onCountInBarsChange === undefined}
-            onChange={(value) => props.onCountInBarsChange?.(value)} />
         </div>
         {props.showRefresh === false ? null : (
           <details className="sequence-details">

@@ -35,6 +35,7 @@ export const HOST_OPERATIONS = Object.freeze([
   "pattern.slot.move",
   "performance.list",
   "performance.inspect",
+  "performance.recording.metadata",
   "performance.record.begin",
   "performance.record.event",
   "performance.fx.gesture",
@@ -858,6 +859,11 @@ function requirePerformanceOperationPayload(
     case "performance.inspect":
       valid = hasExactKeys(payload, ["performance_id"]) && validUuid(payload.performance_id);
       break;
+    case "performance.recording.metadata":
+      valid = hasExactKeys(payload, ["project_id", "performance_id", "expected_revision", "recording_artifact"]) &&
+        validUuid(payload.project_id) && validUuid(payload.performance_id) &&
+        isUnsignedInteger(payload.expected_revision) && validArtifact(payload.recording_artifact);
+      break;
     case "performance.record.begin":
       // The headered profile is selected by the extra Core-issued epoch key;
       // the legacy four-key shape is unchanged.
@@ -1553,6 +1559,20 @@ function validPerformanceResult(operation, value) {
     return false;
   }
   switch (operation) {
+    case "performance.recording.metadata": {
+      if (!hasExactKeys(value, ["project_id", "performance_id", "project_revision", "recording_revision",
+          "recording_artifact", "audio_metadata", "audio_error"]) ||
+          !validUuid(value.project_id) || !validUuid(value.performance_id) ||
+          !isUnsignedInteger(value.project_revision) || !isUnsignedInteger(value.recording_revision) ||
+          !validArtifact(value.recording_artifact)) return false;
+      const audio = value.audio_metadata, error = value.audio_error;
+      if (audio === null) return hasExactKeys(error, ["code", "message", "details"]) &&
+        error.code === "UNSUPPORTED_AUDIO" && typeof error.message === "string" && isPlainObject(error.details);
+      return error === null && hasExactKeys(audio, ["sample_rate", "channels", "source_frames"]) &&
+        [44100, 48000].includes(audio.sample_rate) && [1, 2].includes(audio.channels) &&
+        isUnsignedInteger(audio.source_frames) && audio.source_frames > 0 &&
+        audio.source_frames * audio.channels * 2 <= value.recording_artifact.byte_length;
+    }
     case "pattern.slot.assign":
     case "pattern.slot.clear":
       return hasExactKeys(value, ["pattern_slot", "pattern_id", "committed_revision", "replayed", "project_revision"]) &&

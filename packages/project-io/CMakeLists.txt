@@ -36,12 +36,12 @@ if(EMSCRIPTEN)
   target_link_options(lmdj_project_io INTERFACE -fexceptions)
   set(
     lmdj_project_io_async_imports
-    "['lmdj_opfs_acquire_writer','lmdj_opfs_ensure_directory','lmdj_opfs_exists','lmdj_opfs_directory_exists','lmdj_opfs_byte_length','lmdj_opfs_read_complete','lmdj_opfs_create_immutable','lmdj_opfs_replace_complete','lmdj_opfs_append_durable','lmdj_opfs_remove','lmdj_opfs_list_names','lmdj_opfs_list_directories','lmdj_opfs_remove_tree','lmdj_opfs_publish_directory_if_absent','lmdj_opfs_validate_tree']"
+    "['lmdj_opfs_acquire_writer','lmdj_opfs_ensure_directory','lmdj_opfs_exists','lmdj_opfs_directory_exists','lmdj_opfs_byte_length','lmdj_opfs_read_complete','lmdj_opfs_read_range','lmdj_opfs_create_immutable','lmdj_opfs_replace_complete','lmdj_opfs_append_durable','lmdj_opfs_remove','lmdj_opfs_list_names','lmdj_opfs_list_directories','lmdj_opfs_remove_tree','lmdj_opfs_publish_directory_if_absent','lmdj_opfs_validate_tree']"
   )
   if(LMDJ_PROJECT_IO_WEB_TESTING)
     set(
       lmdj_project_io_async_imports
-      "['lmdj_opfs_acquire_writer','lmdj_opfs_ensure_directory','lmdj_opfs_exists','lmdj_opfs_directory_exists','lmdj_opfs_byte_length','lmdj_opfs_read_complete','lmdj_opfs_create_immutable_test','lmdj_opfs_replace_complete_test','lmdj_opfs_append_durable_test','lmdj_opfs_remove','lmdj_opfs_list_names','lmdj_opfs_list_directories','lmdj_opfs_remove_tree','lmdj_opfs_publish_directory_if_absent_test','lmdj_opfs_validate_tree']"
+      "['lmdj_opfs_acquire_writer','lmdj_opfs_ensure_directory','lmdj_opfs_exists','lmdj_opfs_directory_exists','lmdj_opfs_byte_length','lmdj_opfs_read_complete','lmdj_opfs_read_range','lmdj_opfs_create_immutable_test','lmdj_opfs_replace_complete_test','lmdj_opfs_append_durable_test','lmdj_opfs_remove','lmdj_opfs_list_names','lmdj_opfs_list_directories','lmdj_opfs_remove_tree','lmdj_opfs_publish_directory_if_absent_test','lmdj_opfs_validate_tree']"
     )
   endif()
   target_link_options(
@@ -138,6 +138,24 @@ if(BUILD_TESTING)
     COMMAND lmdj_project_store_tests
     LABELS persistence
   )
+
+  add_executable(lmdj_performance_recording_scan_tests
+    "${CMAKE_SOURCE_DIR}/tests/core/project_io/performance_recording_scan_test.cpp")
+  target_include_directories(lmdj_performance_recording_scan_tests PRIVATE "${CMAKE_SOURCE_DIR}")
+  target_link_libraries(lmdj_performance_recording_scan_tests PRIVATE lmdj_project_io_testable)
+  lmdj_target_warnings(lmdj_performance_recording_scan_tests)
+  lmdj_target_sanitizers(lmdj_performance_recording_scan_tests)
+  lmdj_add_test(NAME project_io.performance_recording_scan TIER component
+    COMMAND lmdj_performance_recording_scan_tests LABELS persistence concurrency)
+
+  add_executable(lmdj_performance_recording_verification_tests
+    "${CMAKE_SOURCE_DIR}/tests/core/project_io/performance_recording_verification_test.cpp")
+  target_include_directories(lmdj_performance_recording_verification_tests PRIVATE "${CMAKE_SOURCE_DIR}")
+  target_link_libraries(lmdj_performance_recording_verification_tests PRIVATE lmdj_project_io_testable)
+  lmdj_target_warnings(lmdj_performance_recording_verification_tests)
+  lmdj_target_sanitizers(lmdj_performance_recording_verification_tests)
+  lmdj_add_test(NAME project_io.performance_recording_verification TIER component
+    COMMAND lmdj_performance_recording_verification_tests LABELS persistence concurrency)
 
   add_executable(
     lmdj_project_storage_platform_tests

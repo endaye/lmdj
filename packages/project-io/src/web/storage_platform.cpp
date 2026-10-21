@@ -26,6 +26,7 @@ int lmdj_opfs_exists(const char*, int);
 int lmdj_opfs_directory_exists(const char*, int);
 double lmdj_opfs_byte_length(const char*, int);
 int lmdj_opfs_read_complete(const char*, int, void**, int*);
+int lmdj_opfs_read_range(const char*, int, std::uint32_t, std::uint32_t, void*, int);
 int lmdj_opfs_create_immutable(const char*, int, const void*, int, int);
 int lmdj_opfs_replace_complete(const char*, int, const void*, int, int);
 int lmdj_opfs_append_durable(
@@ -231,7 +232,8 @@ class WebWriterLease final : public ProjectWriterLease {
   int identity_{};
 };
 
-class WebProjectStoragePlatform final : public ProjectStoragePlatform {
+class WebProjectStoragePlatform final : public ProjectStoragePlatform,
+                                       public ProjectStorageRangeReader {
  public:
   explicit WebProjectStoragePlatform(bool mounted)
       : mounted_(mounted), platform_identity_(next_platform_identity()) {}
@@ -346,6 +348,25 @@ class WebProjectStoragePlatform final : public ProjectStoragePlatform {
     if (length > 0) std::memcpy(result.data(), data, static_cast<std::size_t>(length));
     std::free(data);
     return foundation::Result<std::vector<std::byte>>::success(std::move(result));
+  }
+
+  foundation::Result<std::size_t> read_range(
+      const std::filesystem::path& input,
+      std::uint64_t offset,
+      std::span<std::byte> output) const override {
+    if (!mounted_) return failure<std::size_t>(-1, "mount availability");
+    if (output.size() > static_cast<std::size_t>(std::numeric_limits<int>::max())) {
+      return failure<std::size_t>(-5, "range capacity validation");
+    }
+    const auto path = web_path(input);
+    const int count = lmdj_opfs_read_range(
+        path.data(), path.size(), static_cast<std::uint32_t>(offset),
+        static_cast<std::uint32_t>(offset >> 32), output.data(), output.size());
+    if (count < 0) return failure<std::size_t>(count, "range read");
+    if (static_cast<std::size_t>(count) > output.size()) {
+      return failure<std::size_t>(-5, "range count validation");
+    }
+    return foundation::Result<std::size_t>::success(static_cast<std::size_t>(count));
   }
 
   foundation::Result<void> create_immutable(

@@ -36,7 +36,9 @@ test.afterEach(async ({page}, info) => {
       return {diagnostics: host?.session?.diagnostics(), meter: host?.outputMeter?.(),
         contextState: proof?.context?.state, ownerMessages: proof?.ownerMessages,
         errorEvents: proof?.errorEvents, latestMeter: proof?.meters?.at(-1),
-        renderedMeter: proof?.lastRenderedMeter};
+        renderedMeter: proof?.lastRenderedMeter, voiceEvents: proof?.voiceEvents,
+        hitStartOrdinal: proof?.hitStartOrdinal, hitMinimumSequence: proof?.hitMinimumSequence,
+        firstSignal: proof?.firstSignal};
     });
     await info.attach("meter-runtime-failure-observation", {contentType: "application/json",
       body: Buffer.from(JSON.stringify(observation))});
@@ -347,6 +349,9 @@ async function nativeHit(page, assertion) {
 
 async function signal(page, {afterFrame = 0} = {}) {
   let meter;
+  // These are one-second one-shot voices. Poll within the 50ms meter window;
+  // Playwright's default backoff reaches 1s and can skip the entire interval
+  // where both asynchronous starts have a complete steady window.
   await expect.poll(async () => {
     const snapshot = await page.evaluate((minimumFrame) => {
       const meter = window.lmdjWebRuntimeHost.outputMeter();
@@ -368,12 +373,15 @@ async function signal(page, {afterFrame = 0} = {}) {
       // filter-onset transients. This is only a conservative witness bound;
       // it never changes producer freshness or claims a Native engine frame.
       const steadyFrame = admittedFrame + Math.ceil(proof.context.sampleRate / 20);
+      proof.firstSignal ??= {meter, bothStarted, steadyFrame,
+        voiceEvents: [...proof.voiceEvents], hitStartOrdinal: proof.hitStartOrdinal,
+        hitMinimumSequence: [...proof.hitMinimumSequence]};
       return {meter, qualifies: bothStarted && meter.state === "available" &&
         Number(meter.windowStartFrame) >= steadyFrame && meter.leftPeak > 0.01 && meter.rightPeak > 0.002};
     }, afterFrame);
     if (snapshot.qualifies) meter = snapshot.meter;
     return snapshot.qualifies;
-  }, {timeout: AUDIO_TRANSITION_TIMEOUT_MS}).toBe(true);
+  }, {timeout: AUDIO_TRANSITION_TIMEOUT_MS, intervals: [20]}).toBe(true);
   expect(meter.leftPeak / meter.rightPeak).toBeCloseTo(4, 1);
   const delivered = await page.evaluate((windowEndFrame) => window.__outputMeterProof.meters
     .findLast((message) => message.windowEndFrame === windowEndFrame), meter.windowEndFrame);

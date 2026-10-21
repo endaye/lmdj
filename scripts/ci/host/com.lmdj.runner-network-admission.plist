@@ -3,7 +3,7 @@
 <plist version="1.0"><dict>
   <key>Label</key><string>com.lmdj.runner-network-admission</string>
   <key>ProgramArguments</key><array><string>/bin/bash</string><string>/Users/endaye/Library/Application Support/lmdj-ci/runner-network-admission.sh</string></array>
-  <key>StartInterval</key><integer>600</integer>
+  <key>StartInterval</key><integer>60</integer>
   <key>RunAtLoad</key><true/>
   <key>StandardErrorPath</key><string>/Users/endaye/Library/Application Support/lmdj-ci/launchd.err</string>
 </dict></plist>

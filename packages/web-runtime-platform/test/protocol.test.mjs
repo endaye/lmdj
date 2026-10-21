@@ -219,6 +219,7 @@ test("exports the locked protocol constants, operations, and notifications", () 
     "pattern.slot.move",
     "performance.list",
     "performance.inspect",
+    "performance.recording.metadata",
     "performance.record.begin",
     "performance.record.event",
     "performance.fx.gesture",

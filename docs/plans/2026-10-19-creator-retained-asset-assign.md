@@ -1,3 +1,103 @@
+# Main integration refresh — 2026-10-20
+
+This current section supersedes the historical freeze/shipping authority below.
+One consumer Task, original Draft #2381, independently re-homed without rewriting
+its published stack history. Exact integration base and worktree parent:
+`9c7b3959ac14c1c251119b0b1ae54e5e52413616`. Original source:
+`83ab14ba5c5ee72dbacf91c6a02d0637b8077a3e` over P2 `a213cf77`.
+
+## Refreshed premise dispositions
+
+- Still outstanding: main SampleSurface has no ASSIGN entry, retained-source
+  picker, sent owner or R1 explicit-new-intent flow. Owning sample_actions and
+  Runtime types contain no assignPad capability. Inspection at the exact base
+  distinguishes that consumer absence from existing Candidate retained listing.
+  No successor ASSIGN delivery appears in main's relevant source history.
+- Already delivered: #2107 squash `ecc2c9ece903bcbd8205e6dde655c28ec07ebf2a`
+  provides Native/SDK assignPad and formal request/result types. Reuse current
+  API and candidateSources; no producer, protocol or SDK reimplementation.
+- Already developed but unintegrated: original #2381 remains OPEN Draft at the
+  exact source above. Preserve its full eleven-file feature delta, acceptance
+  table and all historical failures/receipts below; those receipts do not verify
+  this base. Live #2230 remains OPEN, with no comments or new product decision.
+- Approved R1 remains authoritative: original UNKNOWN/command stays UNKNOWN;
+  fresh session requires explicitly chosen source and destination and sends one
+  NEW command. No automatic resend or inference from matching persisted Truth.
+- Current main intentionally withdrew COUNT-IN UI and has not integrated S3
+  Creator C4. Apply ASSIGN-only deltas to App/tests/current pages; do not restore
+  those unrelated stack prefixes. The interaction table's non-ASSIGN rows and
+  current explanatory text are preserved. Native retained-clock P1/P2 delivered
+  in #2427/#2428 do not add the missing Creator ASSIGN consumer.
+
+## Declared integration and verification
+
+Exactly the same eleven declared files listed in the historical Task below.
+One Conventional Commit, no added gate, dependency, budget or timeout changes.
+Baseline four-file action/workspace/candidate/numeric selection: 290 PASS
+(80.483s process), unchanged base; CSS/localStorage diagnostics retained.
+All ten tracked symlinks are real links; clean isolated feat branch with no
+origin/main upstream. Original feature patch dry-run reports only the existing
+interaction table's nearby COUNT-IN/S3 context conflict, not a product conflict.
+
+Run the complete original five-file owning selection, full Creator and types,
+complete current Portal, dependencies, staged/final ownership, source checks;
+then an unpublished clean checkpoint for official pinned configure/build/package.
+Generate the fixtures with unchanged official script bodies. Run every current
+Sample editor Chromium journey (including the full ASSIGN/R1/Undo/Redo/reopen/
+Native voice_started path) and the unchanged WebKit capability selection.
+Retain every original far-side assertion and 600/300/180s budget. Check the
+independent 64-label oracle with an actual divergent rendered-label mutation.
+Review changed TSX for hook lifetime, stale origin, accessibility and typings.
+
+## Current source verification receipts
+
+- Complete owning five-file selection: 343 PASS, process 81.498s.
+- Full current Creator selection: 79 files / 1772 PASS, process 86.600s;
+  this base intentionally has fewer cases than the historical stack, no tests
+  were removed or skipped by this integration. TypeScript exit 0 (6.127s).
+- Dependency verification exit 0. Existing CSS/localStorage diagnostics retained.
+- Actual rendered-label mutation: 64 labels received an incorrect suffix; the
+  independent explicit-bank/one-based oracle failed at sample_assignment line 64
+  (exit 1). Fresh-mtime byte-identical restoration followed by full owning PASS.
+- App and workspace test ASSIGN deltas are exactly equal to original #2381
+  additions/deletions. All non-ASSIGN interaction table rows remain byte-identical
+  to current main. Surface, action/types, new assignment tests and complete Sample
+  browser spec are byte-identical to the original source.
+- Author React checklist inspection retained separately, not an independent
+  PR review. Reused modal/focus and hook/async context ownership; no new deps.
+
+Complete Portal exit 0 (65.432s): 179 tests, 53 pages, 10 diagram sources /
+20 outputs and 51 routes/internal links. Staged ownership and packaged browser
+receipts are pending at this point. Only source-verified unpublished clean checkpoint may be created
+before package proof; no push/PR/merge until the complete Task checks finish.
+
+## Version Management
+
+Version impact: Creator Host additive MINOR debt, deduplicated in #2237.
+Existing Audio Runtime MAJOR debt retained. No identities/manifests/Product Build/
+Assembly/Channel/snapshot allocation; complete candidate/device work remains.
+
+## Documentation Impact
+
+Documentation impact: required.
+Affected portal pages: /hosts/creator-web/ /hosts/creator-interactions/
+ASSIGN facts only; preserve current COUNT-IN withdrawal and other pending facts.
+
+## Current shipping authority
+
+Owner partially unfroze ordinary feature/fix/test PRs. After full Task verification,
+commit/push/main-target PR, authenticated independent exact-head review, current
+protection/conflict/conversation checks and guarded squash merge are authorized.
+All owner-frozen workflow/release-tool/release-evidence/versioned-release-doc paths
+remain excluded. No release/tag/Runtime deployment/Channel promotion or agent Git
+cleanup. Close original Draft as superseded only after verified replacement merge;
+retain original published branch and all downstream Draft heads.
+
+## Historical original Task and negative evidence
+
+The following is preserved as the original implementation/custody record. Its
+old freeze text and original source test counts do not override the refresh above.
+
 # Creator retained Asset ASSIGN (#2230 / F01 D03)
 
 One consumer implementation Task for #2112, above Draft #2379. Main remains

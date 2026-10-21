@@ -75,9 +75,8 @@ Snapshot/Native publication 前。当前 Pattern 的选择撤回、排队重复�
 不留下等 Bar 的视图阻塞下次 Play。Stop 的实际 F、失败 I/O owner disposition、
 lease 释放与 Native 最终 quiescence 分别完成。Sequence 与 Performance active
 recording Journal 的现有互斥保持；普通 Perform Launch 走同一 Pattern switch，
-既有 Performance-record Launch/clock/event 路径保持。Creator C4 的箭头、GROOVE
-与普通 Launch 共用此请求，COUNT-IN 等实际 Applied 与 durable opening ACK 后才开放；
-取消／结算保持锁定。consumer、完整故障组合、候选和设备／听感分别验收。
+既有 Performance-record Launch/clock/event 路径保持。Creator 录音期选择控件及其
+packaged 完整旅程属于 C4；本层 producer 证明不等于设备或听感验收。
 
 已有录音的 Record-off 与 Stop 不借用开始录音的排队门禁：即使后继仍在排队，
 它们也先取得真实 F，再处理 `S < F` 的旧段或 `S >= F` 的取消，不为目标写入假事件。
@@ -93,8 +92,7 @@ S6 的 scheduled Record、生产 Facade I/O owner、strict Host/SDK companion �
 monitoring-only 双输出未在真实 MIDI 硬件或物理设备上验收，也未做听感验收。
 S7 的 global Record Creator 控件、Off/1/2 偏好、COUNT-IN 倒计时/灯、
 JS metronome handoff 与 scheduler exclusion 已由 #2359 接入。本层增加 S3
-Host 录音切换 producer 与 Creator C4 consumer；多切换 packaged、完整故障组合与
-设备验收仍须各自的实际证据，不能由已接线或 producer 测试推断。
+Host 录音切换 producer；其 Creator C4、多切换 packaged 与设备验收仍独立。
 
 Session 的 additive 公共方法为 `queryPatternCountInCapabilities`、
 `requestPatternCountIn`、`inspectPatternCountIn`、`cancelPatternCountIn`、
@@ -210,7 +208,7 @@ ACK 或物理听感证据；精确 API、故障边界与测试见
 
 Engine 的 64 位 telemetry 值由固定三缓冲发布，观察者 mutex 仅供非实时读取。AudioWorklet 在 render 后通过内部 audio-owner accessor 读取 current Bank generation 和 Voice-stream health，以维持精确 generation acknowledgement 与 fail-closed 行为；callback 不调用 telemetry，也不获取观察者 mutex。此内部访问不扩大 Host 的 Application Facade 边界，生命周期仍要求 callback quiescence。
 
-主线程负责 UI、用户手势和生命周期观察；Dedicated Worker/Control 串行驱动 Facade 与音频控制；S6 transport 的 Store/Journal/leases 在 Facade 自有单一 I/O worker 创建、执行、析构，其他 Project 操作仍走既有 owner；AudioWorklet 处理实时音频。消息、sidecar、queue 与 timeout 均有界。Project open/import 与 Sample mutation 共用可恢复 action tail；每次 Pad press 的 inspect→trigger admission 串行，避免并发 Facade query 进入同一 native owner，同时不会形成 inspect backlog。adverse lifecycle 会取消可安全重试的纯读请求，使 preview clear 与 `sample.stop(all)` 不被长查询阻塞；已提交 mutation 的 Project/Runtime 分离结果仍由后续权威 refresh 收敛，不重放 mutation。
+主线程负责 UI、用户手势和生命周期观察；Dedicated Worker/Control 串行驱动 Facade 与音频控制；S6 transport 的 Store/Journal/leases 在 Facade 自有单一 I/O worker 创建、执行、析构，Project authoring 操作仍走既有 owner，已保存录音 metadata 的纯读查询使用独立 Facade reader worker；AudioWorklet 处理实时音频。消息、sidecar、queue 与 timeout 均有界。Project open/import 与 Sample mutation 共用可恢复 action tail；每次 Pad press 的 inspect→trigger admission 串行，避免并发 Facade query 进入同一 native owner，同时不会形成 inspect backlog。adverse lifecycle 会取消可安全重试的纯读请求，使 preview clear 与 `sample.stop(all)` 不被长查询阻塞；已提交 mutation 的 Project/Runtime 分离结果仍由后续权威 refresh 收敛，不重放 mutation。
 
 运行中的显式 `snapshot.reload`/retry，以及 `sample.import.commit`、`sample.update_pad`、`sample.reset_pad` 触发的自动 Bank publication，只有在 AudioWorklet 精确确认其新 Bank generation 后才报告 Runtime publication 成功；旧的非零 acknowledgement 不构成成功。Sample mutation 若已提交 Project Truth，但 acknowledgement 超时，则仍返回已提交的 revision，同时以 `runtime_published=false` 和类型化 `snapshot_error` 表达 Runtime fail-closed，绝不把它误报成可回滚的 Project 失败；deadline 若在 Project commit 后、Runtime publication 前到期，同样 seal 运行中的 Runtime 并保留已提交 Project revision。首次 AudioWorklet bootstrap 完成后，Browser Main 在 callback baseline 与 `AudioContext.resume()` 边缘只为输出设备启动建立 5 秒上限：从 resume edge 到首个 AudioWorklet 回调是浏览器与设备的工作，不是 Runtime 的工作，不计入 Control 预算（2026-10-01 决策，#1704）。在用户手势内新建的 AudioContext 一经创建即为 running，Platform 先将其 suspend，Core 与 master tap 两个 AudioWorklet module 都在这个 parked context 上加载：Chromium 会在 module 就绪时重启 running destination，而这第二次输出设备启动恰好落在 activation 预算内，蓝牙输出的冷启动单次即可耗去其大半（#1696）。parked bootstrap 使输出设备只在 resume edge 启动一次。lock-free paused-callback heartbeat 前进后，Browser Main 才建立一秒 activation deadline 并以此请求 Control 开 gate；bootstrap 同样不消耗该预算。此后 paused callback 持续运行，Control 的 readiness 检查与开 gate 都不得因某个在途 paused callback 的 borrow 而拒绝激活（#2345）。`audio.activate` 回滚为 `INTERNAL_ERROR` 时，error details 的 `reason` 指明失败分支（`audio_activation_count_in_not_enabled`、`audio_activation_master_fx_failed`、`audio_activation_engine_start_failed`、`audio_activation_begin_unavailable`、`audio_activation_begin_refused` 或 `audio_activation_generation_mismatch`），session diagnostics 的 `error_details.reason` 保留这一有界取值。显式激活中，`resume()` 在上限内未 settle（浏览器尚未允许 context 启动时会一直 pending），或设备在上限内未回调，此时都尚未向 Control 提交任何请求：Platform 把 context 重新挂起（对仍 pending 的 resume 也以 `suspend()` 撤回），Session 保持 `audio-suspended`，并在 diagnostics 的 `activation_refusal` 记为 `audio_output_start_timeout`，下一次手势可直接重试，不再进入 `restart-required`。自动恢复沿用同一设备上限与回调后的一秒预算，但 Control 已先行 park，设备仍未回调时照旧 fail closed。Bridge 将 operation cutoff 与 caller cutoff 的较早者作为 absolute effective deadline 直接交给 Control，Control 不从 `submitted_at` 重建完整 operation window。Project mutation 若在 cutoff 前原子赢得 publication claim，则仅保留到 commit/abort 结算的 authority；未 claim 工作及其后的 Runtime-derived publication/acknowledgement 仍受 absolute cutoff 约束。Control 锁存已验证的 current generation，由首个 open-gate callback 确认同一 generation。timeout 或跨代 acknowledgement 会 fail closed，不增加 timeout，也不在 realtime callback 加锁、分配或调用 Host。
 
@@ -282,3 +280,48 @@ Real tap render failures are accepted through both `processorerror` and the
 `error` ErrorEvent used by the pinned Chromium. Both enter the same idempotent
 recovery: revoke the measurement, settle capture and reconnect the existing
 monitor path once. A late meter packet cannot restore the failed tap.
+
+
+## Saved recording metadata 的异步读取
+
+公共 SDK `queryPerformanceRecordingMetadata` 使用独立只读 RPC，把完整 Project/
+Performance/revision/Artifact selector 交给 Runtime；Host 不解析 Project bundle。
+Runtime 只移动公共 Facade reader 到 worker，bridge 保留原请求身份和原30秒预算，
+不会让完整 WAV hash 占住 Control 的 Asyncify dispatch 或 SDK action tail。
+SDK 的独立 metadata 队列限制为1条在途 RPC 加15条等待，保留普通 Control 的槽位。
+排队消耗原30秒预算，不重新起算；等待项取消/过期不进入 Native，超额明确拒绝。
+
+返回值保留已验证的 Project/recording revision 和 ArtifactRef；audioMetadata 是实际
+非零 WAV frames/rate/channels，audioError 的 UNSUPPORTED_AUDIO 只在完整 raw 验证后
+成立。摘要不符、storage/revision/owner 失败是独立外层拒绝；无 WAV 仍是原 null
+binding，旧保存文件的完整性仍未知。既有 Replay 仍按事件进度及原完成规则运行。
+
+Project replacement（包括同一 Project reopen）、close/failure、安全清理和 caller
+abort 退役旧结果，不隐式重试。取消和响应通过同一原 RPC atomic cell 结算，取消胜出
+后不发布 ready metadata。取消 observer 并不证明 worker 或 physical writer 已结束；
+原 reader 的实际返回、析构和线程 join 是正式 Module 释放的额外必要条件。未结束的
+worker 继续占有有界位置，不能靠取消/timeout 腾空所有权或声称清理成功。
+
+Native/TSan/stress 拥有真实 Control/取消/迟到结果与物理 custody 的并发验证；实际
+Wasm/OPFS RPC 与 SDK seam 验证分别记录。Take 实际展示、完整 Creator 录放/恢复
+旅程、候选及物理设备/听感验收仍是后续工作，不能由此只读 API 结算。
+
+
+## Recording 的真实音频帧读数
+
+已发布的同一 retained Session 上，独立可选能力
+`performanceMasterCaptureProgress()` 返回 validated received frames 与该 tap 实际
+AudioContext sampleRate，以及 capture identity、既有 begin binding 和
+recording／stopping／stopped／failed phase。调用只读本地投影，不产生 Runtime
+请求、I/O、新 timer、authoring 或隐式录音控制。原 `{stop}` 句柄与配置/status
+响应不增加字段，旧 capture provider 仍可工作。
+
+计数只随真实完整校验后的 PCM batch 增长，包含静音和 Stop 的最后 partial batch；
+没有回调的时间不补数。失败的已知 Worklet drop 和未量化 loss 分开，后者为 null；phase/drop/failure
+只描述 tap→SDK，Host queue/writer 的失败和丢帧仍各自保留。
+缺少能力/rate/identity 或尚无 started ACK 时明确 unavailable。正常停止的值只保留到
+下次 start 或关闭；新 tap/Session 不继承旧 capture identity 或帧数。
+
+它不能证明 WAV 已 durable、Artifact 已绑定、保存结果已确定或演出完整。后续 Host
+必须继续区分 received PCM、writer durable prefix 和已验证的保存 WAV；不得把此值
+当作 Performance 总 elapsed、Replay 分母或现有事件回放规则的替代。

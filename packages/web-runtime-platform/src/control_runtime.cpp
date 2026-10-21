@@ -29,6 +29,7 @@
 #include <lmdj/foundation/json.hpp>
 
 #include "testing_hooks.hpp"
+#include "recording_metadata_queries.hpp"
 
 namespace lmdj::web_runtime {
 #if defined(LMDJ_WEB_RUNTIME_TESTING) && LMDJ_WEB_RUNTIME_TESTING
@@ -4174,6 +4175,7 @@ struct ControlRuntime::Impl {
   std::shared_ptr<std::atomic<bool>> performance_publication_failure;
   std::function<void()> performance_service;
   facade::Application application;
+  detail::RecordingMetadataQueries recording_metadata;
   State state = State::core_ready;
   std::optional<facade::RuntimeProjectWriterLease> writer_lease;
   std::optional<std::filesystem::path> retained_project_path;
@@ -4222,6 +4224,7 @@ struct ControlRuntime::Impl {
   std::map<std::string, RetainedLegacyInput> legacy_inputs;
   std::optional<std::string> current_rpc_request_id;
   std::optional<std::pair<std::string, std::string>> pending_dispatch_rpc;
+  std::optional<std::string> pending_recording_metadata_rpc;
   std::uint64_t next_count_in_serial = 1;
   std::uint64_t next_transport_generation = 1;
   std::uint64_t enabled_transport_generation = 0;
@@ -4293,6 +4296,57 @@ bool ControlRuntime::owns_pending_pattern_rpc(
       impl_->pending_dispatch_rpc->second == operation;
 }
 
+bool ControlRuntime::owns_pending_recording_metadata(std::string_view id) const {
+  return impl_->pending_recording_metadata_rpc == id && impl_->recording_metadata.contains(id);
+}
+
+std::optional<Json> ControlRuntime::inspect_recording_metadata(
+    std::string_view id, bool consume, bool cancel) {
+  const auto result = impl_->recording_metadata.inspect(id, consume, cancel);
+  if (!result) return std::nullopt;
+  if (!result->has_value()) {
+    auto response = normalized_error(result->error());
+    const auto& error = result->error();
+    // This operation's closed refusal vocabulary is safe to publish. Keep
+    // the generic redactor and every older operation unchanged; no paths or
+    // arbitrary provider/platform text cross this read-only boundary.
+    if (error.code == ErrorCode::cook_failed && error.details.is_object() &&
+        error.details.contains("storage_condition") &&
+        error.details.at("storage_condition") == "artifact_mismatch")
+      response["error"]["details"]["storage_condition"] = "artifact_mismatch";
+    if (error.code == ErrorCode::io_error && error.details.is_object() &&
+        error.details.contains("reason") && error.details.at("reason") == "bounded_read_unavailable")
+      response["error"]["details"]["reason"] = "bounded_read_unavailable";
+    return response;
+  }
+  const auto* metadata = std::get_if<facade::PerformanceRecordingMetadata>(&result->value());
+  if (!metadata) return state_error("recording metadata query was retired");
+  Json audio = nullptr, audio_error = nullptr;
+  if (metadata->audio.has_value()) {
+    const auto& value = metadata->audio.value();
+    audio = {{"sample_rate", value.sample_rate}, {"channels", value.channels},
+             {"source_frames", value.source_frames}};
+  } else audio_error = normalized_error(metadata->audio.error()).at("error");
+  return success({{"project_id", metadata->project_id.value()},
+      {"performance_id", metadata->performance_id.value()},
+      {"project_revision", metadata->project_revision},
+      {"recording_revision", metadata->recording_revision},
+      {"recording_artifact", metadata->artifact},
+      {"audio_metadata", std::move(audio)}, {"audio_error", std::move(audio_error)}});
+}
+
+void ControlRuntime::service_recording_metadata() {
+  impl_->recording_metadata.service();
+}
+
+bool ControlRuntime::recording_metadata_workers_stopped() const noexcept {
+  return impl_->recording_metadata.workers_stopped();
+}
+
+bool ControlRuntime::recording_metadata_pending() const noexcept {
+  return impl_->recording_metadata.pending();
+}
+
 foundation::Result<std::unique_ptr<ControlRuntime>> ControlRuntime::create(
     std::filesystem::path workspace_root,
     facade::ApplicationConfig application_config,
@@ -4359,6 +4413,7 @@ Json ControlRuntime::dispatch(
   impl_->request_publication_settlement_owned =
       deadline.publication_settlement_owned;
   impl_->pending_dispatch_rpc.reset();
+  impl_->pending_recording_metadata_rpc.reset();
   const auto transport_error = [&](const Error& error) {
     if (impl_->current_rpc_request_id && error.details.is_object() &&
         error.details.value("pending", false) &&
@@ -4369,6 +4424,7 @@ Json ControlRuntime::dispatch(
     return normalized_error(error);
   };
   try {
+    impl_->recording_metadata.service();
     const bool retained_owner_operation =
         operation == "pattern.transport.input.inspect" ||
         operation == "pattern.transport.input.request" ||
@@ -4399,6 +4455,30 @@ Json ControlRuntime::dispatch(
       return success({{"armed", true}});
     }
 #endif
+    if (operation == "performance.recording.metadata") {
+      require(sidecar.empty());
+      require(exact_keys(payload, {"project_id", "performance_id", "expected_revision", "recording_artifact"}));
+      const auto project = uuid_field(payload, "project_id");
+      const auto performance = uuid_field(payload, "performance_id");
+      const auto revision = safe_unsigned_field(payload, "expected_revision");
+      validate_performance_artifact(payload.at("recording_artifact"));
+      if (!impl_->session_available() || project != *impl_->project_id ||
+          !impl_->current_rpc_request_id || impl_->current_rpc_request_id->empty())
+        return state_error("recording metadata owner is unavailable");
+      const auto artifact = payload.at("recording_artifact").get<foundation::ArtifactRef>();
+      const auto started = impl_->recording_metadata.start(*impl_->current_rpc_request_id,
+          {*impl_->retained_project_path, foundation::ProjectId{project},
+           domain::PerformanceId{performance}, revision, artifact},
+          impl_->application.make_performance_recording_metadata_reader());
+      using Start = detail::RecordingMetadataQueries::Start;
+      if (started == Start::full) return host_error("WEB_RUNTIME_RESOURCE_LIMIT",
+          "recording metadata query capacity is retained",
+          {{"resource", "recording_metadata_queries"}, {"limit", detail::RecordingMetadataQueries::capacity}});
+      if (started == Start::duplicate) return state_error("recording metadata request identity is retained");
+      if (started == Start::worker_failed) return internal_error();
+      impl_->pending_recording_metadata_rpc = *impl_->current_rpc_request_id;
+      return state_error("recording metadata query is pending");
+    }
     static const std::map<std::string_view, bool> performance_operations{
         {"pattern.slot.assign", false},
         {"pattern.slot.clear", false},
@@ -4930,6 +5010,7 @@ Json ControlRuntime::dispatch(
       if (impl_->cancel_if_expired()) {
         return timeout_error();
       }
+      impl_->recording_metadata.retire();
       impl_->writer_lease.emplace(std::move(lease.value()));
       impl_->retained_project_path = path;
       impl_->project_id = project_id;
@@ -5044,6 +5125,7 @@ Json ControlRuntime::dispatch(
       const auto switched =
           !impl_->runtime_bank_project_id.has_value() ||
           *impl_->runtime_bank_project_id != selected_id;
+      impl_->recording_metadata.retire();
       impl_->writer_lease.emplace(std::move(lease.value()));
       impl_->retained_project_path = path;
       impl_->project_id = selected_id;
@@ -7434,6 +7516,7 @@ Json ControlRuntime::dispatch(
     if (operation == "host.close") {
       require(exact_keys(payload, {}));
       require(sidecar.empty());
+      impl_->recording_metadata.retire();
       std::optional<std::string> stopped_sequence;
       std::optional<Error> close_failure;
       bool close_timed_out = false;
@@ -7738,6 +7821,7 @@ bool ControlRuntime::validate_realtime_health() noexcept {
 }
 
 void ControlRuntime::fail_and_seal(std::string_view) noexcept {
+  impl_->recording_metadata.retire();
   if (impl_->state == Impl::State::closed) return;
   impl_->trigger_admission = false;
   impl_->seal_all_noexcept();

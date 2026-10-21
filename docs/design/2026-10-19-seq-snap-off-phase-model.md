@@ -132,5 +132,7 @@ examining actual final domains. No guessed identity or Build allocation.
 Documentation impact: required for P1 on `/core/modules/audio-runtime/`.
 Current Portal/diagram state must describe the pure helper separately from
 OFF product wiring. Later Host/Creator Tasks declare their own affected routes.
-The owner's main freeze applies to this entire linear Draft stack; no merge,
-release, deployment, promotion or cleanup until applicable authorization.
+The owner's partial unfreeze permits ordinary verified layers to integrate
+after independent current-head review. Remaining work stays on the Draft stack;
+COUNT-IN withdrawal and release-path exclusions remain in force. Release,
+deployment, promotion and cleanup require their own applicable authorization.

@@ -139,6 +139,7 @@ function createPerformanceMasterCaptureController({
   timers,
   stopAckTimeoutMs,
   startAckTimeoutMs,
+  readSampleRate,
 }) {
   let generation = 0;
   let active = null;
@@ -200,7 +201,9 @@ function createPerformanceMasterCaptureController({
         node.port.postMessage({type: "meter-ack", owner: data.owner,
           windowEndFrame: data.windowEndFrame});
       } catch {
-        failMeter("protocol-error");
+        // Drain old tokens when possible, but an old owner's failed ACK
+        // cannot revoke the current owner's measurement or failure state.
+        if (data.owner === meterOwner) failMeter("protocol-error");
         return;
       }
     }
@@ -218,6 +221,23 @@ function createPerformanceMasterCaptureController({
     meterLatest = Object.freeze({state: "available", ...measurement});
   }
 
+  // Compact telemetry only: never retain a settled sink/queue through this read.
+  let captureProgressValue = null;
+
+  function captureProgress() {
+    const unavailable = reason => Object.freeze({state: "unavailable", reason});
+    if (closed) return unavailable("closed");
+    const value = captureProgressValue;
+    if (value === null) return unavailable("idle");
+    if (!value.armed) return unavailable(value.phase === "starting" ? "starting" : "start-failed");
+    if (!Number.isSafeInteger(value.sampleRate) || value.sampleRate <= 0) {
+      return unavailable("sample-rate-invalid");
+    }
+    if (!Number.isSafeInteger(value.receivedFrames)) return unavailable("frame-overflow");
+    const {armed: _, ...snapshot} = value;
+    return Object.freeze({state: "available", ...snapshot});
+  }
+
   function callSink(callback) {
     try {
       callback();
@@ -227,9 +247,13 @@ function createPerformanceMasterCaptureController({
     }
   }
 
-  function settle(record, notification) {
+  function settle(record, notification, progressFailure = "tap-failure", lossKnown = false) {
     if (active !== record || record.settled) return;
     record.settled = true;
+    record.progress.phase = notification === "stopped" ? "stopped" : "failed";
+    record.progress.failure = notification === "stopped" ? null : progressFailure;
+    record.progress.droppedFrames = notification === "stopped" ? 0
+      : lossKnown ? notification.droppedFrames : null;
     if (record.stopTimer !== null) {
       timers.clearTimeout(record.stopTimer);
       record.stopTimer = null;
@@ -248,6 +272,7 @@ function createPerformanceMasterCaptureController({
   function requestProcessorStop(record) {
     if (record.stopRequested) return true;
     record.stopRequested = true;
+    if (record.progress.armed) record.progress.phase = "stopping";
     try {
       node.port.postMessage({
         type: "stop",
@@ -263,7 +288,7 @@ function createPerformanceMasterCaptureController({
     if (active !== record || record.settled) return;
     record.terminalFailure = {droppedFrames};
     requestProcessorStop(record);
-    settle(record, record.terminalFailure);
+    settle(record, record.terminalFailure, "protocol-error");
   }
 
   node.port.onmessage = ({data}) => {
@@ -309,6 +334,7 @@ function createPerformanceMasterCaptureController({
       data.sequence === record.sequence + 1
     ) {
       record.sequence = data.sequence;
+      record.progress.receivedFrames += data.channels[0].length;
       callSink(() => record.sink.onBatch(data.channels));
       return;
     }
@@ -321,7 +347,7 @@ function createPerformanceMasterCaptureController({
       return;
     }
     if (data.type === "failed") {
-      settle(record, {droppedFrames: data.droppedFrames});
+      settle(record, {droppedFrames: data.droppedFrames}, "post-message-failed", true);
       return;
     }
     failActiveTraffic(record);
@@ -335,7 +361,7 @@ function createPerformanceMasterCaptureController({
     if (pendingStart !== null) {
       rejectPendingStart(pendingStart, "tap-processor-failed");
     }
-    if (active !== null) settle(active, {droppedFrames: 0});
+    if (active !== null) settle(active, {droppedFrames: 0}, "processor-failed");
     return true;
   }
 
@@ -346,6 +372,7 @@ function createPerformanceMasterCaptureController({
   function rejectPendingStart(pending, reason) {
     if (pendingStart !== pending) return;
     pendingStart = null;
+    pending.record.progress.phase = "failed";
     if (pending.timer !== null) {
       timers.clearTimeout(pending.timer);
       pending.timer = null;
@@ -371,6 +398,8 @@ function createPerformanceMasterCaptureController({
       pending.timer = null;
     }
     active = pending.record;
+    active.progress.armed = true;
+    active.progress.phase = active.stopRequested ? "stopping" : "recording";
     pending.resolve(pending.handle);
   }
 
@@ -388,7 +417,14 @@ function createPerformanceMasterCaptureController({
     generation = nextGeneration(generation);
     let resolveStop;
     const stopPromise = new Promise((resolve) => { resolveStop = resolve; });
+    let sampleRate = null;
+    try { sampleRate = readSampleRate(); } catch {}
+    const progress = {generation, sampleRate, receivedFrames: 0,
+      binding: binding === null ? null : Object.freeze({...binding}),
+      phase: "starting", armed: false, droppedFrames: 0, failure: null};
+    captureProgressValue = progress;
     const record = {
+      progress,
       generation,
       sequence: 0,
       binding,
@@ -424,11 +460,11 @@ function createPerformanceMasterCaptureController({
       stop() {
         if (record.settled || record.stopRequested) return record.stopPromise;
         if (!requestProcessorStop(record)) {
-          settle(record, {droppedFrames: 0});
+          settle(record, {droppedFrames: 0}, "stop-post-failed");
         }
         if (!record.settled) {
           record.stopTimer = timers.setTimeout(() => {
-            settle(record, {droppedFrames: 0});
+            settle(record, {droppedFrames: 0}, "stop-timeout");
           }, stopAckTimeoutMs);
         }
         return record.stopPromise;
@@ -454,10 +490,11 @@ function createPerformanceMasterCaptureController({
     closed = true;
     meterOwner = null;
     meterLatest = null;
+    captureProgressValue = null;
     if (pendingStart !== null) {
       rejectPendingStart(pendingStart, "tap-closed");
     }
-    if (active !== null) settle(active, {droppedFrames: 0});
+    if (active !== null) settle(active, {droppedFrames: 0}, "closed");
     node.port.onmessage = null;
     try {
       node.disconnect(destination);
@@ -468,6 +505,7 @@ function createPerformanceMasterCaptureController({
     destinationNode: node,
     setMeterOwner,
     meterMeasurement,
+    captureProgress,
     start,
     failProcessor,
     close,
@@ -498,6 +536,7 @@ export async function createPerformanceMasterTap(
   return createPerformanceMasterCaptureController({
     node,
     destination,
+    readSampleRate: () => context.sampleRate,
     timers: internal.timers ?? globalThis,
     stopAckTimeoutMs:
       internal.stopAckTimeoutMs ?? STOP_ACK_TIMEOUT_MS,
