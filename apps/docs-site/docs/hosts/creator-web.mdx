@@ -246,6 +246,20 @@ Stage 10 在 mode rail 上新增 Perform 入口（`project` / `sample` / `sequen
 - **Takes**：Flush、录制名称、Save/Discard、可用 WAV 的 Export 和 Retry WAV bind；录制停止后 Live 的 Review recording 可直接进入。只显示该阶段适用的操作，忙碌动作沿用原禁用规则。
 - **Replay**：已保存的 Performance 和 Apply/Discard recovery；发现恢复候选时其他页有 Review recovery 入口。播放中的 Stop Replay 和状态在各页仍可达。
 
+
+
+Live／Takes 的录音卡区分 **Captured audio** 与 **Local WAV**：前者只按同一已确认
+capture 的真实接收帧数和实际采样率显示 `mm:ss.mmm`，静音计入，回调延迟不补时。
+后者使用 WAV writer 自己编码的格式与已完成 checkpoint/seal 的 durableFrames；写入
+仍待关闭时不提前增长。正常 Stop 包含最后 partial batch，失败显示 Local WAV prefix、
+已知 Dropped frames，未量化的 tap loss 另标未知。读取和卡片更新不发 I/O、RPC 或新时钟。
+
+这些是本地录音事实，不表示 Save 或 WAV bind 已成功。Save UNKNOWN／Retry WAV bind
+期间保留同一 take 的计数，确认完成或丢弃才清除；关闭或替换录音 owner 不继承旧时钟。
+缺少真实 capture/rate 时显示 Unavailable；已保存 WAV 的有界验证 metadata 已由
+Facade/SDK 提供，完整 Takes 列表消费仍由 #2135 B／U08b 补齐。Replay 继续按事件
+进度，不使用 WAV 时长作分母。
+
 子页切换保留录制 session、回放轮询、HOLD、名称草稿和 参数组和 Mute/Solo 面板状态，不触发模式离开。按住 FX 时翻页暂时禁用；原生 pointer capture 保证拖出滑杆后松手仍能释放，释放或取消后才可切页。键盘离焦沿用既有释放语义；离开 Perform 模式或切到后台仍执行原有 leave 规则。
 
 FX 使用固定的八段链路顺序 `filter → delay → reverb → stutter → gate → reverse → crush → cutter`，与 Audio Runtime 的 `kFxChainOrder` 同一份真相；每个 slider 是 `0..1000` 整数范围、中性起点 `500`。FX 随时可用（#1674）：滑杆按下即经 `performance.fx.gesture` 实时作用于 master bus，与演奏录音互不构成前置；录音进行中同一手势再经 `performance.record.event` 记入 journal，录音开始时已为开启状态的 FX 与 HOLD 会补记 engage/hold_on，录音停止不释放仍按住的 FX。切换参数组、打开 Mute/Solo 或卸载输入时释放该输入拥有的触摸手势；旋钮手势不由触摸组件释放。再次点击 MORE 收起仍回到 PRIMARY 并释放被移除的五根推子。HOLD 是链路级开关，同样随时可切换。

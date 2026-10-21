@@ -6,6 +6,7 @@ import type {
   PerformanceLiveControlIntent,
   PerformanceLiveStatus,
   PerformanceMasterCapture,
+  PerformanceMasterCaptureProgress,
   PerformanceMasterCaptureStatus,
   PerformanceRawEvent,
   PerformanceRecordStatus,
@@ -25,6 +26,7 @@ import {
   openWavStreamWriter,
   type WavStreamWriter,
   type WavWriterSnapshot,
+  type WavWriterFormat,
 } from "../record/wav_stream_writer";
 import type {CreatorPerformanceRuntimeSession} from "../runtime/runtime_types";
 import {selectCanTrigger, type Bank, type CreatorState} from "./creator_state";
@@ -182,9 +184,19 @@ export function selectLivePadGate(gates: LivePadGates, slot: number) {
   return {muted, solo, silenced: muted || (gates.soloSlots.length > 0 && !solo)};
 }
 
+export interface RecordingAudioProgress {
+  readonly sessionId: string;
+  readonly performanceId: string;
+  readonly capture: PerformanceMasterCaptureProgress;
+  readonly tapLoss: number | null;
+  readonly wav: Readonly<{format: WavWriterFormat | null;
+    snapshot: WavWriterSnapshot; settled: boolean}> | null;
+}
+
 export interface PerformState {
   readonly bank: Bank;
   readonly captureStatus: PerformanceMasterCaptureStatus;
+  readonly recordingAudio: RecordingAudioProgress | null;
   readonly recording: Readonly<{
     phase: PerformanceRecordingPhase;
     sessionId: string | null;
@@ -221,6 +233,7 @@ export type PerformAction =
   | {readonly type: "bank"; readonly bank: Bank}
   | {readonly type: "capture"; readonly status: PerformanceMasterCaptureStatus}
   | {readonly type: "recording"; readonly recording: PerformState["recording"]}
+  | {readonly type: "recording-audio"; readonly value: RecordingAudioProgress | null}
   | {readonly type: "pending-launch";
       readonly pending: PerformState["pendingLaunch"]}
   | {readonly type: "authority"; readonly status: PerformanceRecordStatus}
@@ -260,6 +273,7 @@ export function initialPerformState(
   return Object.freeze({
     bank,
     captureStatus,
+    recordingAudio: null,
     recording: freezeRecording({phase: "idle", sessionId: null,
       performanceId: null, expectedRevision: null, wav: null}),
     pendingLaunch: null,
@@ -290,7 +304,9 @@ export function reducePerform(state: PerformState, action: PerformAction): Perfo
     case "bank": return Object.freeze({...state, bank: action.bank});
     case "capture": return Object.freeze({...state, captureStatus: action.status});
     case "recording": return Object.freeze({...state,
+      recordingAudio: ["idle", "starting"].includes(action.recording.phase) ? null : state.recordingAudio,
       recording: freezeRecording(action.recording)});
+    case "recording-audio": return Object.freeze({...state, recordingAudio: action.value});
     case "pending-launch": return Object.freeze({...state,
       pendingLaunch: action.pending});
     case "authority": {
@@ -505,6 +521,12 @@ async function defaultPrepareRecording(
 }
 
 interface RecordingShutdownOwner {
+  captureId: string | null;
+  captureBinding: Extract<PerformanceMasterCaptureProgress, {state: "available"}>["binding"];
+  captureTerminal: boolean;
+  tapLoss: number | null;
+  wavProgress: WavWriterSnapshot | null;
+  wavProgressSettled: boolean;
   readonly sessionId: string;
   readonly performanceId: string;
   resources: PreparedPerformanceRecording | null;
@@ -1084,6 +1106,61 @@ export function createPerformController(options: PerformControllerOptions): Perf
       type: "recording",
       recording: {...state.recording, ...changes, phase},
     });
+  const publishRecordingAudio = (owner: RecordingShutdownOwner, pinCapture = false) => {
+    if (closed || recordingOwner !== owner || state.recording.sessionId !== owner.sessionId) return;
+    const unavailable = (reason: Extract<PerformanceMasterCaptureProgress, {state: "unavailable"}>["reason"]): PerformanceMasterCaptureProgress =>
+      Object.freeze({state: "unavailable", reason});
+    let captured: PerformanceMasterCaptureProgress = unavailable("unsupported");
+    try {
+      const value = session.performanceMasterCaptureProgress?.();
+      if (value?.state === "available" && typeof value.captureId === "string" &&
+          Number.isSafeInteger(value.generation) && Number.isSafeInteger(value.sampleRate) && value.sampleRate > 0 &&
+          Number.isSafeInteger(value.receivedFrames) && value.receivedFrames >= 0 &&
+          (value.droppedFrames === null || Number.isSafeInteger(value.droppedFrames))) {
+        const actual = value.binding;
+        const expected = owner.captureBinding;
+        const matches = expected === null ? actual === null
+          : actual !== null && actual.controlEpoch === expected.controlEpoch &&
+            actual.sessionId === expected.sessionId && actual.beginCommandId === expected.beginCommandId;
+        if (owner.captureId === null && !pinCapture) captured = unavailable("starting");
+        else if (owner.captureId === null && actual !== null && actual.sessionId !== owner.sessionId) captured = unavailable("owner-lost");
+        else if (owner.captureId !== null && (owner.captureId !== value.captureId || !matches)) captured = unavailable("owner-lost");
+        else {
+          if (pinCapture) {
+            owner.captureId = value.captureId;
+            owner.captureBinding = actual === null ? null : Object.freeze({...actual});
+          }
+          captured = Object.freeze({state: "available", captureId: value.captureId,
+            generation: value.generation, binding: owner.captureBinding,
+            sampleRate: value.sampleRate, receivedFrames: value.receivedFrames,
+            phase: value.phase, droppedFrames: value.droppedFrames, failure: value.failure});
+          owner.tapLoss = value.droppedFrames;
+          owner.captureTerminal = ["stopped", "failed"].includes(value.phase);
+        }
+      } else if (value?.state === "unavailable") captured = Object.freeze({state: "unavailable", reason: value.reason});
+    } catch { captured = unavailable("protocol-error"); }
+    if (captured.state === "unavailable" && !owner.captureTerminal) owner.tapLoss = null;
+    let format: WavWriterFormat | null = null;
+    let snapshot = owner.wavProgress;
+    try {
+      const writer = owner.resources?.writer;
+      const f = writer?.format;
+      if (f !== undefined && Number.isSafeInteger(f.sampleRate) && f.sampleRate > 0 && f.channels === 2) {
+        format = Object.freeze({sampleRate: f.sampleRate, channels: f.channels});
+      }
+      if (snapshot === null && writer?.snapshot !== undefined) snapshot = writer.snapshot;
+    } catch { /* Metadata failure cannot operate capture or storage. */ }
+    const wav = snapshot === null ? null : Object.freeze({format,
+      snapshot: Object.freeze({...snapshot}), settled: owner.wavProgressSettled});
+    const value: RecordingAudioProgress = Object.freeze({sessionId: owner.sessionId,
+      performanceId: owner.performanceId, capture: captured, tapLoss: owner.tapLoss, wav});
+    // Small immutable numeric/string facts only; append without a checkpoint
+    // does not publish an identical second UI update.
+    if (JSON.stringify(state.recordingAudio) !== JSON.stringify(value)) {
+      dispatch({type: "recording-audio", value});
+    }
+  };
+
   const formatReason = (reason: string) => reason.replaceAll("_", " ");
   const loadRecovery = async (message?: string) => {
     const values = await session.listPerformanceRecovery() as
@@ -1200,6 +1277,7 @@ export function createPerformController(options: PerformControllerOptions): Perf
         disconnectCapture = session.subscribePerformanceMasterCaptureStatus(
           (captureStatus) => {
             dispatch({type: "capture", status: captureStatus});
+            if (recordingOwner !== null) publishRecordingAudio(recordingOwner);
             if (captureStatus.state !== "ready" &&
                 ["starting", "recording", "flushing"].includes(
                   state.recording.phase,
@@ -1246,6 +1324,7 @@ export function createPerformController(options: PerformControllerOptions): Perf
     close() {
       if (closePromise !== null) return closePromise;
       closed = true;
+      dispatch({type: "recording-audio", value: null});
       launchPollGeneration += 1;
       disconnectCapture?.();
       disconnectCapture = null;
@@ -1298,6 +1377,8 @@ export function createPerformController(options: PerformControllerOptions): Perf
         discardCommitted = false;
         setRecording("starting", {sessionId, performanceId});
         const owner: RecordingShutdownOwner = {sessionId, performanceId,
+          captureId: null, captureBinding: null, captureTerminal: false, tapLoss: null,
+          wavProgress: null, wavProgressSettled: false,
           resources: null, queue: null, capture: null, preparationFailure: null,
           queueAttempted: false, captureAttempted: false, captureStopObserved: false,
           captureStopped: false, wavSettled: false, coreBeginAttempted: false,
@@ -1313,7 +1394,14 @@ export function createPerformController(options: PerformControllerOptions): Perf
                 (outcome) => { owner.preparationFailure = outcome; })
             : prepareRecording(preparationRequest));
           owner.resources = resources;
+          publishRecordingAudio(owner);
           const listener: MasterTapListener = {
+            onProgress: (snapshot, settled) => {
+              if (recordingOwner !== owner || closed) return;
+              owner.wavProgress = snapshot;
+              owner.wavProgressSettled = settled;
+              publishRecordingAudio(owner);
+            },
             requestCaptureStop: () => { void controller.stop().catch(fail); },
             onFailure: (failure: MasterTapFailure) => {
               if (failure.reason !== "frame-limit") {
@@ -1327,12 +1415,19 @@ export function createPerformController(options: PerformControllerOptions): Perf
           owner.queueAttempted = true;
           const sourceQueue = createQueue(resources.writer, listener);
           queue = {
-            onBatch: (channels) => sourceQueue.onBatch(channels),
+            onBatch: (channels) => {
+              sourceQueue.onBatch(channels);
+              publishRecordingAudio(owner);
+            },
             onStopped: () => {
               owner.captureStopObserved = true;
               sourceQueue.onStopped();
+              publishRecordingAudio(owner);
             },
-            onFailure: (reason, droppedFrames) => sourceQueue.onFailure(reason, droppedFrames),
+            onFailure: (reason, droppedFrames) => {
+              sourceQueue.onFailure(reason, droppedFrames);
+              publishRecordingAudio(owner);
+            },
             get settled() { return sourceQueue.settled; },
           };
           owner.queue = queue;
@@ -1387,6 +1482,7 @@ export function createPerformController(options: PerformControllerOptions): Perf
             owner.captureAttempted = true;
             capture = await session.startPerformanceMasterCapture(queue);
             owner.capture = capture;
+            publishRecordingAudio(owner, true);
             if (closed) throw new Error("Performance controller closed during setup");
             if (state.captureStatus.state !== "ready") {
               throw new Error("Performance capture became unavailable during setup");
@@ -1396,6 +1492,7 @@ export function createPerformController(options: PerformControllerOptions): Perf
             owner.captureAttempted = true;
             capture = await session.startPerformanceMasterCapture(queue);
             owner.capture = capture;
+            publishRecordingAudio(owner, true);
             if (closed) throw new Error("Performance controller closed during setup");
             if (state.captureStatus.state !== "ready") {
               throw new Error("Performance capture became unavailable during setup");
@@ -1463,6 +1560,9 @@ export function createPerformController(options: PerformControllerOptions): Perf
             try {
               wav = await queue.settled;
               owner.wavSettled = true;
+              owner.wavProgress = wav;
+              owner.wavProgressSettled = true;
+              publishRecordingAudio(owner);
               capture = null;
               owner.capture = null;
             } catch (cleanupError) {
@@ -1597,7 +1697,12 @@ export function createPerformController(options: PerformControllerOptions): Perf
           let wav: WavWriterSnapshot;
           try {
             wav = await queue.settled;
-            if (owner !== null) owner.wavSettled = true;
+            if (owner !== null) {
+              owner.wavSettled = true;
+              owner.wavProgress = wav;
+              owner.wavProgressSettled = true;
+              publishRecordingAudio(owner);
+            }
           } catch (error) {
             rememberShutdownFailure(owner, "wav", error);
             throw error;

@@ -153,3 +153,21 @@
   --control-text: var(--creator-ink);
 }
 .hardware-workspace .perform-surface[data-page="slots"] .perform-slot-clear button:not(:disabled) { color: var(--creator-rose); }
+
+/* Recording audio card: actual captured PCM and local durable WAV are distinct. */
+.hardware-workspace .perform-audio-readout {
+  width: 100%;
+  box-sizing: border-box;
+  min-width: 0;
+  padding: 12px;
+  border-radius: 7px;
+  background: var(--creator-base);
+  grid-column: 1 / -1;
+}
+.hardware-workspace .perform-audio-readout dl { display: grid; gap: 6px; margin: 0; }
+.hardware-workspace .perform-audio-readout dl > div { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; min-width: 0; }
+.hardware-workspace .perform-audio-readout dt { font: 400 11px/15px var(--creator-font-mono); color: var(--creator-muted); }
+.hardware-workspace .perform-audio-readout dd { margin: 0; white-space: nowrap; font: 400 12px/17px var(--creator-font-mono); color: var(--creator-text); }
+.hardware-workspace .perform-audio-readout output { font: inherit; color: inherit; }
+.hardware-workspace .perform-audio-readout [aria-label="Captured audio"] { color: var(--creator-rose); }
+.hardware-workspace .perform-audio-readout p { margin: 6px 0 0; font: 400 10px/14px var(--creator-font-mono); color: var(--creator-rose); }
