@@ -26,6 +26,7 @@ import {
 } from "./fx_slider_bank";
 import {slotAddress} from "../state/view_model";
 import {PatternLaunchStrip} from "./pattern_launch_strip";
+import {RecordingAudioReadout} from "./recording_audio_readout";
 
 export interface PerformSurfaceProps {
   readonly controller: PerformController;
@@ -69,6 +70,8 @@ function RecordingPanel(props: {
   const [name, setName] = useState("Performance");
   return (
     <section className="perform-recording" aria-label="Performance recording">
+      {props.page === "live" || props.page === "takes"
+        ? <RecordingAudioReadout progress={props.state.recordingAudio} /> : null}
       {props.page === "live" || props.page === "takes" ? <>
         {phase === "idle" ? <button type="button" disabled={!props.canRecord}
           onClick={props.onRecord}>Record Performance</button> : null}

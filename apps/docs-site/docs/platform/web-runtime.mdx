@@ -356,3 +356,12 @@ recording／stopping／stopped／failed phase。调用只读本地投影，不�
 它不能证明 WAV 已 durable、Artifact 已绑定、保存结果已确定或演出完整。后续 Host
 必须继续区分 received PCM、writer durable prefix 和已验证的保存 WAV；不得把此值
 当作 Performance 总 elapsed、Replay 分母或现有事件回放规则的替代。
+
+
+Creator 的 Live／Takes 当前从同一 capture snapshot 显示 Captured audio，并从
+writer 自身的编码格式及 queue checkpoint/seal 回执显示 Local WAV／prefix。
+两个帧数独立；pending 写入不冒充 durable。可选 observer 只发布小型冻结数据，
+不改变原 Stop、清理、保存和恢复 owner。真实关闭／换 owner 清旧时钟，已确认本地
+前缀仍按其 take 保存，Save UNKNOWN／retry-bind 不提前清除。已保存 WAV 的有界验证
+metadata 已由独立 Facade/SDK 提供；完整 Takes 消费仍属 #2135 B，当前录音事实
+不能替代该保存后读回能力。
