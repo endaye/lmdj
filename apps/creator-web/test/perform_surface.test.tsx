@@ -4572,3 +4572,66 @@ test("all-64 mask summary distinguishes a pending mask from an applied empty lis
     .toEqual(["D16", "D16"]));
   expect(summary().getAttribute("data-provenance")).toBe("core");
 });
+
+
+test("Slots draft selectors and Escape/back neither launch nor change committed mapping", async () => {
+  const fixture = controllerFixture();
+  const select = vi.fn();
+  render(<PerformSurface controller={fixture.controller} project={project} bank={0}
+    onSelectPattern={select} />);
+  selectPerformPage("Slots");
+  expect((screen.getByRole("option", {name: "Pattern 01"}) as HTMLOptionElement).value).toBe(ids.pattern1);
+  expect((screen.getByRole("option", {name: "Pattern 02"}) as HTMLOptionElement).value).toBe(ids.pattern2);
+  for (const [name, value] of [["Pattern assignment", ids.pattern2], ["Pattern slot", "15"],
+    ["Move Pattern from", "1"], ["Move Pattern to", "14"], ["Clear Pattern slot", "13"]] as const) {
+    fireEvent.change(screen.getByRole("combobox", {name}), {target: {value}});
+    await userEvent.keyboard("{Escape}");
+  }
+  expect(screen.getByRole("status", {name: "Selected Pattern slot"}).textContent).toBe("Slot 16 · Empty");
+  selectPerformPage("Live");
+  expect(screen.getByRole("button", {name: "Launch Pattern 1"}).getAttribute("data-pattern-id")).toBe(ids.pattern1);
+  selectPerformPage("Slots");
+  expect((screen.getByRole("combobox", {name: "Pattern slot"}) as HTMLSelectElement).value).toBe("15");
+  expect(fixture.runtime.session.assignPatternSlot).not.toHaveBeenCalled();
+  expect(fixture.runtime.session.clearPatternSlot).not.toHaveBeenCalled();
+  expect(fixture.runtime.session.movePatternSlot).not.toHaveBeenCalled();
+  expect(fixture.runtime.calls.launch).not.toHaveBeenCalled();
+  expect(select).not.toHaveBeenCalled();
+  expect(fixture.refreshProject).not.toHaveBeenCalled();
+});
+
+test("Slots target readback changes only with refreshed Project Truth, including rejected Assign", async () => {
+  const fixture = controllerFixture();
+  const rendered = render(<PerformSurface controller={fixture.controller} project={project} bank={0} />);
+  selectPerformPage("Slots");
+  fireEvent.change(screen.getByRole("combobox", {name: "Pattern slot"}), {target: {value: "2"}});
+  await userEvent.selectOptions(screen.getByRole("combobox", {name: "Pattern assignment"}), ids.pattern2);
+  (fixture.runtime.session.assignPatternSlot as ReturnType<typeof vi.fn>).mockRejectedValueOnce(new Error("revision conflict"));
+  await userEvent.click(screen.getByRole("button", {name: "Assign Pattern"}));
+  await waitFor(() => expect(fixture.controller.getState().error).toBe("Something went wrong in Creator. Try again. Details are in Developer diagnostics."));
+  expect(screen.getByRole("status", {name: "Selected Pattern slot"}).textContent).toBe("Slot 03 · Empty");
+  expect(fixture.refreshProject).not.toHaveBeenCalled();
+  rendered.rerender(<PerformSurface controller={fixture.controller} bank={0}
+    project={{...project, revision: 8, patternSlots: project.patternSlots.map((id, index) => index === 2 ? ids.pattern2 : id)}} />);
+  expect(screen.getByRole("status", {name: "Selected Pattern slot"}).textContent).toBe("Slot 03 · Pattern 02");
+});
+
+test("Slots structural lock disables all draft controls and actions without disabling ordinary Launch", async () => {
+  const fixture = controllerFixture();
+  const select = vi.fn();
+  const rendered = render(<PerformSurface controller={fixture.controller} project={project} bank={0}
+    slotEditingLocked transport={idlePatternTransport()} onSelectPattern={select} />);
+  selectPerformPage("Slots");
+  const editor = screen.getByRole("group", {name: "Pattern slot editing"});
+  for (const control of [...within(editor).getAllByRole("combobox"), ...within(editor).getAllByRole("button")]) {
+    expect(control.hasAttribute("disabled")).toBe(true);
+  }
+  selectPerformPage("Live");
+  await userEvent.click(screen.getByRole("button", {name: "Launch Pattern 1"}));
+  expect(select).toHaveBeenCalledExactlyOnceWith(ids.pattern1);
+  rendered.rerender(<PerformSurface controller={fixture.controller} project={project} bank={0}
+    slotEditingLocked={false} transport={idlePatternTransport()} onSelectPattern={select} />);
+  selectPerformPage("Slots");
+  for (const control of screen.getAllByRole("combobox")) expect(control.hasAttribute("disabled")).toBe(false);
+  expect(screen.getByRole("button", {name: "Assign Pattern"}).hasAttribute("disabled")).toBe(false);
+});

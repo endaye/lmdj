@@ -347,3 +347,70 @@ test("Perform targets and complete encoder labels fit all six layouts", async ({
   await writeFile(path,JSON.stringify(observations,null,2));
   await info.attach(`perform-targets-${browserName}`,{path,contentType:'application/json'});
 });
+
+
+test("Slots grouped actions remain reachable with 44px targets in six viewports", async ({page}, info) => {
+  await page.getByTestId("physical-controls").getByRole("button", {name: "Perform", exact: true}).click();
+  await showPerformPage(page, "Slots");
+  const surface = page.getByRole("main", {name: "Perform", exact: true});
+  const observations = [];
+  for (const viewport of [{width:1440,height:900}, {width:1280,height:720},
+    {width:1024,height:768}, {width:820,height:1180}, {width:768,height:1024}, {width:390,height:844}]) {
+    await page.setViewportSize(viewport);
+    await page.waitForFunction(({width, height}) => innerWidth === width && innerHeight === height, viewport);
+    await page.evaluate(() => new Promise(resolve => requestAnimationFrame(resolve)));
+    await expectTouchFits(page);
+    const controls = surface.locator("button,select,summary");
+    for (const control of await controls.all()) await expectControlFits(page, control);
+    const measurement = await surface.evaluate(root => {
+      const rect = node => {const b=node.getBoundingClientRect(); return {x:b.x,y:b.y,width:b.width,height:b.height};};
+      const cards = [...root.querySelectorAll('.perform-slot-card,.perform-slot-clear')].map(rect);
+      const overlaps = cards.some((a,index) => cards.slice(index+1).some(b =>
+        Math.min(a.x+a.width,b.x+b.width)-Math.max(a.x,b.x)>0.5 &&
+        Math.min(a.y+a.height,b.y+b.height)-Math.max(a.y,b.y)>0.5));
+      const context = document.createElement('canvas').getContext('2d');
+      const selects = [...root.querySelectorAll('select')].map(node => {
+        const style=getComputedStyle(node);context.font=style.font;
+        return {name:node.getAttribute('aria-label'), label:node.selectedOptions[0]?.textContent??'',
+          text:context.measureText(node.selectedOptions[0]?.textContent??'').width,
+          // Keep space for the native dropdown arrow as well as both paddings.
+          available:node.clientWidth-parseFloat(style.paddingLeft)-parseFloat(style.paddingRight)-24};
+      });
+      const assign=root.querySelector('.perform-slot-assign');
+      context.fillStyle=getComputedStyle(root).getPropertyValue('--creator-lime').trim();
+      const expectedFill=context.fillStyle;
+      context.fillStyle=getComputedStyle(assign,'::before').backgroundColor;
+      const paintedFill=context.fillStyle;
+      context.fillStyle=getComputedStyle(root).getPropertyValue('--creator-ink').trim();
+      const expectedText=context.fillStyle;
+      context.fillStyle=getComputedStyle(assign).color;
+      const paintedText=context.fillStyle;
+      return {cards, overlaps, selects, expectedFill, paintedFill, expectedText, paintedText, controls:[...root.querySelectorAll('button,select,summary')].map(node => ({
+        name:node.getAttribute('aria-label')||node.textContent.trim(),...rect(node),
+        client:node.clientWidth,scroll:node.scrollWidth})),
+        scrollers:[...root.querySelectorAll('*')].filter(node => ['auto','scroll'].includes(getComputedStyle(node).overflowY)
+          && node.scrollHeight>node.clientHeight+1).length};
+    });
+    expect(measurement.cards).toHaveLength(3);
+    expect(measurement.overlaps).toBe(false);
+    expect(measurement.scrollers).toBe(0);
+    expect(measurement.paintedFill).toBe(measurement.expectedFill);
+    expect(measurement.paintedText).toBe(measurement.expectedText);
+    for (const select of measurement.selects) {
+      expect(select.text, JSON.stringify({viewport,select})).toBeLessThanOrEqual(select.available);
+    }
+    for (const control of measurement.controls) {
+      expect(control.width, JSON.stringify({viewport,control})).toBeGreaterThanOrEqual(44);
+      expect(control.height, JSON.stringify({viewport,control})).toBeGreaterThanOrEqual(44);
+      expect(control.scroll, JSON.stringify({viewport,control})).toBeLessThanOrEqual(control.client+1);
+    }
+    observations.push({viewport,...measurement});
+    await surface.getByRole("button", {name: "Assign Pattern", exact: true}).scrollIntoViewIfNeeded();
+    const screenshot = info.outputPath(`slots-${viewport.width}x${viewport.height}.png`);
+    await page.screenshot({path:screenshot});
+    await info.attach(`Slots ${viewport.width}x${viewport.height}`, {path:screenshot,contentType:"image/png"});
+  }
+  const path = info.outputPath("slots-geometry.json");
+  await writeFile(path, JSON.stringify(observations,null,2));
+  await info.attach("Slots geometry", {path,contentType:"application/json"});
+});

@@ -46,6 +46,7 @@ export interface PerformSurfaceProps {
   // while playing and reloads the snapshot while stopped.
   readonly onSelectPattern?: (patternId: string) => void;
   readonly patternSelectionLocked?: boolean;
+  readonly slotEditingLocked?: boolean;
 }
 
 type PerformPage = "live" | "slots" | "takes" | "replay";
@@ -330,7 +331,7 @@ export function PerformSurface(props: PerformSurfaceProps) {
         pending={state.pendingLaunch} lastAck={state.lastLaunchAck}
         view={page === "live" ? "launch" : page === "slots" ? "edit" : null}
         disabled={launchDisabled}
-        mutationDisabled={state.recording.phase !== "idle"}
+        mutationDisabled={props.slotEditingLocked === true || state.recording.phase !== "idle"}
         transportPendingPatternId={props.transport?.status?.pendingSwitch?.patternId ?? null}
         transportCurrentPatternId={transportPlaying
           ? props.transport?.status?.currentPatternId ?? null
