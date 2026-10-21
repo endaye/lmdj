@@ -206,9 +206,21 @@ class DoctorChecksTest(unittest.TestCase):
             (8, 0.0, "vim tools/release/cli.py"),
         ]
         self.assertEqual(check_release_processes(self.probes).status, "ok")
-        self.probes.rows.append((9, 3.0, "/usr/bin/python3 /repo/tools/release/cli.py --repo-root /repo resume release-1"))
-        check = check_release_processes(self.probes)
-        self.assertFails(check, detail="9 (--repo-root /repo resume release-1)", remedy="kill <pid>")
+        # Read-only commands beside a driver are not a second driver.
+        for arguments in ("--repo-root /repo status", "--repo-root=/repo audit --remote",
+                          "--repo-root /repo doctor", "--repo-root /repo hydrate",
+                          "--repo-root /repo publication-record t 1 a"):
+            with self.subTest(arguments=arguments):
+                self.probes.rows.append((9, 3.0, f"/usr/bin/python3 /repo/tools/release/cli.py {arguments}"))
+                self.assertEqual(check_release_processes(self.probes).status, "ok")
+                self.probes.rows.pop()
+        for arguments in ("--repo-root /repo resume release-1", "--repo-root=/repo run --authority x",
+                          "--repo-root /repo prepare lmdj-v1.0.1.0", "--repo-root /repo retire r --superseded-by t"):
+            with self.subTest(arguments=arguments):
+                self.probes.rows.append((9, 3.0, f"/usr/bin/python3 /repo/tools/release/cli.py {arguments}"))
+                check = check_release_processes(self.probes)
+                self.assertFails(check, detail=f"9 ({arguments})", remedy="kill <pid>")
+                self.probes.rows.pop()
 
     # disk and load
     def test_disk_and_load_thresholds_name_what_to_free_and_stop(self):
@@ -262,6 +274,22 @@ class DoctorChecksTest(unittest.TestCase):
         del self.probes.files[str(self.probes.home / "Library/LaunchAgents" / f"{label}.plist")]
         self.probes.rows = [(90, 50.0, "/Users/x/actions-runner/other/bin/Runner.Worker spawnclient 1 2")]
         self.assertEqual(check_runner(self.probes).status, "fail")
+
+    def test_every_loaded_runner_service_is_inspected(self):
+        import plistlib
+        first, second = "actions.runner.endaye-lmdj.endaye-mbp-m1", "actions.runner.other.second"
+        self.probes.commands[("launchctl", "list")] = (0, f"77\t0\t{first}\n78\t0\t{second}\n", "")
+        for label, workdir in ((first, "/Users/x/actions-runner/lmdj"), (second, "/Users/x/actions-runner/second")):
+            self.probes.files[str(self.probes.home / "Library/LaunchAgents" / f"{label}.plist")] = plistlib.dumps(
+                {"Label": label, "WorkingDirectory": workdir}).decode()
+        idle = check_runner(self.probes)
+        self.assertEqual(idle.status, "ok")
+        self.assertIn(f"launchctl bootout gui/$(id -u)/{first}", idle.detail)
+        self.assertIn(f"launchctl bootout gui/$(id -u)/{second}", idle.detail)
+        # A job under the second service is reported against that service.
+        self.probes.rows = [(90, 50.0, "/Users/x/actions-runner/second/bin/Runner.Worker spawnclient 1 2")]
+        busy = check_runner(self.probes)
+        self.assertFails(busy, detail=f"{second} is executing", remedy=f"launchctl bootout gui/$(id -u)/{second}")
 
     # aggregate
     def test_run_doctor_reports_every_check_in_a_fixed_order_and_fails_closed(self):

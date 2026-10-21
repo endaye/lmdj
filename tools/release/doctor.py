@@ -231,6 +231,15 @@ def check_journal_lock(probes, journal_root):
                  "processes check); never delete writer.lock or the journal")
 
 
+# The release.sh commands that drive or mutate release state; a second one of
+# these is a second driver. Read-only commands (status, audit, doctor,
+# publication-record, publication-patch, verify-*) and the object-store
+# hydrate may run beside a driver.
+DRIVING_COMMANDS = frozenset({"run", "resume", "retire", "prepare", "push-tag",
+                              "create-draft", "publish-draft", "promote",
+                              "editorial", "rehearsal"})
+
+
 def _release_cli_arguments(command):
     """The arguments after `tools/release/cli.py` when `command` runs it, else None.
 
@@ -246,13 +255,29 @@ def _release_cli_arguments(command):
     return None
 
 
+def _release_subcommand(arguments):
+    """The release.sh subcommand in a cli.py argument string, or None."""
+    tokens = arguments.split()
+    index = 0
+    while index < len(tokens):
+        token = tokens[index]
+        if token == "--repo-root":
+            index += 2
+            continue
+        if token.startswith("--repo-root="):
+            index += 1
+            continue
+        return token if not token.startswith("-") else None
+    return None
+
+
 def check_release_processes(probes):
     others = []
     for pid, _, command in probes.processes():
         if pid == probes.pid:
             continue
         arguments = _release_cli_arguments(command)
-        if arguments is not None:
+        if arguments is not None and _release_subcommand(arguments) in DRIVING_COMMANDS:
             others.append((pid, arguments))
     if not others:
         return Check("release processes", "ok", "no other release.sh process")
@@ -327,28 +352,30 @@ def check_runner(probes):
               if code == 0 and line.strip() and line.split()[-1].startswith(RUNNER_LABEL_PREFIX)]
     if not labels:
         return Check("m1 runner", "ok", "no actions runner service loaded (paused or not installed)")
-    label = labels[0]
-    pause = f"launchctl bootout gui/$(id -u)/{label}"
-    resume = f"launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/{label}.plist"
-    # A worker belongs to this service when it runs from the service's own
-    # working directory (the launch agent's WorkingDirectory); without a
-    # readable agent definition any worker counts, conservatively.
-    workdir = None
-    try:
-        agent = plistlib.loads(probes.read_text(
-            probes.home / "Library/LaunchAgents" / f"{label}.plist").encode("utf-8"))
-        workdir = agent.get("WorkingDirectory") if isinstance(agent, dict) else None
-    except (OSError, ValueError, plistlib.InvalidFileException, UnicodeError):
-        workdir = None
     workers = [command for _, _, command in probes.processes() if "Runner.Worker" in command]
-    busy = any(workdir is None or command.startswith(workdir.rstrip("/") + "/")
-               for command in workers)
-    if busy:
-        return Check("m1 runner", "fail", f"{label} is executing a CI job on this host",
-                     f"wait for the job, or pause the runner for the release: {pause}; "
-                     f"resume it afterwards: {resume}")
-    return Check("m1 runner", "ok", f"{label} loaded, idle; pause it before prepare: {pause}; "
-                 f"resume afterwards: {resume}")
+    idle = []
+    for label in labels:
+        pause = f"launchctl bootout gui/$(id -u)/{label}"
+        resume = f"launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/{label}.plist"
+        # A worker belongs to this service when it runs from the service's own
+        # working directory (the launch agent's WorkingDirectory); without a
+        # readable agent definition any worker counts, conservatively.
+        workdir = None
+        try:
+            agent = plistlib.loads(probes.read_text(
+                probes.home / "Library/LaunchAgents" / f"{label}.plist").encode("utf-8"))
+            workdir = agent.get("WorkingDirectory") if isinstance(agent, dict) else None
+        except (OSError, ValueError, plistlib.InvalidFileException, UnicodeError):
+            workdir = None
+        busy = any(workdir is None or command.startswith(workdir.rstrip("/") + "/")
+                   for command in workers)
+        if busy:
+            return Check("m1 runner", "fail", f"{label} is executing a CI job on this host",
+                         f"wait for the job, or pause the runner for the release: {pause}; "
+                         f"resume it afterwards: {resume}")
+        idle.append(f"{label} loaded, idle; pause it before prepare: {pause}; "
+                    f"resume afterwards: {resume}")
+    return Check("m1 runner", "ok", " | ".join(idle))
 
 
 def run_doctor(root, *, product_fingerprint, checksum_fingerprint, journal_root, probes=None):
