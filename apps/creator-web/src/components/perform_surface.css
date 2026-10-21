@@ -222,6 +222,61 @@
   --control-text: var(--creator-ink);
 }
 .hardware-workspace .perform-take-discard:not(:disabled) { color: var(--creator-rose); }
+.hardware-workspace .perform-surface[data-page] :is(.perform-replay, .perform-current-replay, .perform-replay-recovery) {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+}
+.hardware-workspace .perform-surface[data-page] :is(.perform-replay-take, .perform-replay-status-card, .perform-replay-recovery-card) {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+  padding: 12px;
+  border-radius: 7px;
+  background: var(--creator-base);
+}
+.hardware-workspace .perform-replay-take .perform-take-heading {
+  overflow-wrap: anywhere;
+  white-space: normal;
+  color: var(--creator-text);
+}
+.hardware-workspace .perform-replay-take > p {
+  margin: 0;
+  font: 400 11px/15px var(--creator-font-mono);
+  color: var(--creator-muted);
+  overflow-wrap: anywhere;
+}
+.hardware-workspace .perform-replay-status-card .perform-take-heading {
+  font-size: 14px;
+  line-height: 20px;
+  color: var(--creator-text);
+}
+.hardware-workspace .perform-replay-count { margin: 0; }
+.hardware-workspace :is(.perform-replay-count > div, .perform-replay-events) {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  min-width: 0;
+  font: 400 11px/15px var(--creator-font-mono);
+  color: var(--creator-muted);
+}
+.hardware-workspace .perform-replay-count dd { margin: 0; color: var(--creator-text); }
+.hardware-workspace .perform-replay-events output {
+  color: var(--creator-text);
+  text-align: right;
+  overflow-wrap: anywhere;
+}
+.hardware-workspace .perform-replay-status-card progress {
+  width: 100%;
+  height: 8px;
+  accent-color: var(--creator-lime);
+}
+.hardware-workspace .perform-replay-status-card p {
+  margin: 0;
+  font: 400 11px/15px var(--creator-font-mono);
+  color: var(--creator-muted);
+  overflow-wrap: anywhere;
+}
 .hardware-workspace .perform-saved-takes { padding-top: 8px; border-top: 1px solid var(--creator-line); }
 .hardware-workspace .perform-take-list { display: grid; gap: 4px; min-width: 0; }
 .hardware-workspace .perform-take-list button {

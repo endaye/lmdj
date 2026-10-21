@@ -246,6 +246,36 @@ Stage 10 在 mode rail 上新增 Perform 入口（`project` / `sample` / `sequen
 - **Takes**：Flush、录制名称、Save/Discard、可用 WAV 的 Export 和 Retry WAV bind；录制停止后 Live 的 Review recording 可直接进入。停止状态、音频卡、名称与保存动作分组。下方 Saved Takes 可选择已保存演出，查看经验证的 WAV 音频时长；选择本身不触发 Replay。只显示该阶段适用的操作，忙碌动作沿用原禁用规则。
 - **Replay**：已保存的 Performance 和 Apply/Discard recovery；发现恢复候选时其他页有 Review recovery 入口。播放中的 Stop Replay 和状态在各页仍可达。
 
+Replay 将已保存演出的名称、实际事件数和 Replay 动作组成卡片，恢复候选单独分组。
+列表沿用当前 Project owner 和恢复快照的验证，当前未保存／UNKNOWN 录音与恢复草稿
+不能冒充已保存演出；失败时显式重查。进入页面不启动 Replay、不扫描 WAV。
+回放中不再提交第二个 Replay publisher。
+
+Apply／Discard recovery 都会留下 stopped 草稿，并非已经保存。只有现有公共
+recording status 确认 stopped、待提交事件为零且与当前 Project owner／revision
+匹配时，单独显示 Stopped recording；重开后用同样的 Core 读数恢复该入口。
+这张卡可 Replay、Save stopped recording 或 Discard stopped recording；保存保留
+实际名称与录音引用，没有 WAV 时明确说明，不把丢失的 capture 当成已恢复音频。
+这些动作沿用现有 mutation／finalization 边界，过期或未知结果退回显式刷新。
+该 status 读取同样可能触发恢复，只在有候选时、在原 header／WAV 保护边界内执行。
+Discard recovery 已确认后，列表读取失败由 Saved Takes unavailable 和显式重查承接，
+不覆盖已确认的 discarded 状态或原有 Retry WAV bind 提示；原 WAV 归属和读取保护不变。
+
+当前录音的 Performance saved 只来自实际 Save 回执；匹配检查显示 Performance
+inspected，不把已存在的同名草稿当成 Save 确认。这些观察与 WAV bind 分开，名称
+保持本次提交的身份。UNKNOWN 不显示保存成功，绑定失败继续保留原 WAV 与重试。
+
+事件进度只显示公共 Replay 回执的 `eventCursor / eventCount`，使用现有轮询，
+不按墙钟补数，也不以 WAV 时长为分母。首事件归零仍由 Core 的事件投影负责。
+零事件回放显示 `0 / 0 events`，不制造百分比或音频时长；无效计数显示不可用。
+游标已到末尾但 Core 仍报告 playing 时，界面仍保持 playing。
+
+Stop 请求期间显示等待，只有原控制器观察到终态及 neutral 确认后才显示 reset
+confirmed；失败保留原 owner 和重试。空回放的 begin 若已直接返回终态，采用同样的
+确认投影，不等待一个不会启动的 playing 轮询。HOLD 标签来自现有实时状态，不用
+历史 reset 回执覆盖后续的实时操作。Resolved revision 保留在回放详情中，独立于
+当前作者修订。完整演出总时长、Replay elapsed、时间线和 seek 仍未在此实现。
+
 
 
 Live／Takes 的录音卡区分 **Captured audio** 与 **Local WAV**：前者只按同一已确认

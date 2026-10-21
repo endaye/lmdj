@@ -629,18 +629,24 @@ SEQ SNAP 决定切 Pattern 的时机，Grid tools 的 Snap 决定网格编辑吸
 | Takes，录制中 | Flush Performance | 立即写出本轮已记录的操作。不停止，也不另存音频。 |
 | 录制中 | Stop Performance | 结束录制，等待保存或丢弃。不停止全局 Pattern。停止尚未完成时 Launch 不可用；完成后按全局 transport 的停止／播放状态选择或预约，不再写入刚停止的演出。 |
 | Live，已停止 | Review recording | 进入 Takes 处理录音。 |
-| Takes，已停止 | Performance name | 修改名称。保存或丢弃进行中时只读。名称为空时不能保存。 |
+| Takes，已停止 | Performance name | 修改名称。保存或丢弃进行中、或 Save 已确认后只读。名称为空时不能保存。 |
 | Takes，已停止且有名称 | Save Performance | 保存演出和 WAV，Replay 出现新条目。点 Save 前不算保存。WAV 关联失败时出现 Retry WAV bind。 |
 | Takes，已停止 | Discard Performance | 丢弃当前待保存的演出。不删除已保存的演出。 |
 | Takes，有 WAV | Export Performance WAV | 下载这次的 WAV。不产生作者编辑。 |
 | Takes，关联失败 | Retry WAV bind | 只重试关联 WAV，不用再演一次。 |
+| Takes，Save 尚未结束 | Performance saved／Performance inspected（只读） | 前者只来自实际 Save 回执，后者是匹配的 Project 检查结果；检查到同名草稿不等于已确认 Save。两者与 WAV 关联状态分开，绑定失败仍保留本地 WAV 与显式重试。 |
 | Takes，Saved Takes 有条目 | Take 选择按钮 | 选择要查看的已保存演出，按实际验证 WAV 的帧数／采样率显示音频时长。选择不写工程、不触发 Replay，也不扫描其他 Take。 |
 | Takes，所选演出 | WAV audio（只读） | 时长仅来自完整 owner／revision／Artifact 验证后的 WAV；无 WAV、不支持格式、完整性校验失败和读取不可用分别显示。旧录音完整性仍未知，不用事件数或字节数猜时间。 |
 | Takes，WAV 读取失败 | Retry audio check | 显式重查当前所选 Take。换选择、工程重开或引用变化后不采纳旧结果；取消观察不等于底层读取已退出。 |
 | Takes，列表读取失败 | Retry saved Takes | 重新读取当前工程的列表，不自动 Replay 或重试旧工程的工作。若当前 WAV 绑定失败，先 Retry WAV bind 或 Discard，保留待处理文件后再恢复列表。 |
 | Takes，已选演出 | Replay selected Take | 显式开始原有事件 Replay 并进入 Replay 页；WAV 时长不作为其进度分母。 |
 | Replay 有条目，或任一子页回放中 | Replay／Stop Replay | 回放或停止。回放不会录进 Pattern；上屏仍显示全局 Pattern。Stop Replay 将 FX 归中、关闭 HOLD 并清空演出 Launch 状态，监听音量保持。 |
-| Replay，有演出恢复候选 | Apply recovery／Discard recovery | 恢复演出（自动收尾未松开的 Pad），或丢掉候选。丢候选不删除已保存的演出。 |
+| Replay，已保存演出卡片 | 名称／Events／Replay | 名称与实际事件数来自当前 Project owner 的已验证列表；排除未保存及恢复草稿。显式 Replay 才启动原 publisher，回放中阻止重复开始。 |
+| Replay，Stopped recording | Replay／Save stopped recording／Discard stopped recording | Core 确认 stopped、没有待提交事件且与当前工程修订匹配的草稿单独显示，不归入 Saved Takes。重开后仍可重放、保存或丢弃；保存保留已有名称与录音引用，不伪造恢复 WAV。未确认或过期状态不开放这些操作。 |
+| Replay，或任一子页有回放 | Events 进度 | 只读公共 eventCursor/eventCount，不按墙钟或 WAV 时长插值。零事件显示 0 / 0 events，不显示虚构百分比；计数无效时明确不可用。 |
+| Replay，正在 Stop | Stopping Replay | 等待原终态与 neutral 回执，尚未确认时不宣称复位。失败后可对同一 owner 显式重试；已停止时 Stop 禁用。 |
+| Replay，已终态 | Neutral reset confirmed | 来自现有确认，包括零事件 begin 已直接终态的情况。HOLD 显示现有实时状态；回执修订与当前作者修订分开，不扩展为 elapsed 时间线。 |
+| Replay，有演出恢复候选 | Apply recovery／Discard recovery | 恢复演出（自动收尾未松开的 Pad），或丢掉候选；两者都会留下 stopped 草稿，后续再显式保存或丢弃整份草稿。丢候选不删除此前已提交的演出事件。 |
 | Live／Slots／Takes，有恢复候选 | Review recovery | 进入 Replay 查看。FX 推子按住时不可用。 |
 | Slots，结构编辑可用 | Pattern assignment／slot、Clear slot、Move from／to 下拉 | 在 Assign／Move／Clear 分区选择参数。Pattern 以序号区分；目标槽读数来自实际工程映射。选择、Escape 或返回 Live 都不写工程、不 Launch，切页后保留选项。 |
 | Slots，结构编辑可用 | Assign Pattern／Clear Pattern／Move Pattern | 按对应按钮才提交分配、清空或移动，并刷新工程；失败不把草稿当成已提交读数。源和目标相同时 Move 不可用。演出录制非空闲、全局 Pattern 录制及工程／transport 结算时禁用全部结构编辑；稳定普通播放可编辑，全局录制中的正常 Launch 规则不变。 |
