@@ -2098,6 +2098,42 @@ html[data-creator-layout="compact"] {
   }
 }
 
+/* Four44px Pads plus three8px gaps require200px. The compact desktop
+   pair reserves492px elsewhere and16px viewport margins, so below708px
+   portrait every mode shares the stacked matrix/touch composition. Keeping
+   the rail separate restores actual input hits without smaller controls. */
+@media (max-width: 707px) and (orientation: portrait) {
+  html[data-creator-layout="compact"] .hardware-console {
+    height: 778px;
+  }
+  html[data-creator-layout="compact"] .hardware-console > [aria-label="Pad matrix"] {
+    left: 108px;
+    right: 8px;
+    top: 168px;
+    width: auto;
+    height: 250px;
+  }
+  html[data-creator-layout="compact"] .hardware-console .pad-grid {
+    width: min(100%, 250px);
+    height: 250px;
+  }
+  html[data-creator-layout="compact"] .hardware-console > [aria-label="Touch workspace"] {
+    left: 108px;
+    right: 8px;
+    top: 426px;
+    width: auto;
+    height: 344px;
+  }
+  html[data-creator-layout="compact"] .hardware-console .pad span {
+    left: 5px;
+    right: 5px;
+    font-size: 8px;
+    line-height: 10px;
+  }
+  html[data-creator-layout="compact"] .hardware-console .pad.is-selected span { padding-right: 7px; font-size: 7.5px; }
+  html[data-creator-layout="compact"] .hardware-console .pad-live-gate { font-size: 8px; line-height: 10px; }
+}
+
 /* Pad colour controls (#1207): the selected Pad's five colours and restore,
    in the Sample touch area. */
 .pad-colour-controls {
