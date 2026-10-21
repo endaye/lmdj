@@ -1,6 +1,6 @@
 import {showSamplePage} from "./fixtures/creator_navigation.mjs";
 import {wakeAudioWithPad} from "./fixtures/creator_audio.mjs";
-import {readFile} from "node:fs/promises";
+import {readFile, writeFile} from "node:fs/promises";
 
 import {expect, test} from "./fixtures/refusal_diagnostics.mjs";
 import {
@@ -190,3 +190,88 @@ test("a second tab takes over the open Project and the first takes it back", asy
   holderErrors();
   secondErrors();
 });
+
+
+for (const viewport of [
+  {width: 648, height: 364},
+  {width: 768, height: 1024},
+  {width: 1440, height: 900},
+]) {
+  test(`pending takeover owns its action and restores recovery ${viewport.width}x${viewport.height}`, async ({page, context, browserName}, testInfo) => {
+    test.skip(browserName !== "chromium");
+    test.setTimeout(240_000);
+    // Close only the actual holder-side UI coordination channel to exercise
+    // an unanswered request. The Native terminal channel and OPFS writer stay
+    // live; this is a delivery fault, not a simulated Native owner loss.
+    await page.addInitScript(() => {
+      const NativeChannel = window.BroadcastChannel;
+      window.BroadcastChannel = class extends NativeChannel {
+        constructor(name) {
+          super(name);
+          if (name === "lmdj.creator.project-takeover.v1") {
+            window.__creatorUiTakeoverPort = this;
+          }
+        }
+      };
+    });
+    const holderErrors = recordPageErrors(page);
+    await page.goto("/index.html");
+    await waitForBootProject(page);
+    const truth = await projectTruth(page);
+    const history = await undoDepth(page);
+    await page.evaluate(() => {
+      if (!window.__creatorUiTakeoverPort) throw new Error("actual Creator coordination channel missing");
+      window.__creatorUiTakeoverPort.close();
+    });
+
+    const requester = await context.newPage();
+    const requesterErrors = recordPageErrors(requester);
+    await requester.setViewportSize(viewport);
+    await requester.goto("/index.html");
+    const busy = requester.getByRole("alert").filter({hasText: BUSY});
+    await expect(busy).toBeVisible({timeout: PROJECT_OPEN_TIMEOUT_MS});
+    await busy.getByRole("button", {name: "Continue here"}).click();
+    const pending = requester.getByRole("status").filter({hasText: "Asking the other tab to hand over this Project…"});
+    await expect(pending).toBeVisible();
+    await expect(busy).toHaveCount(0);
+    await expect(requester.getByRole("button", {name: "Dismiss", exact: true})).toHaveCount(0);
+    const cancel = pending.getByRole("button", {name: "Cancel", exact: true});
+    const action = await cancel.evaluate(button => {
+      const rect = button.getBoundingClientRect();
+      const hit = document.elementFromPoint(rect.x + rect.width / 2, rect.y + rect.height / 2);
+      return {x: rect.x, y: rect.y, width: rect.width, height: rect.height,
+        ownsCenter: hit === button || button.contains(hit),
+        viewport: {width: innerWidth, height: innerHeight}};
+    });
+    expect(action.ownsCenter).toBe(true);
+    await requester.screenshot({path: testInfo.outputPath("takeover-pending.png"), fullPage: true});
+    await cancel.focus();
+    await expect(cancel).toBeFocused();
+    await requester.keyboard.press("Enter");
+    await expect(pending).toHaveCount(0);
+    await expect(busy).toBeVisible();
+    await expect(busy.getByRole("button", {name: "Continue here"})).toBeEnabled();
+    await expect(busy.getByRole("button", {name: "Retry project"})).toBeEnabled();
+    expect(await projectTruth(page)).toEqual(truth);
+    expect(await undoDepth(page)).toBe(history);
+    await expect(page.getByTestId("creator-phase")).toHaveText("ready");
+
+    // A fresh request reaches the real answer timeout. Its subsequent ordinary
+    // open remains refused by the unchanged writer; the same recovery returns.
+    await busy.getByRole("button", {name: "Continue here"}).click();
+    await expect(pending).toBeVisible();
+    await expect(busy).toBeVisible({timeout: TAKEOVER_TIMEOUT_MS});
+    await expect(busy).toContainText("The other tab did not respond.");
+    await expect(pending).toHaveCount(0);
+    await expect(busy.getByRole("button", {name: "Continue here"})).toBeEnabled();
+    expect(await projectTruth(page)).toEqual(truth);
+    expect(await undoDepth(page)).toBe(history);
+    await expect(page.getByTestId("creator-phase")).toHaveText("ready");
+    await writeFile(testInfo.outputPath("takeover-pending-result.json"), JSON.stringify({
+      viewport, action, cancelled: true, unanswered: true, holderTruth: truth,
+      holderUndoDepth: history, holderReady: true,
+    }, null, 2));
+    holderErrors();
+    requesterErrors();
+  });
+}
