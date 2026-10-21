@@ -16,6 +16,11 @@ import {decodeLegacyPatternTransportStatus} from "./fixtures/legacy_pattern_tran
 const TEST_PRODUCT_BUILD = "9.8.7.6";
 
 const API = [
+  "beginPatternTempoPreview",
+  "setPatternTempoPreview",
+  "cancelPatternTempoPreview",
+  "commitPatternTempoPreview",
+  "inspectPatternTempoPreview",
   "monitorDestination",
   "monitorVolume",
   "outputMeter",
@@ -14763,4 +14768,350 @@ for(const kind of ["symbol","coercion"])test(`invalid optional generation ${kind
     assert.deepEqual(value,{state:"unavailable",reason:"protocol-error"});assert.equal(f.coercions(),0);
     assert.equal(f.stops(),0);await capture.stop();assert.equal(f.stops(),1);
   } finally {await f.session.close();}
+});
+
+const TEMPO_TARGET = Object.freeze({projectId: "80000000-0000-4000-8000-000000000001",
+  patternId: "80000000-0000-4000-8000-000000000002", expectedRevision: 2});
+const TEMPO_COMMAND = "80000000-0000-4000-8000-000000000003";
+const TEMPO_COMMAND_OTHER = "80000000-0000-4000-8000-000000000004";
+function tempoTicketWire(token = "9007199254740993", revision = 2) {
+  return {preview_token: token, project_id: TEMPO_TARGET.projectId, pattern_id: TEMPO_TARGET.patternId,
+    source_id: "9007199254740994", expected_revision: revision};
+}
+function tempoClockWire(generation = "9007199254740994", bpm = 120) {
+  return {start_epoch: "9007199254740993", pattern_generation: generation,
+    applied_frame: "9007199254740995", anchor: {frame: "9007199254740996", tick_numerator: "18446744073709551615", bpm},
+    playing: false}; // Stop legitimately moves the anchor after its applied frame.
+}
+function tempoStatusWire(changes = {}) {
+  return {ticket: tempoTicketWire(), preview_id: "0", phase: "ready", committed_bpm: 120, preview_bpm: 120,
+    project_revision: 2, source_revision: 2, publication_generation: "9007199254740994",
+    command_id: null, committed_revision: null, applied: tempoClockWire(), error: null, ...changes};
+}
+function tempoFailure(envelope, details = {}) {
+  return {protocol_version: 1, request_id: envelope.request_id, ok: false,
+    error: {code: "HOST_STATE_INVALID", message: "refused", details}};
+}
+function tempoSdkFixture(onTempo) {
+  const sent = [];
+  const f = fixture({send(envelope, options) {
+    if (envelope.operation.startsWith("pattern.tempo.preview.")) {
+      sent.push(envelope);
+      return onTempo(envelope, options);
+    }
+    return success(envelope, defaultResult(envelope.operation));
+  }});
+  return {...f, sent};
+}
+
+for (const field of ["projectId", "patternId"]) {
+  test(`tempo SDK rejects UUID array target before RPC: ${field}`, async () => {
+    const f = tempoSdkFixture(e => success(e, tempoStatusWire()));
+    await f.session.start();
+    await assert.rejects(async () => f.session.beginPatternTempoPreview(
+      {...TEMPO_TARGET, [field]: [TEMPO_TARGET[field]]}), TypeError);
+    assert.equal(f.sent.length, 0);
+    assert.equal((await f.session.beginPatternTempoPreview(TEMPO_TARGET)).phase, "ready");
+  });
+}
+
+test("tempo SDK rejects UUID array commit before reserving the original command", async () => {
+  const f = tempoSdkFixture(e => {
+    if (e.operation.endsWith(".commit")) {
+      assert.equal(e.payload.command_id, TEMPO_COMMAND);
+      return success(e, tempoStatusWire({preview_id: "19", phase: "commit_unknown", command_id: TEMPO_COMMAND}));
+    }
+    return success(e, tempoStatusWire());
+  });
+  await f.session.start(); const {ticket} = await f.session.beginPatternTempoPreview(TEMPO_TARGET);
+  const sent = f.sent.length;
+  let invalid;
+  await assert.rejects(async () => f.session.commitPatternTempoPreview({ticket, commandId: [TEMPO_COMMAND]}),
+    error => { invalid = error; return true; });
+  assert.equal(f.sent.length, sent);
+  const status = await f.session.commitPatternTempoPreview({ticket, commandId: TEMPO_COMMAND});
+  assert.ok(invalid instanceof TypeError);
+  assert.equal(status.commandId, TEMPO_COMMAND);
+  assert.equal(f.sent.filter(e => e.operation.endsWith(".commit")).length, 1);
+});
+
+test("tempo SDK preserves exact integers, frozen ticket ownership and original commit through unknown/cancel/retry", async () => {
+  let ticket = tempoTicketWire(), phase = "ready", command = null, committed = null;
+  const f = tempoSdkFixture((e) => {
+    const operation = e.operation.split(".").at(-1);
+    if (operation === "begin") {
+      assert.deepEqual(e.payload, {project_id: TEMPO_TARGET.projectId, pattern_id: TEMPO_TARGET.patternId, expected_revision: 2});
+      if (phase === "cancelled") ticket = tempoTicketWire("9007199254740994");
+      phase = "ready";
+    } else {
+      assert.deepEqual(e.payload.ticket, ticket);
+      if (operation === "set") phase = "previewing";
+      if (operation === "cancel") {
+        if (command !== null) return tempoFailure(e, {reason: "tempo_commit_unresolved"});
+        phase = "cancelled";
+      }
+      if (operation === "commit") {
+        assert.equal(e.payload.command_id, TEMPO_COMMAND);
+        if (command === null) { command = TEMPO_COMMAND; phase = "commit_unknown"; }
+        else { committed = 3; phase = "committed_pending"; }
+      }
+      if (operation === "status" && committed === 3) phase = "committed";
+    }
+    const active = phase !== "ready";
+    return success(e, tempoStatusWire({ticket, phase, preview_id: active ? "19" : "0",
+      preview_bpm: active ? 240 : 120, command_id: command, committed_revision: committed,
+      committed_bpm: committed === null ? 120 : 240, project_revision: committed === null ? 2 : 3,
+      source_revision: phase === "committed" ? 3 : 2,
+      applied: tempoClockWire("9007199254740994", phase === "cancelled" ? 120 : active ? 240 : 120)}));
+  });
+  await f.session.start();
+  const first = await f.session.beginPatternTempoPreview(TEMPO_TARGET);
+  assert.equal(first.ticket.sourceId, "9007199254740994");
+  assert.equal(first.applied.anchor.tickNumerator, "18446744073709551615");
+  assert.equal(first.applied.appliedFrame, "9007199254740995");
+  assert.equal(Object.isFrozen(first.ticket) && Object.isFrozen(first.applied.anchor), true);
+  assert.throws(() => f.session.setPatternTempoPreview({ticket: {...first.ticket}, bpm: 240}), {code: "HOST_STATE_INVALID"});
+  await f.session.setPatternTempoPreview({ticket: first.ticket, bpm: 240});
+  await f.session.cancelPatternTempoPreview(first.ticket);
+  await assert.rejects(f.session.setPatternTempoPreview({ticket: first.ticket, bpm: 180}), {code: "HOST_STATE_INVALID"});
+  const second = await f.session.beginPatternTempoPreview(TEMPO_TARGET);
+  assert.equal(second.ticket.previewToken, "9007199254740994");
+  assert.throws(() => f.session.cancelPatternTempoPreview(first.ticket), {code: "HOST_STATE_INVALID"});
+  await f.session.setPatternTempoPreview({ticket: second.ticket, bpm: 240});
+  const unknown = await f.session.commitPatternTempoPreview({ticket: second.ticket, commandId: TEMPO_COMMAND});
+  assert.equal(unknown.phase, "commit_unknown");
+  assert.equal(unknown.commandId, TEMPO_COMMAND);
+  const count = f.sent.length;
+  await assert.rejects(f.session.commitPatternTempoPreview({ticket: second.ticket, commandId: TEMPO_COMMAND_OTHER}), {code: "HOST_STATE_INVALID"});
+  assert.equal(f.sent.length, count);
+  await assert.rejects(f.session.cancelPatternTempoPreview(second.ticket), {code: "HOST_STATE_INVALID"});
+  const saved = await f.session.commitPatternTempoPreview({ticket: second.ticket, commandId: TEMPO_COMMAND});
+  assert.equal(saved.committedRevision, 3);
+  assert.equal(saved.sourceRevision, 2);
+  const adopted = await f.session.inspectPatternTempoPreview(second.ticket);
+  assert.equal(adopted.sourceRevision, 3);
+  assert.equal(adopted.committedRevision, 3);
+  assert.deepEqual(f.sent.filter(e => e.operation.endsWith(".commit")).map(e => e.payload.command_id),
+    [TEMPO_COMMAND, TEMPO_COMMAND]);
+});
+
+for (const [name, corrupt] of [
+  ["unknown key", s => { s.extra = true; }],
+  ["foreign ticket", s => { s.ticket.project_id = TEMPO_COMMAND; }],
+  ["numeric source", s => { s.ticket.source_id = 1; }],
+  ["noncanonical token", s => { s.ticket.preview_token = "01"; }],
+  ["uint64 overflow", s => { s.applied.anchor.tick_numerator = "18446744073709551616"; }],
+  ["rounded clock", s => { s.applied.applied_frame = 9007199254740992; }],
+  ["guessed future generation", s => { s.applied.pattern_generation = "18446744073709551615"; }],
+  ["out of range tempo", s => { s.applied.anchor.bpm = 241; }],
+  ["committed without receipt", s => { s.phase = "committed"; s.preview_id = "19"; }],
+  ["foreign target revision", s => { s.ticket.expected_revision = 3; }],
+]) {
+  test(`tempo SDK rejects invalid response: ${name}`, async () => {
+    const f = tempoSdkFixture(e => {
+      const value = tempoStatusWire(); corrupt(value);
+      return success(e, value);
+    });
+    await f.session.start();
+    await assert.rejects(f.session.beginPatternTempoPreview(TEMPO_TARGET), {code: "HOST_PROTOCOL_MISMATCH"});
+  });
+}
+
+test("tempo first-set observer failure keeps its issued ticket and status recovers the same turn", async () => {
+  let first = true;
+  const f = tempoSdkFixture(e => {
+    if (e.operation.endsWith(".set") && first) {
+      first = false; throw Object.assign(new Error("lost observer"), {code: "HOST_TIMEOUT"});
+    }
+    return success(e, tempoStatusWire(e.operation.endsWith(".begin") ? {} : {
+      phase: "previewing", preview_id: "23", preview_bpm: 240}));
+  });
+  await f.session.start();
+  const {ticket} = await f.session.beginPatternTempoPreview(TEMPO_TARGET);
+  await assert.rejects(f.session.setPatternTempoPreview({ticket, bpm: 240}), {code: "HOST_TIMEOUT"});
+  await assert.rejects(f.session.beginPatternTempoPreview(TEMPO_TARGET), {code: "HOST_STATE_INVALID"});
+  const recovered = await f.session.inspectPatternTempoPreview(ticket);
+  assert.equal(recovered.ticket, ticket);
+  assert.equal(recovered.previewId, "23");
+  assert.equal(f.sent.filter(e => e.operation.endsWith(".begin")).length, 1);
+});
+
+for (const knownRefusal of [false, true]) {
+  test(`tempo commit ${knownRefusal ? "producer refusal releases" : "observer error retains"} original identity`, async () => {
+    let fail = true;
+    const f = tempoSdkFixture(e => {
+      if (e.operation.endsWith(".commit") && fail) {
+        fail = false;
+        return tempoFailure(e, knownRefusal ? {tempo_commit_refused: true} : {});
+      }
+      return success(e, tempoStatusWire(e.operation.endsWith(".begin") ? {} : {
+        phase: e.operation.endsWith(".commit") ? "commit_unknown" : "previewing", preview_id: "23", preview_bpm: 240,
+        command_id: e.operation.endsWith(".commit") ? e.payload.command_id : null}));
+    });
+    await f.session.start();
+    const {ticket} = await f.session.beginPatternTempoPreview(TEMPO_TARGET);
+    await f.session.setPatternTempoPreview({ticket, bpm: 240});
+    await assert.rejects(f.session.commitPatternTempoPreview({ticket, commandId: TEMPO_COMMAND}), {code: "HOST_STATE_INVALID"});
+    const before = f.sent.length;
+    if (knownRefusal) {
+      const retry = await f.session.commitPatternTempoPreview({ticket, commandId: TEMPO_COMMAND_OTHER});
+      assert.equal(retry.commandId, TEMPO_COMMAND_OTHER);
+    } else {
+      await assert.rejects(f.session.commitPatternTempoPreview({ticket, commandId: TEMPO_COMMAND_OTHER}), {code: "HOST_STATE_INVALID"});
+      assert.equal(f.sent.length, before);
+    }
+  });
+}
+
+test("tempo SDK carries a zero-preview source preparation through actual cancellation", async () => {
+  const target = {...TEMPO_TARGET, expectedRevision: 3};
+  const ticket = {...tempoTicketWire(), expected_revision: 3};
+  const phases = [];
+  const f = tempoSdkFixture(e => {
+    let state = tempoStatusWire({ticket, project_revision: 3});
+    if (e.operation.endsWith(".set")) state = {...state, phase: "source_pending", preview_bpm: 240,
+      publication_generation: "9007199254740995"};
+    if (e.operation.endsWith(".cancel")) state = {...state, phase: "cancelling", preview_bpm: 240,
+      publication_generation: "9007199254740995"};
+    if (e.operation.endsWith(".status")) state = {...state, phase: "cancelled", preview_bpm: 240,
+      source_revision: 3, publication_generation: "9007199254740995", applied: tempoClockWire("9007199254740995", 120)};
+    phases.push(state.phase);
+    return success(e, state);
+  });
+  await f.session.start();
+  const begun = await f.session.beginPatternTempoPreview(target);
+  const pending = await f.session.setPatternTempoPreview({ticket: begun.ticket, bpm: 240});
+  assert.equal(pending.phase, "source_pending");
+  assert.equal(pending.previewId, "0");
+  assert.equal(pending.applied.anchor.bpm, 120);
+  assert.equal((await f.session.cancelPatternTempoPreview(begun.ticket)).phase, "cancelling");
+  const cancelled = await f.session.inspectPatternTempoPreview(begun.ticket);
+  assert.equal(cancelled.sourceRevision, 3);
+  assert.equal(cancelled.applied.anchor.bpm, 120);
+  assert.deepEqual(phases, ["ready", "source_pending", "cancelling", "cancelled"]);
+  assert.equal(f.sent.some(e => e.operation.endsWith(".commit")), false);
+});
+
+test("queued tempo requests recheck ticket identity after a new prepared owner", async () => {
+  let count = 0;
+  const f = tempoSdkFixture(e => success(e, tempoStatusWire({ticket: tempoTicketWire(String(++count))})));
+  await f.session.start();
+  const first = await f.session.beginPatternTempoPreview(TEMPO_TARGET);
+  const next = f.session.beginPatternTempoPreview(TEMPO_TARGET);
+  const old = f.session.setPatternTempoPreview({ticket: first.ticket, bpm: 240});
+  await next;
+  await assert.rejects(old, {code: "HOST_STATE_INVALID"});
+  assert.equal(f.sent.some(e => e.operation.endsWith(".set")), false);
+});
+
+test("readonly observer failure cannot relabel a known cancelled tempo turn as unsettled", async () => {
+  let cancelled = false;
+  const f = tempoSdkFixture(e => {
+    if (e.operation.endsWith(".status")) throw Object.assign(new Error("observer lost"), {code: "HOST_TIMEOUT"});
+    if (e.operation.endsWith(".cancel")) cancelled = true;
+    return success(e, tempoStatusWire(e.operation.endsWith(".begin") ? {} : {
+      phase: cancelled ? "cancelled" : "previewing", preview_id: "23", preview_bpm: 240}));
+  });
+  await f.session.start();
+  const {ticket} = await f.session.beginPatternTempoPreview(TEMPO_TARGET);
+  await f.session.setPatternTempoPreview({ticket, bpm: 240});
+  const known = await f.session.cancelPatternTempoPreview(ticket);
+  await assert.rejects(f.session.inspectPatternTempoPreview(ticket), {code: "HOST_TIMEOUT"});
+  assert.equal(known.phase, "cancelled");
+  assert.equal((await f.session.beginPatternTempoPreview(TEMPO_TARGET)).phase, "ready");
+});
+
+test("sealed tempo consumer reconciles only Core's frozen save and waits for real owner release", {timeout: 2_000}, async () => {
+  let sealed = false, released = false, failureListener = null, set = false, saved = false, reconciled = false;
+  const original = Object.assign(new Error("lost save response"), {code: "HOST_TIMEOUT", details: {}});
+  const retained = [], commits = [];
+  const transport = {
+    get terminated() { return sealed; },
+    get terminalOwnerReleased() { return released; },
+    subscribe() { return () => {}; },
+    subscribeFailure(listener) { failureListener = listener; return () => {}; },
+    async send(e) {
+      if (sealed) throw original;
+      if (!e.operation.startsWith("pattern.tempo.preview.")) return success(e, defaultResult(e.operation));
+      if (e.operation.endsWith(".begin")) return success(e, tempoStatusWire());
+      if (e.operation.endsWith(".set")) {
+        set = true;
+        return success(e, tempoStatusWire({phase: "previewing", preview_id: "23", preview_bpm: 240}));
+      }
+      assert.equal(e.operation, "pattern.tempo.preview.commit");
+      assert.equal(e.payload.command_id, TEMPO_COMMAND);
+      commits.push(e.payload.command_id); saved = true; sealed = true;
+      failureListener?.(original);
+      throw original;
+    },
+    async sendRetained(e) {
+      retained.push(e);
+      assert.equal(set && saved, true);
+      assert.deepEqual(e.payload.ticket, tempoTicketWire());
+      if (e.operation.endsWith(".commit")) {
+        assert.equal(e.payload.command_id, TEMPO_COMMAND);
+        commits.push(e.payload.command_id); reconciled = true;
+      } else assert.equal(e.operation, "pattern.tempo.preview.status");
+      return success(e, tempoStatusWire({phase: "source_lost", preview_id: "23", preview_bpm: 240,
+        applied: null, command_id: TEMPO_COMMAND, committed_revision: reconciled ? 3 : null,
+        project_revision: reconciled ? 3 : 2, committed_bpm: reconciled ? 240 : 120}));
+    },
+  };
+  const f = fixture({sessionTransport: transport, runtimeTransport: transport});
+  await f.session.start();
+  const {ticket} = await f.session.beginPatternTempoPreview(TEMPO_TARGET);
+  await f.session.setPatternTempoPreview({ticket, bpm: 240});
+  await assert.rejects(f.session.commitPatternTempoPreview({ticket, commandId: TEMPO_COMMAND}), e => e === original);
+  for (let n = 0; n < 100 && f.session.diagnostics().state !== "restart-required"; ++n)
+    await new Promise(resolve => setTimeout(resolve, 1));
+  assert.equal(f.session.diagnostics().state, "restart-required");
+  let cleanupFinished = false;
+  const cleanup = f.session.waitForTerminalCleanup().then(v => { cleanupFinished = true; return v; });
+  for (let n = 0; n < 100 && !reconciled; ++n) await new Promise(resolve => setTimeout(resolve, 1));
+  assert.equal(reconciled, true, "the real retained lane must actually receive exact reconciliation");
+  assert.equal(cleanupFinished, false, "known persistence is not a physical/backend release receipt");
+  assert.deepEqual(commits, [TEMPO_COMMAND, TEMPO_COMMAND]);
+  assert.equal(retained.some(e => e.operation.endsWith(".begin") || e.operation.endsWith(".set")), false);
+  released = true;
+  assert.equal(await cleanup, true);
+  assert.equal(f.session.diagnostics().error_code, "HOST_TIMEOUT");
+});
+
+test("sealed tempo owner cannot turn an uncertain first set into a new authoring save", {timeout: 2_000}, async () => {
+  let sealed = false, released = false, listener = null;
+  const original = Object.assign(new Error("lost preview observer"), {code: "HOST_TIMEOUT", details: {}});
+  const retained = [];
+  let status = tempoStatusWire();
+  const transport = {
+    get terminated() { return sealed; }, get terminalOwnerReleased() { return released; },
+    subscribe() { return () => {}; }, subscribeFailure(fn) { listener = fn; return () => {}; },
+    async send(e) {
+      if (sealed) throw original;
+      if (e.operation.endsWith(".begin")) return success(e, status);
+      if (e.operation.endsWith(".set")) {
+        status = tempoStatusWire({phase: "previewing", preview_id: "23", preview_bpm: 240});
+        sealed = true; listener?.(original); throw original;
+      }
+      return success(e, defaultResult(e.operation));
+    },
+    async sendRetained(e) {
+      retained.push(e.operation);
+      assert.notEqual(e.operation, "pattern.tempo.preview.commit", "a first set is no evidence of an issued save");
+      if (e.operation.endsWith(".cancel")) status = {...status, phase: "source_lost", applied: null};
+      return success(e, status);
+    },
+  };
+  const f = fixture({sessionTransport: transport, runtimeTransport: transport});
+  await f.session.start();
+  const {ticket} = await f.session.beginPatternTempoPreview(TEMPO_TARGET);
+  await assert.rejects(f.session.setPatternTempoPreview({ticket, bpm: 240}), e => e === original);
+  await assert.rejects(f.session.commitPatternTempoPreview({ticket, commandId: TEMPO_COMMAND}), {code: "HOST_STATE_INVALID"});
+  for (let n = 0; n < 100 && !retained.includes("pattern.tempo.preview.cancel"); ++n)
+    await new Promise(resolve => setTimeout(resolve, 1));
+  assert.equal(retained.includes("pattern.tempo.preview.cancel"), true);
+  for (let n = 0; n < 100 && f.session.diagnostics().state !== "restart-required"; ++n)
+    await new Promise(resolve => setTimeout(resolve, 1));
+  assert.equal(f.session.diagnostics().state, "restart-required");
+  released = true;
+  assert.equal(await f.session.waitForTerminalCleanup(), true);
 });

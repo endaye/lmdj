@@ -113,72 +113,82 @@ OPFS 的素材持久化不等同于离线启动。
 
 ### Pattern tempo preview 的 Web owner
 
-Native Control/Bridge 提供五个操作，消费 Application 的 typed preview owner；
-Host 不解析 Project bundle，也不在 JavaScript 计算变速调度。当前集成层提供
-Native 命令与 sealed pre.js transport；strict protocol、同一 frozen Session 的
-公开 typed SDK 和真实 SDK/AudioWorklet 旅程由 B3 后继 Task 继续交付。
+同一 frozen Session 及其 `patternTransport` namespace 提供以下五个方法。
+它们经过正式 protocol、Bridge 和 Control 注册，消费 Application 的 typed preview
+owner；Host 不解析 Project bundle，也不在 JavaScript 计算变速调度。
 
-| Native wire operation | 精确 payload |
-| --- | --- |
-| `pattern.tempo.preview.begin` | `project_id, pattern_id, expected_revision` |
-| `pattern.tempo.preview.set` | `ticket, bpm` |
-| `pattern.tempo.preview.cancel` | `ticket` |
-| `pattern.tempo.preview.commit` | `ticket, command_id` |
-| `pattern.tempo.preview.status` | `ticket` |
+| SDK 方法 | Wire operation | 精确 payload |
+| --- | --- | --- |
+| `beginPatternTempoPreview` | `pattern.tempo.preview.begin` | `project_id, pattern_id, expected_revision` |
+| `setPatternTempoPreview` | `pattern.tempo.preview.set` | `ticket, bpm` |
+| `cancelPatternTempoPreview` | `pattern.tempo.preview.cancel` | `ticket` |
+| `commitPatternTempoPreview` | `pattern.tempo.preview.commit` | `ticket, command_id` |
+| `inspectPatternTempoPreview` | `pattern.tempo.preview.status` | `ticket` |
 
-wire ticket 恰好为 `preview_token, project_id, pattern_id, source_id,
-expected_revision`。begin 在任何音频或持久化效果前签发 ticket，重复的 matching
-ready begin 返回同一张票据。`source_id` 是 begin 时实际应用的 Native publication
-generation，不是 Application 内部 binding ID；本轮 same-BPM revision adoption
-不改写票据。后续操作在 I/O 前比较完整 ticket，终态后须显式 begin。
+SDK 输入采用 camelCase；wire 的 ticket 恰好为 `preview_token, project_id,
+pattern_id, source_id, expected_revision`。begin 在任何音频或持久化效果前签发
+ticket，重复的 matching ready begin 返回同一张票据。`source_id` 是 begin 时实际
+应用的 Native publication generation，不是 Application 内部 binding ID；本轮的
+same-BPM revision adoption 不改写这张票据。后续操作在 I/O 前比较完整 ticket。
+SDK 还要求原 Session 签发的 ticket 对象，复制字段不会转移其 owner；队列 dispatch
+时再次检查，旧请求不能命中新一轮。cancelled/committed/source_lost 终态后须显式 begin。
 
 BPM 是40–240的整数。tokens、preview ID、generation、epoch、frame 与 tick
 numerator 均为 canonical decimal uint64 字符串；Project revision 保留原安全整数域。
 结果包含 `ticket, preview_id, phase, committed_bpm, preview_bpm, project_revision,
 source_revision, publication_generation, command_id, committed_revision, applied,
-error`。`applied` 为 null 或实际 Native 的 `start_epoch, pattern_generation,
-applied_frame, anchor, playing`；anchor 恰好为 `frame, tick_numerator, bpm`。
-等待中的 publication generation 可不同于实际 predecessor，Stop anchor 也可晚于
-publication 的 applied frame；消费方不能把这些观察合并或先转成 Number。
+error`，SDK 对应不可变 camelCase DTO。`applied` 为 null 或实际 Native 的
+`start_epoch, pattern_generation, applied_frame, anchor, playing`；anchor 恰好为
+`frame, tick_numerator, bpm`。等待中的 publication generation 可不同于实际 predecessor。
+Stop 的实际 anchor 也可晚于该 publication 的 applied frame；消费方不得把两者合并，
+或把大整数先转换成 Number。
 
 Control 在普通、立即、编辑/延迟、transport/recording、Performance 和 replay restore
 的 publication 路径保留同材料 prepared source，只记录实际接纳的 generation。
-有界保留表覆盖实际当前音源和两个在途 Native owner；发布前预留表项，只有一致的
-Native 归属读取才能淘汰旧候选。begin 按实际 generation 选择材料，撤回后仍由音频
-持有的 cancellation 资源须真正退役。COUNT-IN scheduled arm 改变现有 view 的归属
-与 origin，本身不发布新 view；pending/foreign source、recording、replay 和排队切换
-保持原互斥，当前撤回的 Creator COUNT-IN UI 不由此恢复。
-
-begin 准备及 source adoption 之前先调用 Facade 只读准入检查；Performance 录音或
-待完成 Sample import 不能先触发 Native 修订发布再被绑定拒绝。Quantize 等只改变
-revision 的设置不重发布 Pattern；下一次 begin 必要时准备新 committed source，
-首次 set 先接纳 same-BPM revision，返回 `source_pending` 和零 preview ID。
-实际应用后才绑定 B2 并发出变速；取消或 terminal failure 不能稍后复活该变速。
+有界保留表覆盖实际当前音源和两个在途 Native owner；新候选不能覆盖仍在播放的
+旧音源或已被音频接管的前驱。发布前预留表项，只有一致的 Native 归属读取才能
+淘汰旧候选；begin 按实际 generation 选择材料。撤回后仍由音频持有的 cancellation
+资源也必须真正退役，才开放 begin。COUNT-IN 的 scheduled arm 改变现有 view 的
+归属与 origin，本身不发布新 view。pending/foreign source、recording、replay 和排队
+切换保持原互斥。
+begin 准备和 source adoption 之前先调用 Facade 的只读准入检查，Performance 录音或
+待完成 Sample import 不能先触发一次 Native 修订发布再遭到绑定拒绝。
+Quantize 等不改变 BPM 的设置仍不重发布 Pattern；下一次 begin 必要时只准备一次
+新 committed source，首次 set 先接纳 same-BPM revision，返回 `source_pending`
+和零 preview ID。实际应用后才绑定 B2 并发出所请求的变速。期间取消或 terminal
+failure 先记录取消，不能在稍后 service 时重新发出这次变速。
 
 `ready` 不是已试听，`preview_pending` 不是已应用，`cancelling` 不是取消完成，
-`committed_pending` 不是 Runtime 已采用新 revision。预览与取消不写 Truth/history。
-保存使用调用方保留的精确 command ID；`commit_unknown` 保留该身份。只有尚无冻结
-命令的 producer 拒绝返回 `tempo_commit_refused: true`。真正保存成功但回执丢失时，
-原命令重试只收敛 receipt，不再保存或恢复旧 BPM。保存并实际 adoption 后，Control
-从 Application 复制实际 source，再释放 binding，保留 PCM owner 身份。
+`committed_pending` 不是 Runtime 已采用新 revision。预览和取消不写 Truth/history。
+保存使用调用方保留的精确 command ID；`commit_unknown` 保留该身份，状态读取失败
+或 generic Bridge error 都不能证明未提交。只有 producer 证明尚无冻结命令时的
+`tempo_commit_refused: true` 才允许 SDK 释放首次尝试身份。真实保存成功但回执丢失时，
+原命令重试只收敛 receipt，不再保存，也不先恢复旧 BPM。完成保存并实际 adoption 后，
+Control 从 Application 复制实际 source，再释放 binding，保留 PCM owner 身份。
 
-suspend/close 在原 deadline 内结算取消或已签发的保存，再进入原 audio/transport
-quiescence。正常 Suspend 在物理退出后保留原 ticket 的 `source_lost` 和空 applied
-clock，以及已保存的 command ID、revision 与 BPM；重复 cancel 或原已保存命令
-返回原结果，新命令与旧 set 仍拒绝。同一 Session 恢复后，旧回执保留到新 begin
-成功替换。正常 Suspend 保留一份实际不可变 source，随后按真实 Native generation
-绑定；Facade binding 与在途候选在原物理门禁后释放。close/fatal 完整退役 source。
-fatal 后 pre.js 与 C++ Bridge 仅保留精确 status/cancel/commit 入口；Core 仅接受原
-冻结命令的 commit。`source_pending` 即使尚无 B2 binding 也属于 terminal ownership。
-任何 Stop、退出请求、已知持久化结果或 RPC 完成都不代替物理 callback 退出及原
-response-consumer 释放。
+suspend/close 先在原 deadline 内结算取消或已签发的保存，再进入原 audio/transport
+quiescence。正常 Suspend 不在结算后立即丢弃本轮回执：物理退出确认后，原 ticket
+仍可读取 `source_lost` 和空 applied clock；已保存的 command ID、revision 与 BPM
+保留，重复 cancel 或同一已保存命令只返回原结果。新命令和旧 set 仍拒绝。
+同一 Session 恢复音频后，该回执保留到新 begin 成功替换；旧 ticket 不能修改新轮。
+正常 Suspend 只保留一份实际不可变 prepared source 供恢复，随后按真实 Native
+generation 绑定；Facade binding 与在途候选在原物理门禁后释放。close/fatal 仍完整
+退役 source，不把已知持久化或一条回执当作 callback 退出证明。
+fatal 后的 pre.js 与 C++ Bridge 只保留精确 status/cancel/commit 入口；
+Core 只允许原已冻结 command 的 commit，不能借该入口开始新保存。`source_pending`
+即使尚无 B2 binding，仍属于 terminal ownership。失败、Stop、线程退出请求或已知
+持久化结果都不代替物理 callback 退出回执及原 response-consumer 释放。
 
 专用 Native Control/Bridge suite 覆盖真实 PCM、完整 Truth/history/Artifact、
-manifest 已发布后的回执丢失、精确 retry/Undo/reopen 与真实线程退出门禁；并发分组
-覆盖 render 中 source 复制/释放及接纳/拒绝进展。实际 pre.js 的 Node cases 检查
-terminal retained 操作准入与新 begin/set 拒绝。SDK ticket owner、真实 Wasm/AudioWorklet
-浏览器消费以及 packaged Creator400ms、同 anchor metronome/S7、完整候选和物理听感
-仍分别保留验收边界。
+manifest 已发布后的回执丢失、原命令恢复、Undo/reopen 与真实线程退出门禁；并发分组
+覆盖 render 中 source 复制/释放和接纳/拒绝进展。Node suite 覆盖 strict protocol、
+DTO、ticket owner、未知结果和 retained cleanup。source SDK 配合正式 Wasm/AudioWorklet
+的旅程还直接观察最终 PCM onset：137BPM 预览、取消恢复、240BPM 第二次预览、
+保存及实际 adoption 后的连续 quarter，逐步核对完整 checkpoint、manifest/history
+和原 WAV 字节；另覆盖设置只改 revision 的 source adoption、原命令重试、Undo、
+实际 page close 与新 Runtime 冷重开后重新播放。监听静音但 Native DTO 不变的反证
+会在 PCM 断言失败。这些是 source SDK/正式 Worklet 证据，packaged Creator400ms、
+同 anchor metronome/S7、完整候选与物理听感仍分别验收。
 
 ## 6. 状态、错误与并发
 Manifest mismatch、生命周期失效和 terminal failure 均 fail closed；Main、Control、Worker 与 AudioWorklet 的职责和消息上限固定。Runtime Session 另行发布 master capture 状态，状态字为 `unconfigured` → `configured` → `ready`，失败时进入带 typed error 的 `unavailable`；只有 `ready` 才允许开始一次录制，同一时刻不允许并发录制。状态经 `subscribePerformanceMasterCaptureStatus` 订阅、`performanceMasterCaptureStatus()` 读取，观察者抛错不影响录制生命周期归属；Host 不得从 `AudioContext` 状态、计时器或页面可见性推断 capture readiness。会话另以 `sampleAudioClock()` 提供纯 JS 的音频时钟采样——`{contextTimeSeconds, callbackHeartbeat, engineEpochHeartbeat}`，其中纪元心跳在每次 `audio.activate`（含中断恢复）解决后重采；同一引擎纪元内引擎帧与 AudioContext 时钟以 48 000 fps 一比一前进，一次采样即锚定之后全部换算，常数误差不超过约两个渲染量子，音频不在 running 时以 `HOST_STATE_INVALID` 拒绝。Control bridge 在控制线程上严格逐个 dispatch 请求：Facade 经 Asyncify 等待 OPFS 期间到达的请求按 FIFO 等待，待前一次 dispatch 完整返回（含 rewind）后才重新代理，因此同一线程不会重入 Asyncify；该保证对直接提交到 transport 的调用方同样成立，而 OPFS 存储层在检测到重入时 fail closed 而非破坏内存。Control 侧将 generation quota rejection 与 publication residency rejection 分开：前者保留 Bank/Project 类型和安全筛选后的账本 payload，后者继续使用 transient Web Runtime resource failure，且任一拒绝都保留当前 live generation。启动时先以 release ordering 发布 ControlBridge，再发布 audio adapter；pre-JS 的 audio readiness 因而同时构成 ControlBridge publication barrier。`recovery_probe_ready` 仅在 Runtime 为 `recovering`、当前 epoch 的 probe window 已 armed 且没有已保留 Probe 时为真；Probe 被保留或 window 关闭后立即回到 false，Host 不得从 timer、Context 状态或页面可见性推断 readiness。

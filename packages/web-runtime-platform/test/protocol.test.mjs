@@ -194,6 +194,11 @@ test("exports the locked protocol constants, operations, and notifications", () 
   });
   assert.deepEqual(HOST_OPERATIONS, [
     "host.status",
+    "pattern.tempo.preview.begin",
+    "pattern.tempo.preview.set",
+    "pattern.tempo.preview.cancel",
+    "pattern.tempo.preview.commit",
+    "pattern.tempo.preview.status",
     "project.create",
     "project.duplicate",
     "project.open",
@@ -779,6 +784,9 @@ test("strict companion input preserves whole uint64 identities and physical rele
 
 test("uses exact operation-class deadlines", () => {
   for (const operation of [
+    "pattern.tempo.preview.set",
+    "pattern.tempo.preview.cancel",
+    "pattern.tempo.preview.status",
     "pattern.transport.count-in.capabilities",
     "pattern.transport.count-in.request",
     "pattern.transport.count-in.inspect",
@@ -810,6 +818,9 @@ test("uses exact operation-class deadlines", () => {
     (operation) =>
       operation !== "host.close" &&
       ![
+        "pattern.tempo.preview.set",
+        "pattern.tempo.preview.cancel",
+        "pattern.tempo.preview.status",
         "pattern.transport.count-in.capabilities",
         "pattern.transport.count-in.request",
         "pattern.transport.count-in.inspect",
@@ -1328,3 +1339,49 @@ test("Candidate Job responses validate source, recipes and lifecycle association
     assert.throws(() => validate(malformed), HostProtocolError);
   }
 });
+
+const TEMPO_TICKET = Object.freeze({preview_token: "18446744073709551615",
+  project_id: REQUEST_ID, pattern_id: requestIdFor(500), source_id: "9007199254740993", expected_revision: 2});
+for (const [operation, payload] of [
+  ["pattern.tempo.preview.begin", {project_id: REQUEST_ID, pattern_id: requestIdFor(500), expected_revision: 2}],
+  ["pattern.tempo.preview.set", {ticket: TEMPO_TICKET, bpm: 240}],
+  ["pattern.tempo.preview.cancel", {ticket: TEMPO_TICKET}],
+  ["pattern.tempo.preview.commit", {ticket: TEMPO_TICKET, command_id: requestIdFor(501)}],
+  ["pattern.tempo.preview.status", {ticket: TEMPO_TICKET}],
+]) {
+  test(`tempo preview registration and exact payload: ${operation}`, () => {
+    assert.ok(HOST_OPERATIONS.includes(operation));
+    const value = createRequestEnvelope({operation, payload, crypto: webcrypto});
+    assert.deepEqual(decodeRequestEnvelope(encode(value)), value);
+    assert.throws(() => createRequestEnvelope({operation, payload: {...payload, extra: true}, crypto: webcrypto}),
+      expectCode("HOST_PROTOCOL_MISMATCH"));
+  });
+}
+for (const [label, change] of [
+  ["zero token", {preview_token: "0"}], ["numeric source", {source_id: 1}],
+  ["leading zero", {source_id: "01"}], ["uint64 overflow", {preview_token: "18446744073709551616"}],
+  ["foreign key", {extra: 1}], ["unsafe revision", {expected_revision: 9007199254740992}],
+  ["invalid project", {project_id: "project"}],
+]) {
+  test(`tempo preview rejects malformed ticket: ${label}`, () => {
+    const payload = {ticket: {...TEMPO_TICKET, ...change}, bpm: 180};
+    assert.throws(() => decodeRequestEnvelope(encode(request({operation: "pattern.tempo.preview.set", payload}))),
+      expectCode("HOST_PROTOCOL_MISMATCH"));
+  });
+}
+for (const bpm of [39, 241, 120.5, "120", null]) {
+  test(`tempo preview rejects invalid BPM ${JSON.stringify(bpm)}`, () => {
+    assert.throws(() => createRequestEnvelope({operation: "pattern.tempo.preview.set",
+      payload: {ticket: TEMPO_TICKET, bpm}, crypto: webcrypto}), expectCode("HOST_PROTOCOL_MISMATCH"));
+  });
+}
+for (const [field, operation, payload] of [
+  ["project_id", "pattern.tempo.preview.begin", {project_id: [REQUEST_ID], pattern_id: requestIdFor(500), expected_revision: 2}],
+  ["pattern_id", "pattern.tempo.preview.begin", {project_id: REQUEST_ID, pattern_id: [requestIdFor(500)], expected_revision: 2}],
+  ["command_id", "pattern.tempo.preview.commit", {ticket: TEMPO_TICKET, command_id: [requestIdFor(501)]}],
+]) {
+  test(`tempo preview rejects a UUID array instead of a string: ${field}`, () => {
+    assert.throws(() => decodeRequestEnvelope(encode(request({operation, payload}))),
+      expectCode("HOST_PROTOCOL_MISMATCH"));
+  });
+}

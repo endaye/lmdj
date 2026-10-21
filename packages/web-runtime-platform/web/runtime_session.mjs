@@ -605,6 +605,71 @@ function normalizeSnapshotError(value) {
   });
 }
 
+const TEMPO_PREVIEW_PHASES = new Set(["ready", "source_pending", "preview_pending", "preview_refused", "previewing",
+  "cancelling", "cancelled", "commit_unknown", "committed_pending", "committed", "source_lost"]);
+const tempoDecimal = (value) => value === "0" || isCanonicalNonzeroDecimal(value);
+const tempoUuid = (value) => typeof value === "string" && UUID_PATTERN.test(value);
+
+function tempoTicketPayload(ticket) {
+  if (!exactKeys(ticket, ["previewToken", "projectId", "patternId", "sourceId", "expectedRevision"]) ||
+      !isCanonicalNonzeroDecimal(ticket.previewToken) || !isCanonicalNonzeroDecimal(ticket.sourceId) ||
+      !tempoUuid(ticket.projectId) || !tempoUuid(ticket.patternId) ||
+      !isUnsignedInteger(ticket.expectedRevision)) throw new TypeError("Tempo preview ticket is invalid");
+  return {preview_token: ticket.previewToken, project_id: ticket.projectId, pattern_id: ticket.patternId,
+    source_id: ticket.sourceId, expected_revision: ticket.expectedRevision};
+}
+
+function normalizeTempoPreview(value, expectedTicket = null, target = null) {
+  if (!exactKeys(value, ["ticket", "preview_id", "phase", "committed_bpm", "preview_bpm",
+      "project_revision", "source_revision", "publication_generation", "command_id", "committed_revision",
+      "applied", "error"]) ||
+      !exactKeys(value.ticket, ["preview_token", "project_id", "pattern_id", "source_id", "expected_revision"]))
+    throw protocolMismatch("Tempo preview response shape is invalid");
+  const wire = value.ticket;
+  const ticket = Object.freeze({previewToken: wire.preview_token, projectId: wire.project_id,
+    patternId: wire.pattern_id, sourceId: wire.source_id, expectedRevision: wire.expected_revision});
+  try { tempoTicketPayload(ticket); } catch { throw protocolMismatch("Tempo preview response ticket is invalid"); }
+  if ((expectedTicket !== null && canonicalJson(wire) !== canonicalJson(tempoTicketPayload(expectedTicket))) ||
+      (target !== null && (ticket.projectId !== target.projectId || ticket.patternId !== target.patternId ||
+       ticket.expectedRevision !== target.expectedRevision)) ||
+      !tempoDecimal(value.preview_id) || !TEMPO_PREVIEW_PHASES.has(value.phase) ||
+      !isUnsignedInteger(value.committed_bpm, 240) || value.committed_bpm < 40 ||
+      !isUnsignedInteger(value.preview_bpm, 240) || value.preview_bpm < 40 ||
+      !isUnsignedInteger(value.project_revision) || !isUnsignedInteger(value.source_revision) ||
+      !isCanonicalNonzeroDecimal(value.publication_generation) ||
+      !(value.command_id === null || tempoUuid(value.command_id)) ||
+      !(value.committed_revision === null || (isUnsignedInteger(value.committed_revision) &&
+        value.command_id !== null && value.committed_revision <= value.project_revision)) ||
+      (["committed_pending", "committed"].includes(value.phase) && value.committed_revision === null) ||
+      (value.phase === "commit_unknown" && (value.command_id === null || value.committed_revision !== null)) ||
+      (value.preview_id === "0" && !["ready", "source_pending", "preview_refused", "cancelling", "cancelled", "source_lost"].includes(value.phase)) ||
+      (value.phase === "source_pending" && (value.preview_id !== "0" || value.command_id !== null)))
+    throw protocolMismatch("Tempo preview response identity or state is invalid");
+  let applied = null;
+  if (value.applied !== null) {
+    const actual = value.applied;
+    if (!exactKeys(actual, ["start_epoch", "pattern_generation", "applied_frame", "anchor", "playing"]) ||
+        !exactKeys(actual.anchor, ["frame", "tick_numerator", "bpm"]) ||
+        !isCanonicalNonzeroDecimal(actual.start_epoch) || !isCanonicalNonzeroDecimal(actual.pattern_generation) ||
+        !tempoDecimal(actual.applied_frame) || !tempoDecimal(actual.anchor.frame) ||
+        !tempoDecimal(actual.anchor.tick_numerator) || !isUnsignedInteger(actual.anchor.bpm, 240) ||
+        actual.anchor.bpm < 40 || typeof actual.playing !== "boolean" ||
+        BigInt(actual.pattern_generation) > BigInt(value.publication_generation) ||
+        (value.phase === "previewing" && actual.pattern_generation !== value.publication_generation) ||
+        value.phase === "source_lost") throw protocolMismatch("Tempo preview actual clock is invalid");
+    // Stop can move the anchor after the publication's applied frame. Both
+    // are independent genuine integers; never reconstruct one from the other.
+    applied = Object.freeze({startEpoch: actual.start_epoch, patternGeneration: actual.pattern_generation,
+      appliedFrame: actual.applied_frame, anchor: Object.freeze({frame: actual.anchor.frame,
+        tickNumerator: actual.anchor.tick_numerator, bpm: actual.anchor.bpm}), playing: actual.playing});
+  }
+  return Object.freeze({ticket: expectedTicket ?? ticket, previewId: value.preview_id, phase: value.phase,
+    committedBpm: value.committed_bpm, previewBpm: value.preview_bpm, projectRevision: value.project_revision,
+    sourceRevision: value.source_revision, publicationGeneration: value.publication_generation,
+    commandId: value.command_id, committedRevision: value.committed_revision, applied,
+    error: value.error === null ? null : normalizeSnapshotError(value.error)});
+}
+
 function normalizeSampleInspect(value, expectedSlot) {
   if (
     !exactKeys(value, [
@@ -1756,6 +1821,7 @@ function createRuntimeSessionController(options = {}) {
   const profileReleaseObservers = new WeakMap();
   let profileInputAdmissionTail = Promise.resolve();
   let patternTransportCompanionSupported = null;
+  let tempoEntry = null;
   let patternInputSerial = 1n;
   const patternInputOperations = new Map();
   const patternInputHolds = new Map();
@@ -2577,6 +2643,7 @@ function createRuntimeSessionController(options = {}) {
       throw markPostResponseFailure(error);
     }
     if (!response.ok) {
+      requestOptions.onRefusal?.(response.error);
       // Only a validated rejection of this additive operation can mean an
       // older Host. Malformed envelopes and wrong request IDs still fail.
       if (operation === "pattern.transport.count-in.capabilities" &&
@@ -4757,6 +4824,7 @@ function createRuntimeSessionController(options = {}) {
     // This positive full Host receipt proves there are no remaining owned
     // gates. It is not an admission, input result or caller-ticket consume.
     for (const entry of patternCountInTickets.values()) entry.retired = true;
+    if (tempoEntry !== null) tempoEntry.retired = true;
     patternInputTickets.clear();
     patternInputOperations.clear();
     patternInputHolds.clear();
@@ -4857,7 +4925,7 @@ function createRuntimeSessionController(options = {}) {
   }
 
   function hasRetainedPatternOwners() {
-    return patternInputTickets.size !== 0 || patternInputHolds.size !== 0 ||
+    return tempoNeedsRetention(tempoEntry) || patternInputTickets.size !== 0 || patternInputHolds.size !== 0 ||
       [...patternCountInTickets.values()].some((entry) => !entry.consumed && !entry.retired);
   }
 
@@ -4873,6 +4941,7 @@ function createRuntimeSessionController(options = {}) {
       if (entry.observerError !== null && !entry.profileConsumer) continueDirectPatternInputConsumer(entry);
     }
     for (const entry of patternCountInTickets.values()) continueCountInConsumer(entry);
+    if (tempoNeedsRetention(tempoEntry)) continueTempoConsumer(tempoEntry);
     while (!terminalOwnerEnded()) await retainedPollPause();
   }
 
@@ -5623,6 +5692,149 @@ function createRuntimeSessionController(options = {}) {
       if (entry) recordCountInEvidence(entry, status);
       return Object.freeze({submit: value.submit, ticket: request.ticket, status});
     });
+  }
+
+  function tempoNeedsRetention(entry) {
+    if (entry === null || entry.retired || !entry.setDispatched) return false;
+    return entry.unknown || (entry.status.commandId !== null && entry.status.committedRevision === null) ||
+      !["ready", "cancelled", "committed", "source_lost"].includes(entry.status.phase);
+  }
+
+  function requireTempoEntry(ticket) {
+    tempoTicketPayload(ticket);
+    if (tempoEntry === null || tempoEntry.ticket !== ticket || tempoEntry.retired)
+      throw typedError("HOST_STATE_INVALID", "Tempo preview belongs to another owner");
+    return tempoEntry;
+  }
+
+  function recordTempoStatus(entry, value) {
+    const status = normalizeTempoPreview(value, entry.ticket);
+    if (status.commandId !== null && status.commandId !== entry.commitId)
+      throw protocolMismatch("Tempo preview changed its frozen command");
+    entry.status = status;
+    entry.unknown = status.commandId !== null && status.committedRevision === null;
+    // A genuine serialized B2 observation with no frozen command establishes
+    // non-issuance. An observer timeout or an error code alone never does.
+    if (status.commandId === null) entry.commitId = null;
+    return status;
+  }
+
+  function beginPatternTempoPreview(request) {
+    if (!exactKeys(request, ["projectId", "patternId", "expectedRevision"]) ||
+        !tempoUuid(request.projectId) || !tempoUuid(request.patternId) ||
+        !isUnsignedInteger(request.expectedRevision)) throw new TypeError("Tempo preview target is invalid");
+    return serializeRuntimeAction(async () => {
+      if (closing || terminalCleanupStarted || ["closed", "failed", "restart-required"].includes(machine.state) ||
+          tempoNeedsRetention(tempoEntry)) throw typedError("HOST_STATE_INVALID", "Tempo preview owner is unsettled");
+      const value = await boundedRequest("pattern.tempo.preview.begin", {project_id: request.projectId,
+        pattern_id: request.patternId, expected_revision: request.expectedRevision});
+      if (closing || terminalCleanupStarted) throw typedError("HOST_STATE_INVALID", "Tempo preview owner ended");
+      const status = normalizeTempoPreview(value, null, request);
+      if (status.phase !== "ready" || status.previewId !== "0" || status.commandId !== null || status.committedRevision !== null)
+        throw protocolMismatch("Tempo preview begin did not prepare a fresh turn");
+      if (status.applied === null || status.ticket.sourceId !== status.applied.patternGeneration ||
+          status.projectRevision !== request.expectedRevision)
+        throw protocolMismatch("Tempo preview begin has no actual original source");
+      tempoEntry = {ticket: status.ticket, status, setDispatched: false, unknown: false,
+        commitId: null, retired: false, consumer: null, error: null};
+      return status;
+    });
+  }
+
+  function tempoRequest(entry, operation, extra = {}) {
+    requireTempoEntry(entry.ticket); // Recheck after either SDK queue.
+    let knownCommitRefusal = false;
+    return boundedRequest(operation, {ticket: tempoTicketPayload(entry.ticket), ...extra}, {
+      retainedOwner: () => entry === tempoEntry && tempoNeedsRetention(entry),
+      beforeDispatch: () => {
+        requireTempoEntry(entry.ticket);
+        if (operation === "pattern.tempo.preview.commit" &&
+            (transport.terminated === true || closing || terminalCleanupStarted) &&
+            entry.status.commandId !== extra.command_id)
+          throw typedError("HOST_STATE_INVALID", "Inspect the original unknown save before terminal reconciliation");
+        if (operation === "pattern.tempo.preview.set") entry.setDispatched = true;
+      },
+      onRefusal: (error) => {
+        if (operation === "pattern.tempo.preview.commit" && error.details?.tempo_commit_refused === true) {
+          entry.commitId = null;
+          entry.unknown = false;
+          knownCommitRefusal = true;
+        }
+      },
+    }).then((value) => {
+      requireTempoEntry(entry.ticket);
+      return recordTempoStatus(entry, value);
+    }, (error) => {
+      const knownTerminal = ["cancelled", "committed", "source_lost"].includes(entry.status.phase) &&
+        !(entry.status.commandId !== null && entry.status.committedRevision === null);
+      if (entry.setDispatched && !knownTerminal && entry.status.committedRevision === null && !knownCommitRefusal)
+        entry.unknown = true;
+      entry.error = error;
+      throw error;
+    });
+  }
+
+  function setPatternTempoPreview(request) {
+    if (!exactKeys(request, ["ticket", "bpm"]) || !isUnsignedInteger(request.bpm, 240) || request.bpm < 40)
+      throw new TypeError("Tempo preview value is invalid");
+    const entry = requireTempoEntry(request.ticket);
+    return serializeRuntimeAction(() => {
+      requireTempoEntry(entry.ticket);
+      if (closing || terminalCleanupStarted) throw typedError("HOST_STATE_INVALID", "Tempo preview owner ended");
+      if (["cancelled", "committed", "source_lost"].includes(entry.status.phase) || entry.commitId !== null)
+        throw typedError("HOST_STATE_INVALID", "Tempo preview turn already has a terminal intent");
+      return tempoRequest(entry, "pattern.tempo.preview.set", {bpm: request.bpm});
+    });
+  }
+
+  function inspectPatternTempoPreview(ticket) {
+    const entry = requireTempoEntry(ticket);
+    return serializeRuntimeAction(() => tempoRequest(entry, "pattern.tempo.preview.status"));
+  }
+
+  function cancelPatternTempoPreview(ticket) {
+    const entry = requireTempoEntry(ticket);
+    return serializeRuntimeAction(() => tempoRequest(entry, "pattern.tempo.preview.cancel"));
+  }
+
+  function commitPatternTempoPreview(request) {
+    if (!exactKeys(request, ["ticket", "commandId"]) || !tempoUuid(request.commandId))
+      throw new TypeError("Tempo preview commit is invalid");
+    const entry = requireTempoEntry(request.ticket);
+    return serializeRuntimeAction(() => {
+      requireTempoEntry(entry.ticket);
+      if (entry.commitId !== null && entry.commitId !== request.commandId)
+        throw typedError("HOST_STATE_INVALID", "Tempo preview command identity differs");
+      if (["cancelled", "source_lost"].includes(entry.status.phase) && entry.status.commandId === null)
+        throw typedError("HOST_STATE_INVALID", "Tempo preview turn ended without a save");
+      if ((transport.terminated === true || closing || terminalCleanupStarted) &&
+          entry.status.commandId !== request.commandId)
+        throw typedError("HOST_STATE_INVALID", "A terminal owner cannot issue a new save");
+      entry.commitId = request.commandId;
+      return tempoRequest(entry, "pattern.tempo.preview.commit", {command_id: request.commandId});
+    });
+  }
+
+  function continueTempoConsumer(entry) {
+    if (entry.consumer !== null || entry.retired) return;
+    entry.consumer = (async () => {
+      while (entry === tempoEntry && tempoNeedsRetention(entry)) {
+        if (terminalOwnerEnded()) return;
+        try {
+          const status = await tempoRequest(entry, "pattern.tempo.preview.status");
+          if (status.commandId !== null && status.committedRevision === null) {
+            // Sole terminal reconciliation of an already-issued command. No
+            // new identity, begin or set can enter the sealed real lane.
+            if (entry.commitId === status.commandId)
+              await tempoRequest(entry, "pattern.tempo.preview.commit", {command_id: entry.commitId});
+          } else if (status.commandId === null && tempoNeedsRetention(entry)) {
+            await tempoRequest(entry, "pattern.tempo.preview.cancel");
+          }
+        } catch (error) { entry.error = error; }
+        if (tempoNeedsRetention(entry)) await retainedPollPause();
+      }
+    })();
+    void entry.consumer.catch(() => {});
   }
 
   /** @param {import("./runtime_types.d.ts").PatternTransportRequest} request */
@@ -8176,6 +8388,8 @@ function createRuntimeSessionController(options = {}) {
         });
         Object.defineProperty(runtime, "patternTransport", {
           value: Object.freeze({requestPatternTransport, inspectPatternTransport,
+            beginPatternTempoPreview, setPatternTempoPreview, cancelPatternTempoPreview,
+            commitPatternTempoPreview, inspectPatternTempoPreview,
             requestTransportPatternSwitch, queryPatternCountInCapabilities, setCountInMetronome, requestPatternCountIn,
             inspectPatternCountIn, cancelPatternCountIn, requestPatternInput, inspectPatternInput,
             trigger, release}), configurable: false, writable: false,
@@ -8809,6 +9023,11 @@ function createRuntimeSessionController(options = {}) {
     stopSequence,
     requestPatternSwitch,
     requestPatternTransport,
+    beginPatternTempoPreview,
+    setPatternTempoPreview,
+    cancelPatternTempoPreview,
+    commitPatternTempoPreview,
+    inspectPatternTempoPreview,
     inspectPatternTransport,
     queryPatternCountInCapabilities,
     setCountInMetronome,
