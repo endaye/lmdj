@@ -24,6 +24,7 @@ import type {SeqSnap} from "../state/seq_snap_preference";
 import {SequenceGrid} from "./sequence_grid";
 import {PatternSelector, TouchSegment, type TouchSegmentOption} from "./touch_kit";
 import "./sequence_setup_layout.css";
+import "./sequence_edit_layout.css";
 
 const BAR_COUNTS = [1, 2, 4, 8] as const;
 const BAR_OPTIONS: readonly TouchSegmentOption<1 | 2 | 4 | 8>[] = BAR_COUNTS.map((count) =>
@@ -188,6 +189,9 @@ export function SequenceTouchWorkspace(props: SequenceTouchWorkspaceProps) {
         <PatternSelector index={patternIndex} patternIds={project.patterns.map((item) => item.patternId)}
           patternId={headerPatternId} disabled={selectionDisabled} queuedIndex={queuedIndex}
           onSelect={props.onSwitch} />
+        {layer === "edit" ? <span className="sequence-edit-tempo" aria-label="Project tempo">
+          {project.bpm} BPM
+        </span> : null}
         <TouchSegment<SequenceLayer> label="Layer" className="sequence-layer" options={LAYER_OPTIONS}
           value={layer} onChange={setLayer} />
       </header>

@@ -87,6 +87,119 @@ const lane = (pad: number) =>
 const note = (pad: number) =>
   within(row(pad)).getByTestId("sequence-grid-note");
 
+// Independent geometry oracle: local (x,y) maps to screen (100+y*s,
+// 200+(768-x)*s) for the console's counterclockwise portrait rotation.
+function transformedGrid(container: HTMLElement, rotated: boolean, scale: number) {
+  container.classList.add("hardware-workspace");
+  container.style.transform = `translate(100px, 200px) ${rotated ? "rotate(-90deg) " : ""}scale(${scale})`;
+  const point = (x: number, y: number) => rotated
+    ? {clientX: 100 + y * scale, clientY: 200 + (LANE_WIDTH - x) * scale}
+    : {clientX: 100 + x * scale, clientY: 200 + y * scale};
+  const rect = (element: Element, y: number, height: number) => {
+    const topLeft = point(rotated ? LANE_WIDTH : 0, y);
+    const width = (rotated ? height : LANE_WIDTH) * scale;
+    const physicalHeight = (rotated ? LANE_WIDTH : height) * scale;
+    Object.defineProperties(element, {
+      offsetWidth: {configurable: true, value: LANE_WIDTH},
+      offsetHeight: {configurable: true, value: height},
+      getBoundingClientRect: {configurable: true, value: () => ({
+        left: topLeft.clientX, top: topLeft.clientY, width, height: physicalHeight,
+        right: topLeft.clientX + width, bottom: topLeft.clientY + physicalHeight,
+      })},
+    });
+  };
+  rect(container.querySelector(".sequence-grid-body")!, 0, ROW_PITCH * 16);
+  container.querySelectorAll(".sequence-grid-row").forEach((element, index) => {
+    rect(element, index * ROW_PITCH, LANE_HEIGHT);
+    rect(element.querySelector(".sequence-grid-lane")!, index * ROW_PITCH, LANE_HEIGHT);
+  });
+  return point;
+}
+
+test.each([[false, 1.5], [true, 0.5]] as const)(
+  "transformed tap preserves the exact Pad and tick (rotated=%s, scale=%s)",
+  (rotated, scale) => {
+    const {callbacks, view} = renderGrid();
+    const point = transformedGrid(view.container, rotated, scale);
+    fireEvent.pointerDown(lane(2), {pointerId: 70, button: 0, ...point(25, 54)});
+    fireEvent.pointerUp(window, {pointerId: 70});
+    expect(callbacks.onEdit.mock.calls).toEqual([[{
+      remove: [], put: [{bank: 0, pad: 2, onsetTick: 240, durationTick: 240, velocity: 100}],
+    }]]);
+  },
+);
+
+test.each([[false, 1.5], [true, 0.5]] as const)(
+  "transformed move retains the absolute target Pad and onset (rotated=%s)", (rotated, scale) => {
+    const {callbacks, view} = renderGrid();
+    const point = transformedGrid(view.container, rotated, scale);
+    fireEvent.pointerDown(note(0), {pointerId: 71, button: 0, ...point(5, 10)});
+    fireEvent.pointerMove(note(0), {pointerId: 71, ...point(53, 76)});
+    fireEvent.pointerUp(window, {pointerId: 71});
+    expect(callbacks.onEdit.mock.calls).toEqual([[{
+      remove: [{bank: 0, pad: 0, onsetTick: 0}],
+      put: [{bank: 0, pad: 3, onsetTick: 480, durationTick: 240, velocity: 100}],
+    }]]);
+  },
+);
+
+test.each([[false, 1.5], [true, 0.5]] as const)(
+  "transformed endpoint resize retains the absolute end (rotated=%s)", (rotated, scale) => {
+    const {callbacks, view} = renderGrid();
+    const point = transformedGrid(view.container, rotated, scale);
+    fireEvent.pointerDown(within(note(0)).getByTestId("sequence-grid-note-end"),
+      {pointerId: 72, button: 0, ...point(22, 10)});
+    fireEvent.pointerMove(lane(0), {pointerId: 72, ...point(96, 10)});
+    fireEvent.pointerUp(window, {pointerId: 72});
+    expect(callbacks.onEdit.mock.calls).toEqual([[{
+      remove: [],
+      put: [{bank: 0, pad: 0, onsetTick: 0, durationTick: 960, velocity: 100}],
+    }]]);
+  },
+);
+
+test.each([[false, 1.5], [true, 0.5]] as const)(
+  "transformed velocity uses the lane's local vertical axis (rotated=%s)", (rotated, scale) => {
+    const {callbacks, view} = renderGrid({editMode: "vel"});
+    const point = transformedGrid(view.container, rotated, scale);
+    fireEvent.pointerDown(note(0), {pointerId: 73, button: 0, ...point(5, 10)});
+    fireEvent.pointerMove(lane(0), {pointerId: 73, ...point(5, 2)});
+    fireEvent.pointerUp(window, {pointerId: 73});
+    expect(callbacks.onEdit.mock.calls).toEqual([[{
+      remove: [],
+      put: [{bank: 0, pad: 0, onsetTick: 0, durationTick: 240, velocity: 114}],
+    }]]);
+  },
+);
+
+test.each([[false, 1.5], [true, 0.5]] as const)(
+  "transformed box preview stays in local CSS coordinates (rotated=%s)", (rotated, scale) => {
+    const {callbacks, view} = renderGrid();
+    const point = transformedGrid(view.container, rotated, scale);
+    fireEvent.pointerDown(lane(3), {pointerId: 74, button: 0, ...point(0, 76)});
+    fireEvent.pointerMove(lane(0), {pointerId: 74, ...point(80, 10)});
+    const box = screen.getByTestId("sequence-grid-box");
+    for (const [key, expected] of Object.entries({left: 0, top: 10, width: 80, height: 66})) {
+      expect(parseFloat(box.style[key as "left"])).toBeCloseTo(expected, 8);
+    }
+    fireEvent.pointerUp(window, {pointerId: 74});
+    expect(callbacks.onSelectionChange).toHaveBeenCalledExactlyOnceWith([
+      {bank: 0, pad: 0, onsetTick: 0}, {bank: 0, pad: 1, onsetTick: 240},
+    ]);
+    expect(callbacks.onEdit).not.toHaveBeenCalled();
+  },
+);
+
+test.each(["resize", "transform"])("a %s during a gesture cancels the draft", (change) => {
+  const {callbacks, view} = renderGrid();
+  const point = transformedGrid(view.container, false, 1.5);
+  fireEvent.pointerDown(lane(2), {pointerId: 75, button: 0, ...point(25, 54)});
+  if (change === "resize") fireEvent(window, new Event("resize"));
+  else view.container.style.transform = "rotate(-90deg) scale(1.5)";
+  fireEvent.pointerUp(window, {pointerId: 75});
+  expect(callbacks.onEdit).not.toHaveBeenCalled();
+});
+
 test("renders the active Bank's sixteen Pad rows with their notes", () => {
   renderGrid({bank: 0});
   const grid = screen.getByTestId("sequence-grid");
@@ -386,7 +499,7 @@ test.each([1, 2, 4, 8] as const)("bar buttons and picker reach every bar of a %s
   for (let bar = 1; bar <= bars; bar += 1) {
     expect(scroller.scrollLeft).toBe((bar - 1) * 384);
     expect(callbacks.onViewportChange).toHaveBeenLastCalledWith({startTick: (bar - 1) * 3840, endTick: bar * 3840});
-    expect(screen.getByRole("button", {name: "Choose bar"}).textContent).toContain(`BAR ${bar} / ${bars}`);
+    expect(screen.getByRole("button", {name: "Choose bar"}).textContent).toContain(`BAR ${String(bar).padStart(2, "0")} / ${String(bars).padStart(2, "0")}`);
     fireEvent.click(next());
   }
   expect(next().hasAttribute("disabled")).toBe(true);
@@ -426,7 +539,7 @@ test("partial native scroll reports its true unobscured range before a direct ba
   scroller.scrollLeft = 96;
   fireEvent.scroll(scroller);
   expect(callbacks.onViewportChange).toHaveBeenLastCalledWith({startTick: 960, endTick: 4800});
-  expect(screen.getByRole("button", {name: "Choose bar"}).textContent).toContain("BAR 1–2 / 4");
+  expect(screen.getByRole("button", {name: "Choose bar"}).textContent).toContain("BAR 01–02 / 04");
   fireEvent.click(screen.getByRole("button", {name: "Choose bar"}));
   fireEvent.click(screen.getByRole("button", {name: "Bar 4"}));
   expect(callbacks.onViewportChange).toHaveBeenLastCalledWith({startTick: 11520, endTick: 15360});
@@ -441,5 +554,5 @@ test("transformed rectangle rounding cannot turn an aligned bar into a two-bar r
   });
   fireEvent.scroll(scroller);
   expect(callbacks.onViewportChange).toHaveBeenLastCalledWith({startTick:0, endTick:3840});
-  expect(screen.getByRole("button", {name: "Choose bar"}).textContent).toContain("BAR 1 / 2");
+  expect(screen.getByRole("button", {name: "Choose bar"}).textContent).toContain("BAR 01 / 02");
 });

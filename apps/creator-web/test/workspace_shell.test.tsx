@@ -4039,7 +4039,7 @@ test("a stopped transport inspection preserves the user's selected Pattern", asy
   await userEvent.click(screen.getByRole("button", {name: "EDIT"}));
   await userEvent.click(forward);
   await waitFor(() => expect(screen.getByRole("button", {name: "Choose bar"})
-    .textContent).toMatch(/\/ 2$/));
+    .textContent).toMatch(/\/ 02$/));
 
   await act(async () => oldInspection.resolve(engagedTransportStatus({
     playing: false,
@@ -4047,7 +4047,7 @@ test("a stopped transport inspection preserves the user's selected Pattern", asy
   })));
   // The grid's length reads selection independently of the overview header.
   expect(screen.getByRole("button", {name: "Choose bar"}).textContent)
-    .toMatch(/\/ 2$/);
+    .toMatch(/\/ 02$/);
 });
 
 test("a switch applied before the first inspection still updates the Sequence selection", async () => {
@@ -4095,7 +4095,7 @@ test("a switch applied before the first inspection still updates the Sequence se
   // The upper display already reads currentPatternId directly. The grid's
   // two-bar length independently proves the underlying selection followed.
   await waitFor(() => expect(screen.getByRole("button", {name: "Choose bar"})
-    .textContent).toMatch(/\/ 2$/));
+    .textContent).toMatch(/\/ 02$/));
   expect(screen.getByRole("button", {name: "Choose Pattern"}).textContent)
     .not.toContain("→");
   expect(fixture.calls.filter((call) => call === "reloadSnapshot").length)
@@ -4199,7 +4199,7 @@ test("a Stop landing after an unseen applied switch follows the applied Pattern"
     });
     await flushAsyncTurns();
     expect(screen.getByRole("button", {name: "Choose bar"}).textContent)
-      .toMatch(/\/ 1$/);
+      .toMatch(/\/ 01$/);
 
     // The real Stop submission's ticket status is the first observation of
     // the settled transport: stopped on B, no pending switch.
@@ -4211,7 +4211,7 @@ test("a Stop landing after an unseen applied switch follows the applied Pattern"
     // The grid's two-bar length independently proves the underlying
     // selection followed the applied Pattern; no snapshot was reloaded.
     expect(screen.getByRole("button", {name: "Choose bar"}).textContent)
-      .toMatch(/\/ 2$/);
+      .toMatch(/\/ 02$/);
     expect(screen.getByTestId("sequence-pattern").getAttribute("data-pattern-id"))
       .toBe(secondSwitchPattern);
     expect(screen.getByRole("button", {name: "Choose Pattern"}).textContent)
@@ -4229,7 +4229,7 @@ test("a Stop landing after an unseen applied switch follows the applied Pattern"
     await waitFor(() => expect(transportPhase()).toBe("stopped"));
     await userEvent.click(screen.getByRole("button", {name: "EDIT"}));
     expect(screen.getByRole("button", {name: "Choose bar"}).textContent)
-      .toMatch(/\/ 2$/);
+      .toMatch(/\/ 02$/);
     expect(fixture.calls.filter((call) => call === "reloadSnapshot").length)
       .toBe(reloadsBefore);
   } finally {
@@ -4322,7 +4322,7 @@ test("a Stop cancelling a newer switch after an unseen applied one follows the a
     });
     await flushAsyncTurns();
     expect(screen.getByRole("button", {name: "Choose bar"}).textContent)
-      .toMatch(/\/ 1$/);
+      .toMatch(/\/ 01$/);
 
     fireEvent.click(forward);
     fireEvent.click(screen.getByRole("button", {name: /^Play\/Stop/}));
@@ -4334,7 +4334,7 @@ test("a Stop cancelling a newer switch after an unseen applied one follows the a
     expect(transportPhase()).toBe("stopped");
     // Two bars prove B; one would be stale A and four the cancelled C.
     expect(screen.getByRole("button", {name: "Choose bar"}).textContent)
-      .toMatch(/\/ 2$/);
+      .toMatch(/\/ 02$/);
     expect(screen.getByTestId("sequence-pattern").getAttribute("data-pattern-id"))
       .toBe(secondSwitchPattern);
     expect(screen.getByRole("button", {name: "Choose Pattern"}).textContent)
@@ -4352,7 +4352,7 @@ test("a Stop cancelling a newer switch after an unseen applied one follows the a
     await waitFor(() => expect(transportPhase()).toBe("stopped"));
     await userEvent.click(screen.getByRole("button", {name: "EDIT"}));
     expect(screen.getByRole("button", {name: "Choose bar"}).textContent)
-      .toMatch(/\/ 2$/);
+      .toMatch(/\/ 02$/);
     expect(fixture.calls.filter((call) => call === "reloadSnapshot").length)
       .toBe(reloadsBefore);
   } finally {

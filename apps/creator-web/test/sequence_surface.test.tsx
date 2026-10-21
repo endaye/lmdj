@@ -67,6 +67,22 @@ function renderSurface(recovery = false, options: {
   };
 }
 
+test("EDIT groups the Pattern, read-only Project tempo and layer tabs", () => {
+  const callbacks = renderSurface();
+  const tempo = screen.getByLabelText("Project tempo");
+  expect(tempo.textContent).toBe("120 BPM");
+  callbacks.update({project: {...project, bpm: 137}});
+  expect(tempo.textContent).toBe("137 BPM");
+  expect(screen.getByRole("button", {name: "Grid tools"}).textContent).toBe("Tools");
+  expect(screen.getByTestId("sequence-grid-help").textContent)
+    .toBe("NOTE · 1/16 SNAP · Tap empty space to add");
+  expect(screen.getByRole("button", {name: "EDIT"}).getAttribute("aria-pressed")).toBe("true");
+  openSetup();
+  expect(screen.queryByLabelText("Project tempo")).toBeNull();
+  expect(callbacks.onEdit).not.toHaveBeenCalled();
+  expect(callbacks.onSettingsChange).not.toHaveBeenCalled();
+});
+
 test("Tempo groups TAP between the two one-BPM step actions", () => {
   renderSurface();
   openSetup();
