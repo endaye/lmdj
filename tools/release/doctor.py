@@ -120,25 +120,27 @@ class HostProbes:
             pid = parent
         return found
 
-    def lock_free(self, path):
-        """Whether the journal writer lock can be taken right now (released at once).
+    def lock_state(self, path):
+        """"free", "held", or "unreadable: <reason>" for the journal writer lock.
 
         Opened read-only: flock needs no write access, so a lock file another
-        account owns is probed for a holder rather than reported as held.
+        account owns is probed for a holder. A file that cannot be opened at
+        all (permissions, a symlink in place of the lock) is reported as
+        unreadable, which is a different defect from a held lock.
         """
         try:
             fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
         except FileNotFoundError:
-            return True
-        except OSError:
-            return False
+            return "free"
+        except OSError as error:
+            return f"unreadable: {error.strerror or type(error).__name__}"
         try:
             fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except OSError:
-            return False
+            return "held"
         else:
             fcntl.flock(fd, fcntl.LOCK_UN)
-            return True
+            return "free"
         finally:
             os.close(fd)
 
@@ -239,11 +241,17 @@ def check_github_auth(probes):
 
 def check_journal_lock(probes, journal_root):
     lock = Path(journal_root) / "writer.lock"
-    if probes.lock_free(lock):
+    state = probes.lock_state(lock)
+    if state == "free":
         return Check("journal lock", "ok", "writer.lock is free")
-    return Check("journal lock", "fail", f"{lock} is held by another writer",
-                 "wait for the running run/resume/retire to finish (see the release "
-                 "processes check); never delete writer.lock or the journal")
+    if state == "held":
+        return Check("journal lock", "fail", f"{lock} is held by another writer",
+                     "wait for the running run/resume/retire to finish (see the release "
+                     "processes check); never delete writer.lock or the journal")
+    return Check("journal lock", "fail", f"{lock} cannot be opened ({state})",
+                 "the journal must be a private directory owned by this account with "
+                 "writer.lock a regular 0600 file; fix its ownership and mode (chown/chmod), "
+                 "never delete or replace it")
 
 
 # The release.sh commands that drive or mutate release state; a second one of
@@ -256,17 +264,24 @@ DRIVING_COMMANDS = frozenset({"run", "resume", "retire", "prepare", "push-tag",
 
 
 def _release_cli_arguments(command):
-    """The arguments after `tools/release/cli.py` when `command` runs it, else None.
+    """The arguments after the release CLI program when `command` runs it, else None.
 
-    Only an interpreter invocation counts: a shell whose command string merely
-    mentions the path (an editor, a heredoc, this doctor's own wrapper) is not
-    a release driver.
+    Only an interpreter invocation counts — `python3 [-opts] …/tools/release/cli.py`
+    or `python3 [-opts] -m tools.release.cli` — so a shell whose command string
+    merely mentions the path (an editor, a heredoc, this doctor's own wrapper)
+    is not a release driver.
     """
     tokens = command.split()
-    for index in range(1, len(tokens)):
-        if tokens[index].endswith("tools/release/cli.py") \
-                and Path(tokens[index - 1]).name.startswith("python"):
-            return " ".join(tokens[index + 1:])
+    for index, token in enumerate(tokens):
+        if not Path(token).name.startswith("python"):
+            continue
+        rest = index + 1
+        while rest < len(tokens) and tokens[rest].startswith("-") and tokens[rest] != "-m":
+            rest += 1
+        if rest < len(tokens) and tokens[rest].endswith("tools/release/cli.py"):
+            return " ".join(tokens[rest + 1:])
+        if rest + 1 < len(tokens) and tokens[rest] == "-m" and tokens[rest + 1] == "tools.release.cli":
+            return " ".join(tokens[rest + 2:])
     return None
 
 
@@ -394,9 +409,19 @@ def check_runner(probes):
                     workdir = None
         except (OSError, ValueError, plistlib.InvalidFileException, UnicodeError):
             workdir = None
-        busy = any(workdir is None or command.startswith(workdir.rstrip("/") + "/")
-                   for command in workers)
-        if busy:
+        if workdir is None:
+            if workers:
+                return Check("m1 runner", "fail",
+                             f"{label}'s launch agent is unreadable, so a running Runner.Worker "
+                             "cannot be attributed to a service",
+                             "wait for every runner job on this host to finish, or pause each "
+                             "loaded runner service (" + "; ".join(
+                                 f"launchctl bootout gui/$(id -u)/{name}" for name in labels)
+                             + "); then restore the agent definition under ~/Library/LaunchAgents")
+            idle.append(f"{label} loaded (agent definition unreadable), no worker running; "
+                        f"pause it before prepare: {pause}; resume afterwards: {resume}")
+            continue
+        if any(command.startswith(workdir.rstrip("/") + "/") for command in workers):
             return Check("m1 runner", "fail", f"{label} is executing a CI job on this host",
                          f"wait for the job, or pause the runner for the release: {pause}; "
                          f"resume it afterwards: {resume}")

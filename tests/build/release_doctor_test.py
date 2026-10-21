@@ -60,7 +60,7 @@ class Probes:
         self.load, self.cpus = 2.0, 8
         self.rows = []
         self.ancestor_pids = set()
-        self.locks_free = True
+        self.lock = "free"
         self.asked = []
 
     def is_dir(self, path):
@@ -89,8 +89,8 @@ class Probes:
     def processes(self):
         return list(self.rows)
 
-    def lock_free(self, path):
-        return self.locks_free
+    def lock_state(self, path):
+        return self.lock
 
     def ancestors(self):
         return set(self.ancestor_pids)
@@ -199,9 +199,15 @@ class DoctorChecksTest(unittest.TestCase):
     # journal lock and processes
     def test_a_held_writer_lock_is_named_and_never_deleted(self):
         self.assertEqual(check_journal_lock(self.probes, self.root / "journal").status, "ok")
-        self.probes.locks_free = False
+        self.probes.lock = "held"
         check = check_journal_lock(self.probes, self.root / "journal")
         self.assertFails(check, detail="held by another writer", remedy="never delete writer.lock")
+        # A lock that cannot be opened is a permissions defect, not a holder.
+        self.probes.lock = "unreadable: Permission denied"
+        check = check_journal_lock(self.probes, self.root / "journal")
+        self.assertFails(check, detail="cannot be opened (unreadable: Permission denied)",
+                         remedy="fix its ownership and mode")
+        self.assertNotIn("held", check.detail)
 
     def test_only_an_interpreter_running_the_cli_counts_as_a_release_process(self):
         self.probes.rows = [
@@ -210,6 +216,13 @@ class DoctorChecksTest(unittest.TestCase):
             (8, 0.0, "vim tools/release/cli.py"),
         ]
         self.assertEqual(check_release_processes(self.probes).status, "ok")
+        # Interpreter options, `env`, and the module form are all the CLI.
+        for command in ("env python3 -I -B tools/release/cli.py --repo-root /repo run --authority x",
+                        "/usr/bin/python3.11 -m tools.release.cli --repo-root /repo resume release-1"):
+            with self.subTest(command=command):
+                self.probes.rows.append((9, 3.0, command))
+                self.assertEqual(check_release_processes(self.probes).status, "fail")
+                self.probes.rows.pop()
         # Read-only commands beside a driver are not a second driver.
         for arguments in ("--repo-root /repo status", "--repo-root=/repo audit --remote",
                           "--repo-root /repo doctor", "--repo-root /repo hydrate",
@@ -286,10 +299,15 @@ class DoctorChecksTest(unittest.TestCase):
         self.assertEqual(check_runner(self.probes).status, "ok")
         self.probes.rows = [(90, 50.0, "/Users/x/actions-runner/lmdj/bin/Runner.Worker spawnclient 1 2")]
         self.assertEqual(check_runner(self.probes).status, "fail")
-        # Without a readable agent definition any worker counts, conservatively.
+        # Without a readable agent definition a running worker cannot be
+        # attributed: the failure says so and names every service to pause.
         del self.probes.files[str(self.probes.home / "Library/LaunchAgents" / f"{label}.plist")]
         self.probes.rows = [(90, 50.0, "/Users/x/actions-runner/other/bin/Runner.Worker spawnclient 1 2")]
-        self.assertEqual(check_runner(self.probes).status, "fail")
+        unattributed = check_runner(self.probes)
+        self.assertFails(unattributed, detail="launch agent is unreadable",
+                         remedy=f"launchctl bootout gui/$(id -u)/{label}")
+        self.probes.rows = []
+        self.assertEqual(check_runner(self.probes).status, "ok")
 
     def test_every_loaded_runner_service_is_inspected(self):
         import plistlib
@@ -323,7 +341,7 @@ class DoctorChecksTest(unittest.TestCase):
                           "fseventsd", "spotlight", "m1 runner"])
         self.assertTrue(doctor_passed(checks))
         self.assertIn("release doctor: all checks passed", format_doctor(checks))
-        self.probes.locks_free = False
+        self.probes.lock = "held"
         checks = run_doctor(self.root, product_fingerprint=PRODUCT, checksum_fingerprint=CHECKSUM,
                             journal_root=self.root / "journal", probes=self.probes)
         self.assertFalse(doctor_passed(checks))
@@ -340,24 +358,28 @@ class DoctorChecksTest(unittest.TestCase):
 
 
 class HostProbesTest(unittest.TestCase):
-    def test_lock_free_reflects_a_held_flock_and_a_missing_file(self):
+    def test_lock_state_reflects_a_held_flock_a_missing_and_an_unopenable_file(self):
         with tempfile.TemporaryDirectory() as directory:
             lock = Path(directory) / "writer.lock"
             probes = HostProbes()
-            self.assertTrue(probes.lock_free(lock))
+            self.assertEqual(probes.lock_state(lock), "free")
             lock.write_bytes(b"")
-            self.assertTrue(probes.lock_free(lock))
+            self.assertEqual(probes.lock_state(lock), "free")
             # A lock file this account may only read is probed, not reported held.
             lock.chmod(0o400)
-            self.assertTrue(probes.lock_free(lock))
+            self.assertEqual(probes.lock_state(lock), "free")
             lock.chmod(0o600)
             fd = os.open(lock, os.O_RDWR)
             try:
                 fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-                self.assertFalse(probes.lock_free(lock))
+                self.assertEqual(probes.lock_state(lock), "held")
             finally:
                 os.close(fd)
-            self.assertTrue(probes.lock_free(lock))
+            self.assertEqual(probes.lock_state(lock), "free")
+            # A symlink where the lock should be cannot be opened: unreadable, not held.
+            lock.unlink()
+            lock.symlink_to(Path(directory) / "elsewhere")
+            self.assertTrue(probes.lock_state(lock).startswith("unreadable:"))
 
     def test_ancestors_walks_the_parent_chain_and_excludes_init(self):
         class Fake(HostProbes):

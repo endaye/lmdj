@@ -692,11 +692,15 @@ class ReleaseEntryPointTest(unittest.TestCase):
         })()
         self_root = self.root
         reader = lambda tree: (self.context.policy.selected, type("Ledger", (), {})())
+        # A resume reaches the context only for a request the journal holds.
+        self.carriers["publication"].fail_after_write = True
+        self.assertEqual(self.run_cli(["run", "--authority", "issue:1301"]), 2)
+        (known,) = self.request_ids()
         for arguments, expected in ((["prepare", "lmdj-v1.0.61.0"], False),
                                     (["prepare", "lmdj-v1.0.61.0", "--reprove"], True),
                                     (["run", "--authority", "issue:1301", "--reprove"], True),
-                                    (["resume", "release-" + "0" * 16], False),
-                                    (["resume", "release-" + "0" * 16, "--reprove"], True)):
+                                    (["resume", known], False),
+                                    (["resume", known, "--reprove"], True)):
             with self.subTest(arguments=arguments):
                 seen.clear()
                 with patch.object(cli, "ProfileRuntime", recording_runtime), \
@@ -801,8 +805,13 @@ class ReleaseEntryPointTest(unittest.TestCase):
 
         failed = [Check("emsdk", "fail", "no emsdk at /x", "install emsdk 6.0.5 under /x"),
                   Check("gh auth", "ok", "GITHUB_TOKEN is set")]
+        # The resume case names a request the journal holds; an unknown one is
+        # the journal's finding and is reported before the doctor.
+        self.carriers["publication"].fail_after_write = True
+        self.assertEqual(self.run_cli(["run", "--authority", "issue:1301"]), 2)
+        (known,) = self.request_ids()
         for arguments in (["run", "--authority", "issue:1301"],
-                          ["resume", "release-" + "0" * 16],
+                          ["resume", known],
                           ["prepare", "lmdj-v1.0.61.0"]):
             with self.subTest(arguments=arguments):
                 output, errors = io.StringIO(), io.StringIO()
@@ -814,7 +823,7 @@ class ReleaseEntryPointTest(unittest.TestCase):
                 self.assertIn("[fail] emsdk: no emsdk at /x", output.getvalue())
                 self.assertIn("remedy: install emsdk 6.0.5 under /x", output.getvalue())
                 self.assertIn(f"release doctor: refusing {arguments[0]}", errors.getvalue())
-        self.assertEqual(self.request_ids(), [])
+        self.assertEqual(self.request_ids(), [known])
         # Read-only commands never wait on the doctor.
         with patch.object(cli, "release_doctor", side_effect=AssertionError("doctor ran")):
             code, report = self.status()
@@ -892,6 +901,23 @@ class ReleaseEntryPointTest(unittest.TestCase):
         output = io.StringIO()
         self.assertEqual(self.run_cli(["resume", "release-" + "0" * 16], capture=output), 2)
         self.assertIn("request is missing", output.getvalue())
+
+    def test_an_unknown_resume_is_reported_before_the_host_doctor(self):
+        # The journal's finding is not hidden behind a failing host check.
+        from tools.release.doctor import Check
+
+        self.assertEqual(self.run_cli(["run", "--authority", "issue:1301"]), 0)
+        policy_dir = self.root / "tools/release"
+        shutil.copy(ROOT / "tools/release/policy.json", policy_dir / "policy.json")
+        failed = [Check("host load", "fail", "load 9.0 exceeds 8 cpus", "stop heavy work")]
+        output = io.StringIO()
+        with patch.object(cli, "release_doctor", return_value=failed), \
+                patch.object(cli, "GitRepository", return_value=self.context.git), \
+                contextlib.redirect_stdout(output), contextlib.redirect_stderr(output):
+            code = cli.main(["--repo-root", str(self.root), "resume", "release-" + "0" * 16])
+        self.assertEqual(code, 2)
+        self.assertIn("request is missing", output.getvalue())
+        self.assertNotIn("host load", output.getvalue())
 
 
 class RealCompositionTest(unittest.TestCase):

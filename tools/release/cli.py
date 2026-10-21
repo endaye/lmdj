@@ -362,6 +362,18 @@ def clear_reprove(root: Path, git, request_id: str) -> None:
         pass
 
 
+def _require_known_request(root: Path, git, request_id: str) -> None:
+    """Raise the journal's own refusal for a request it does not hold.
+
+    The same read the driver's `resume` performs first, under the same writer
+    context, so an unreadable or foreign-owned journal is reported exactly as
+    the driver would report it.
+    """
+    with RequestJournal(release_journal_root(root, git)) as journal:
+        if journal.read_alias(request_id) is None and journal.read(request_id) is None:
+            raise JournalError("why: request is missing; remedy: use the original request ID")
+
+
 def _resume_request(root: Path, git, request_id: str):
     """The frozen request for a resume, read-only; None when the journal has none."""
     directory = release_journal_root(root, git)
@@ -831,6 +843,11 @@ def main(argv: list[str] | None = None) -> int:
             checks = release_doctor(root)
             print(format_doctor(checks), end="")
             return 0 if doctor_passed(checks) else 2
+        if options.command == "resume" and _resume_request(root, GitRepository(root), options.request_id) is None:
+            # An unknown request is the journal's finding, not the host's:
+            # report it before the doctor so the cause is not hidden behind a
+            # failed host check. The journal reports its own unreadable state.
+            _require_known_request(root, GitRepository(root), options.request_id)
         if options.command in _DOCTORED_COMMANDS:
             checks = release_doctor(root)
             if not doctor_passed(checks):
