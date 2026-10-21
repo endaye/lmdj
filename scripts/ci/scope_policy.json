@@ -147,6 +147,8 @@
     {"match": {"kind": "prefix", "value": ".agents/"}, "lanes": ["docs_static", "ci_contract"]},
     {"match": {"kind": "prefix", "value": ".claude/"}, "lanes": ["docs_static", "ci_contract"]},
     {"match": {"kind": "exact", "value": ".agents/skills/lmdj-release/SKILL.md"}, "lanes": ["deploy_contract"]},
+    {"match": {"kind": "exact", "value": ".agents/skills/issue-list/SKILL.md"}, "lanes": ["deploy_contract"]},
+    {"match": {"kind": "exact", "value": ".agents/pitfalls/cleanup-removes-live-release-state.md"}, "lanes": ["deploy_contract"]},
     {"match": {"kind": "prefix", "value": "output/playwright/"}, "lanes": ["portal"]},
     {"match": {"kind": "exact", "value": "netlify.toml"}, "lanes": ["portal", "ci_contract"]},
     {"match": {"kind": "exact", "value": "wrangler.json"}, "lanes": ["portal", "ci_contract"]},
