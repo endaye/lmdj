@@ -33,6 +33,7 @@ usage:
   scripts/creator-web.sh proof
   scripts/creator-web.sh quick
   scripts/creator-web.sh smoke
+  scripts/creator-web.sh reproducible
   scripts/creator-web.sh package
   scripts/creator-web.sh serve [--port PORT] [--catalog-upstream URL]
   scripts/creator-web.sh clean
@@ -103,6 +104,15 @@ activate_toolchain() {
   fi
 }
 
+# The Playwright tree under tests/platform/web is a build-time requirement
+# only for legs that drive a browser; `reproducible` runs none, so it waives
+# that part of the check and keeps the Creator's own locked tree required.
+require_playwright_tree=1
+
+skip_playwright_requirement() {
+  require_playwright_tree=0
+}
+
 require_dependencies() {
   [[ -f "$creator_root/package-lock.json" ]] || {
     echo "Creator Web error: Creator lockfile is missing" >&2
@@ -112,15 +122,17 @@ require_dependencies() {
     echo "Creator Web error: run npm ci in apps/creator-web" >&2
     exit 2
   }
-  [[ -f "$web_test_root/node_modules/@playwright/test/package.json" ]] || {
-    echo "Creator Web error: run npm ci in tests/platform/web" >&2
-    exit 2
-  }
-  local playwright_version
-  playwright_version="$(node -p "require('$web_test_root/node_modules/@playwright/test/package.json').version")"
-  if [[ "$playwright_version" != "1.62.1" ]]; then
-    echo "Creator Web error: Playwright 1.62.1 is required, got $playwright_version" >&2
-    exit 2
+  if [[ "$require_playwright_tree" == 1 ]]; then
+    [[ -f "$web_test_root/node_modules/@playwright/test/package.json" ]] || {
+      echo "Creator Web error: run npm ci in tests/platform/web" >&2
+      exit 2
+    }
+    local playwright_version
+    playwright_version="$(node -p "require('$web_test_root/node_modules/@playwright/test/package.json').version")"
+    if [[ "$playwright_version" != "1.62.1" ]]; then
+      echo "Creator Web error: Playwright 1.62.1 is required, got $playwright_version" >&2
+      exit 2
+    fi
   fi
   npm --prefix "$creator_root" ls --depth=0 >/dev/null
 }
@@ -573,6 +585,7 @@ PY
 proof_creator() {
   local mode="${1:-proof}"
   activate_toolchain
+  if [[ "$mode" == reproducible ]]; then skip_playwright_requirement; fi
   require_dependencies
   if [[ -n "$(git -C "$repo_root" status --porcelain=v1 --untracked-files=all)" ]]; then
     echo "Creator Web error: Proof requires a clean Git source tree" >&2
@@ -584,7 +597,7 @@ proof_creator() {
   unset NODE_PATH || true
   unset PYTHONPATH || true
   proof_root="$(mktemp -d "${TMPDIR:-/tmp}/lmdj-creator-proof.XXXXXX")"
-  if [[ "$mode" != smoke ]]; then
+  if [[ "$mode" != smoke && "$mode" != reproducible ]]; then
   generate_project_fixture "$proof_root/creator-proof-bundle.lmdj"
   export LMDJ_CREATOR_WEB_OVERVIEW_BUNDLE="$proof_root/overview/creator-overview-bundle.lmdj"
   generate_project_fixture "$LMDJ_CREATOR_WEB_OVERVIEW_BUNDLE" overview
@@ -594,11 +607,11 @@ proof_creator() {
     "$repo_root/products/lmdj/assembly.json" \
     "$proof_root/creator-candidate-proof-bundle.lmdj"
   fi
-  if [[ "$mode" == proof ]]; then clean_creator; fi
+  if [[ "$mode" == proof || "$mode" == reproducible ]]; then clean_creator; fi
   configure_creator
   build_creator
   package_creator
-  if [[ "$mode" == proof ]]; then
+  if [[ "$mode" == proof || "$mode" == reproducible ]]; then
     cmake -E copy_directory "$dist_root" "$proof_root/first-dist"
     clean_creator
     configure_creator
@@ -609,6 +622,18 @@ proof_creator() {
       return 2
     }
     echo "Creator Web distribution reproducibility: PASS"
+  fi
+  if [[ "$mode" == reproducible ]]; then
+    # The release `prepare` leg (#2422 item 4): the candidate batch already
+    # proved this exact revision's tests and browser journeys on CI, so the
+    # local build only has to be the same bytes twice — and a valid
+    # distribution: the two non-browser packaging checks keep a reproducible
+    # but malformed dist (missing manifest identity, broken layout) from
+    # reaching the release archive.
+    python3 "$creator_root/test/package_test.py"
+    python3 "$creator_root/test/deployment_smoke_test.py"
+    echo "Creator Web Reproducible: PASS (two clean distributions byte-identical and packaged; unit tests and browser journeys not run)"
+    return
   fi
   if [[ "$mode" == smoke ]]; then
     test_creator_ui
@@ -653,6 +678,11 @@ case "$command_name" in
         bash "$script_dir/creator-web.sh" "$command_name"
     fi
     proof_creator "$command_name"
+    ;;
+  reproducible)
+    # No browser runs, so no audio-output wrapper.
+    [[ $# -eq 0 ]] || { usage; exit 64; }
+    proof_creator reproducible
     ;;
   package)
     [[ $# -eq 0 ]] || { usage; exit 64; }

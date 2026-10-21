@@ -407,7 +407,12 @@ remote mutation。
 3. 校验 ledger schema、tag/classification、identity、snapshot、merged-main Proof、CI run、
    main ancestry 与 version policy；
 4. 拒绝 remote 同名冲突、本地同名不同 object/target、错误 signer、abandoned 或未知状态；
-5. 按 profile 从 exact committed target 构建，拒绝使用调用者的脏工作树内容；
+5. 按 profile 从 exact committed target 构建，拒绝使用调用者的脏工作树内容。Web Host
+   profile 默认只做可复现构建：每个 Host 两次干净构建并逐字节比对（脚本的
+   `reproducible` 子命令），不在本地重跑单元测试与浏览器 journeys——第 3 步已要求
+   exact target 的完整候选批次证据，那些测试已在 CI 上对同一 revision 通过。显式
+   `--reprove` 才在本地重跑完整 proof（`configure/build/test/proof`）（#2422 第 4 项，
+   Owner 于 2026-10-21 确认）；
 6. 运行 profile-specific verifier，生成 detached checksum；
 7. 用 Release checksum private key 生成 armored detached signature，并用 public trust anchor
    在全新临时 keyring 中回验；

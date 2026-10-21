@@ -79,12 +79,18 @@ from tools.release.transitions import (  # noqa: E402
 )
 
 
+_REPROVE_HELP = ("run each Web Host's complete local proof (tests and browser journeys) "
+                 "during prepare instead of only the reproducible build; the default "
+                 "relies on the exact-target complete batch evidence prepare already requires")
+
+
 def parse_arguments(argv: list[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(prog="scripts/release.sh")
     parser.add_argument("--repo-root", required=True, type=Path)
     commands = parser.add_subparsers(dest="command", required=True)
     prepared = commands.add_parser("prepare")
     prepared.add_argument("tag")
+    prepared.add_argument("--reprove", action="store_true", help=_REPROVE_HELP)
     pushed = commands.add_parser("push-tag")
     pushed.add_argument("tag")
     drafted = commands.add_parser("create-draft")
@@ -136,8 +142,10 @@ def parse_arguments(argv: list[str]) -> argparse.Namespace:
         "--base-revision", metavar="SHA",
         help="frozen main input revision; defaults to the canonical main revision",
     )
+    started.add_argument("--reprove", action="store_true", help=_REPROVE_HELP)
     continued = commands.add_parser("resume")
     continued.add_argument("request_id")
+    continued.add_argument("--reprove", action="store_true", help=_REPROVE_HELP)
     retired = commands.add_parser("retire")
     retired.add_argument("request_id")
     superseded = retired.add_mutually_exclusive_group(required=True)
@@ -172,8 +180,13 @@ def build_context(
     git: GitRepository | object | None = None,
     github: GitHubClient | object | None = None,
     authority_reader: Callable | None = None,
+    reprove: bool = False,
 ) -> PrepareContext:
-    """Build the shipped prepare context from freshly fetched canonical state."""
+    """Build the shipped prepare context from freshly fetched canonical state.
+
+    `reprove` selects the complete local Web Host proof for `prepare`; the
+    default builds reproducibly and relies on the candidate batch evidence.
+    """
     selected_git = git or GitRepository(root)
     runner = getattr(selected_git, "runner", CommandRunner())
     selected_github = github or _authenticated_github_client(runner)
@@ -186,6 +199,7 @@ def build_context(
         checksum_verifier=OpenPgpVerifier(),
         checksum_home=home,
         checksum_fingerprint=policy.checksum_fingerprint,
+        reprove=reprove,
     )
     return PrepareContext(
         repo_root=root,
@@ -248,6 +262,53 @@ def release_recheck(context: PrepareContext, policy, request):
     from tools.release.entry_composition import compose_recheck
 
     return compose_recheck(context, policy, request)
+
+
+_REPROVE_MARKER = "reprove-requested"
+_REQUEST_ID = re.compile(r"[a-z0-9][a-z0-9-]{0,79}\Z")
+
+
+def _reprove_marker(root: Path, git, request_id: str) -> Path:
+    if not isinstance(request_id, str) or _REQUEST_ID.fullmatch(request_id) is None:
+        raise CommandError("release request ID is invalid", detail=str(request_id)[:80])
+    return release_journal_root(root, git) / "operations" / request_id / _REPROVE_MARKER
+
+
+def reprove_requested(root: Path, git, request_id: str) -> bool:
+    """Whether an earlier `run`/`resume` of this request asked for `--reprove`.
+
+    The flag is recorded beside the request's own operation journals so a
+    later `resume` without it keeps the complete local proof the operator
+    asked for; it is never frozen into the request scope, which stays the
+    immutable release identity.
+    """
+    return _reprove_marker(root, git, request_id).is_file()
+
+
+def record_reprove(root: Path, git, request_id: str) -> None:
+    """Durably record `--reprove` for this request (idempotent, private).
+
+    Called only after the driver returned for the request, so the marker
+    never outlives a request the driver refused to create. A concurrent
+    writer creating the same level is not an error.
+    """
+    marker = _reprove_marker(root, git, request_id)
+    directory = marker.parent
+    for level in (directory.parent.parent, directory.parent, directory):
+        level.mkdir(mode=0o700, exist_ok=True)
+    try:
+        fd = os.open(marker, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+    except FileExistsError:
+        return
+    os.close(fd)
+
+
+def clear_reprove(root: Path, git, request_id: str) -> None:
+    """Forget a retired request's `--reprove` so a re-created scope starts clean."""
+    try:
+        _reprove_marker(root, git, request_id).unlink()
+    except FileNotFoundError:
+        pass
 
 
 def _resume_request(root: Path, git, request_id: str):
@@ -359,6 +420,7 @@ def _retire_request(root: Path, request_id: str, tag: str) -> int:
     with RequestJournal(directory) as journal:
         # The identity and audit were proven for this exact request.
         journal.retire(request_id, retirement, expected_request=request)
+    clear_reprove(root, GitRepository(root), request_id)
     print(f"release request retired: {request_id} superseded by {tag}")
     return 0
 
@@ -436,6 +498,7 @@ def _retire_unreleased_request(root: Path, request_id: str, build: str) -> int:
         print(line)
     with RequestJournal(directory) as journal:
         journal.retire(request_id, retirement, expected_request=request)
+    clear_reprove(root, GitRepository(root), request_id)
     print(f"release request retired: {request_id} ({reserved}, never published) superseded by Build {newer}")
     return 0
 
@@ -536,6 +599,8 @@ def format_request_status(root: Path, git, request_id: str | None = None) -> str
                 f"  step: {outstanding or '-'}\n"
                 f"  outstanding intent: {outstanding if unresolved else '-'}\n"
             )
+            if (directory / "operations" / state["request"]["id"] / _REPROVE_MARKER).is_file():
+                report.append("  prepare: complete local Web Host proof requested (--reprove)\n")
             try:
                 note = journal.read_failure(state["request"]["id"])
             except JournalError as error:
@@ -711,7 +776,11 @@ def main(argv: list[str] | None = None) -> int:
         if options.command == "status":
             print(format_request_status(root, GitRepository(root), options.request_id), end="")
             return 0
-        context = build_context(root)
+        reprove = bool(getattr(options, "reprove", False))
+        if options.command == "resume" and not reprove:
+            # A request once resumed or started with --reprove keeps it.
+            reprove = reprove_requested(root, GitRepository(root), options.request_id)
+        context = build_context(root, reprove=reprove)
         if options.command in ("run", "resume"):
             policy = build_orchestration_policy(root, context)
             request = (
@@ -749,6 +818,12 @@ def main(argv: list[str] | None = None) -> int:
                 driver.run(request)
                 if options.command == "run" else driver.resume(options.request_id)
             )
+            if getattr(options, "reprove", False):
+                # The driver returned, so the request exists (or was adopted):
+                # record the wish under the ID a later `resume` names and under
+                # this invocation's own ID when an alias was adopted.
+                for request_id in {result.request_id, request["id"]}:
+                    record_reprove(root, context.git, request_id)
             _print_drive_result(result, release_journal_root(root, context.git))
             return 0 if result.status == "complete" else 2
         if options.command == "prepare":

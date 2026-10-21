@@ -87,6 +87,14 @@ editorial or record one the Owner has not approved.
 
 Use `scripts/release.sh prepare TAG`, `scripts/release.sh push-tag TAG`, and
 `scripts/release.sh create-draft TAG` in order when covered and admissible.
+`prepare` builds each Web Host reproducibly (two clean builds, byte-compared)
+and does not rerun the Hosts' tests or browser journeys locally: it already
+refuses an intent without the exact target's complete candidate batch
+evidence, and that batch proved them on CI. Pass `--reprove` (also accepted by
+`run` and `resume`) only when a complete local proof is wanted; it is the slow,
+load-sensitive leg that cost 2.0.122.0 two timeouts (#2422 item 4). Once
+passed to `run` or `resume`, the request records it, every later `resume`
+keeps it, and `status` reports it.
 Use `scripts/release.sh verify-draft TAG RELEASE_ID PLAN_SHA256` only for
 read-only Draft verification. Use
 `scripts/release.sh verify-published TAG RELEASE_ID PLAN_SHA256` for the

@@ -76,6 +76,7 @@ usage:
   scripts/web-runtime-host.sh test
   scripts/web-runtime-host.sh proof
   scripts/web-runtime-host.sh quick
+  scripts/web-runtime-host.sh reproducible
   scripts/web-runtime-host.sh serve [--port PORT]
   scripts/web-runtime-host.sh clean
 EOF
@@ -493,19 +494,21 @@ test_host() {
 proof_host() {
   local mode="${1:-proof}"
   activate_toolchain
-  require_playwright
-  verify_browser_fixture_generator
+  if [[ "$mode" != reproducible ]]; then
+    require_playwright
+    verify_browser_fixture_generator
+  fi
   export npm_config_offline=true
   export PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1
   export COREPACK_ENABLE_DOWNLOAD_PROMPT=0
   unset NODE_PATH || true
   unset PYTHONPATH || true
-  run_audio_worklet_conformance
+  if [[ "$mode" != reproducible ]]; then run_audio_worklet_conformance; fi
   proof_root="$(mktemp -d "${TMPDIR:-/tmp}/lmdj-web-host-proof.XXXXXX")"
-  if [[ "$mode" == proof ]]; then clean_host; fi
+  if [[ "$mode" == proof || "$mode" == reproducible ]]; then clean_host; fi
   configure_host
   build_host
-  if [[ "$mode" == proof ]]; then
+  if [[ "$mode" == proof || "$mode" == reproducible ]]; then
     cmake -E copy_directory "$dist_root" "$proof_root/first-dist"
     clean_host
     configure_host
@@ -515,6 +518,18 @@ proof_host() {
       return 2
     fi
     echo "Web Runtime Host reproducibility: PASS"
+  fi
+  if [[ "$mode" == reproducible ]]; then
+    # The release `prepare` leg (#2422 item 4): the candidate batch already
+    # proved this exact revision's tests and browser journeys on CI, so the
+    # local build only has to be the same bytes twice — and a valid
+    # distribution: the same distribution check the proof runs keeps a
+    # reproducible but malformed dist from reaching the release archive.
+    cmake -E copy_directory "$dist_root" "$proof_root/dist"
+    LMDJ_WEB_HOST_DIST_ROOT="$proof_root/dist" \
+      python3 "$repo_root/apps/web-runtime-host/test/distribution_test.py"
+    echo "Web Runtime Host Reproducible: PASS (two clean builds byte-identical and packaged; unit tests and browser journeys not run)"
+    return
   fi
   run_nonbrowser_tests
   cmake -E copy_directory "$dist_root" "$proof_root/dist"
@@ -572,6 +587,11 @@ case "$command_name" in
         bash "$script_dir/web-runtime-host.sh" "$command_name"
     fi
     proof_host "$command_name"
+    ;;
+  reproducible)
+    # No browser runs, so no audio-output wrapper.
+    [[ $# -eq 0 ]] || { usage; exit 64; }
+    proof_host reproducible
     ;;
   serve)
     if [[ $# -ne 0 && ( $# -ne 2 || "$1" != "--port" ) ]]; then

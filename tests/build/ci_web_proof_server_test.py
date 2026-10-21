@@ -70,6 +70,7 @@ class WebVerificationModes(unittest.TestCase):
                    "verify_browser_fixture_generator run_audio_worklet_conformance "
                    "generate_project_fixture generate_sample_editor_fixture "
                    "clean_creator configure_creator build_creator package_creator test_creator test_creator_ui "
+                   "skip_playwright_requirement "
                    "clean_host configure_host build_host run_nonbrowser_tests "
                    "generate_browser_fixtures verify_proof_fixture_inventory python3 cmake").split()
         with tempfile.TemporaryDirectory() as directory:
@@ -84,6 +85,7 @@ diff() { printf '%s\\n' "diff $*" >> "$TRACE"; return "$DIFF_STATUS"; }
 run_browser_gate() { printf '%s\\n' "run_browser_gate $*" >> "$TRACE"; return "$BROWSER_STATUS"; }
 repo_root=/repo
 web_test_root=/repo/tests/platform/web
+creator_root=/repo/apps/creator-web
 dist_root=/dist
 fixture_source_root=/fixtures
 '''
@@ -161,6 +163,85 @@ fixture_source_root=/fixtures
                 self.assertEqual(result.returncode, 9, result.stderr)
                 self.assertNotIn("Quick: PASS", result.stdout)
                 self.assertNotIn("Proof: PASS", result.stdout)
+
+    def test_reproducible_builds_twice_and_runs_no_tests_or_journeys(self):
+        # The release `prepare` leg: the candidate batch proved the tests and
+        # journeys for this exact revision, so prepare only re-establishes
+        # that two clean builds are the same bytes (#2422 item 4).
+        for host, suffix in (("creator", "creator"), ("runtime", "host")):
+            with self.subTest(host=host):
+                result, calls = self.invoke(host, "reproducible")
+                self.assertEqual(result.returncode, 0, result.stderr)
+                names = [call.split()[0] for call in calls]
+                build_calls = [name for name in names
+                               if name in {"clean_" + suffix, "configure_" + suffix,
+                                           "build_" + suffix, "diff"}]
+                self.assertEqual(build_calls, ["clean_" + suffix, "configure_" + suffix,
+                                              "build_" + suffix] * 2 + ["diff"])
+                for skipped in ("run_browser_gate", "test_creator", "test_creator_ui",
+                                "run_nonbrowser_tests", "run_audio_worklet_conformance",
+                                "generate_project_fixture", "generate_sample_editor_fixture",
+                                "generate_browser_fixtures", "require_playwright"):
+                    self.assertNotIn(skipped, names, skipped)
+                # A reproducible but malformed distribution must not pass: the
+                # non-browser packaging checks run after the byte comparison.
+                checks = [call for call in calls if call.startswith("python3 ")]
+                expected = (["python3 /repo/apps/creator-web/test/package_test.py",
+                             "python3 /repo/apps/creator-web/test/deployment_smoke_test.py"]
+                            if host == "creator" else
+                            ["python3 /repo/apps/web-runtime-host/test/distribution_test.py"])
+                self.assertEqual(checks[-len(expected):], expected)
+                self.assertLess(calls.index("diff -qr /proof/first-dist /dist"),
+                                calls.index(expected[0]))
+                if host == "creator":
+                    # No browser runs, so the Playwright tree is waived before
+                    # the dependency check; the Creator's own tree stays required.
+                    self.assertLess(names.index("skip_playwright_requirement"),
+                                    names.index("require_dependencies"))
+                self.assertIn("reproducibility: PASS", result.stdout)
+                self.assertIn("Reproducible: PASS", result.stdout)
+                self.assertNotIn("Proof: PASS", result.stdout)
+                self.assertNotIn("Quick: PASS", result.stdout)
+
+    def test_creator_dependency_check_waives_only_the_playwright_tree(self):
+        text = (REPO_ROOT / "scripts/creator-web.sh").read_text()
+        body = shell_function(text, "require_dependencies")
+        waiver = shell_function(text, "skip_playwright_requirement")
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            creator = root / "apps/creator-web"
+            (creator / "node_modules/vite").mkdir(parents=True)
+            (creator / "package-lock.json").write_text("{}")
+            (creator / "node_modules/vite/package.json").write_text("{}")
+            program = ("set -eu\nnpm() { :; }\nnode() { :; }\n"
+                       f"creator_root={creator}\nweb_test_root={root}/tests/platform/web\n"
+                       "require_playwright_tree=1\n"
+                       "skip_playwright_requirement() {\n" + waiver + "\n}\n"
+                       "require_dependencies() {\n" + body + "\n}\n")
+            strict = subprocess.run(["bash", "-c", program + "require_dependencies\n"],
+                                    capture_output=True, text=True)
+            self.assertEqual(strict.returncode, 2)
+            self.assertIn("run npm ci in tests/platform/web", strict.stderr)
+            waived = subprocess.run(["bash", "-c", program + "skip_playwright_requirement\nrequire_dependencies\n"],
+                                    capture_output=True, text=True)
+            self.assertEqual(waived.returncode, 0, waived.stderr)
+            (creator / "node_modules/vite/package.json").unlink()
+            missing = subprocess.run(["bash", "-c", program + "skip_playwright_requirement\nrequire_dependencies\n"],
+                                     capture_output=True, text=True)
+            self.assertEqual(missing.returncode, 2)
+            self.assertIn("run npm ci in apps/creator-web", missing.stderr)
+
+    def test_reproducible_failure_is_not_a_pass_and_needs_no_audio_wrapper(self):
+        for host, filename in (("creator", "creator-web.sh"), ("runtime", "web-runtime-host.sh")):
+            with self.subTest(host=host):
+                result, _ = self.invoke(host, "reproducible", diff_status=1)
+                self.assertEqual(result.returncode, 2, result.stderr)
+                self.assertNotIn("Reproducible: PASS", result.stdout)
+                text = (REPO_ROOT / "scripts" / filename).read_text()
+                dispatch = re.search(r"^  reproducible\)\n(.*?)^    ;;$", text, re.DOTALL | re.MULTILINE)
+                self.assertIsNotNone(dispatch, "reproducible command is dispatched")
+                self.assertNotIn("local-audio-output.py", dispatch.group(1))
+                self.assertIn("reproducible", dispatch.group(1))
 
     def test_full_reproducibility_failure_stops_before_browser_journeys(self):
         for host in ("creator", "runtime"):
