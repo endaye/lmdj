@@ -150,6 +150,7 @@ export function ValueSlider({
       <input
         id={rangeId}
         type="range"
+        style={{"--value-position": `${100 * (shown - min) / (max - min)}%`} as React.CSSProperties}
         min={String(min)}
         max={String(max)}
         step={String(step)}

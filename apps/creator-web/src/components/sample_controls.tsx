@@ -5,6 +5,7 @@ import {ModalDialog} from "./modal_dialog";
 import {ParameterSlider, type SampleParameterSpec} from "./parameter_slider";
 import {SampleParameterEditor} from "./sample_parameter_editor";
 import "./sample_controls_layout.css";
+import "./sample_tone_layout.css";
 import type {
   PadPlayback,
   SampleLoopMode,
@@ -185,7 +186,7 @@ export function SampleControls({
   }, [closeNumeric, onNumericEditorReady, numericEdit]);
 
   return (
-    <section className="sample-controls" aria-label={`${padLabel} Sample controls`}>
+    <section className={`sample-controls${page === "tone" ? " sample-tone-controls" : ""}`} aria-label={`${padLabel} Sample controls`}>
       {audioSuspended ? (
         <p className="audio-preview-copy" role="status">Tap a Pad to preview</p>
       ) : null}

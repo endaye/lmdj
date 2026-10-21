@@ -45,6 +45,19 @@ test("a drag previews every move and commits once on release", () => {
   expect(onCommit).toHaveBeenLastCalledWith(43);
 });
 
+test("painted progress follows an uncommitted preview and restores on Escape", () => {
+  const {onCommit} = renderSlider({value: 0, min: -100, max: 100});
+  const slider = screen.getByRole("slider", {name: "Level"}) as HTMLInputElement;
+  expect(slider.style.getPropertyValue("--value-position")).toBe("50%");
+  fireEvent.pointerDown(slider, {pointerId: 12});
+  fireEvent.change(slider, {target: {value: "50"}});
+  expect(slider.style.getPropertyValue("--value-position")).toBe("75%");
+  fireEvent.keyDown(slider, {key: "Escape"});
+  expect(slider.style.getPropertyValue("--value-position")).toBe("50%");
+  fireEvent.pointerUp(slider, {pointerId: 12});
+  expect(onCommit).not.toHaveBeenCalled();
+});
+
 test("commits once when the pointer is released off the control", () => {
   const {onCommit} = renderSlider();
   const level = screen.getByRole("slider", {name: "Level"});
