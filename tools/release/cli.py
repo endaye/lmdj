@@ -16,6 +16,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from tools.release.commands import CommandError, CommandRunner  # noqa: E402
+from tools.release.doctor import doctor_passed, format_doctor, run_doctor  # noqa: E402
 from tools.release.audit import (  # noqa: E402
     AuditContext,
     audit,
@@ -29,7 +30,7 @@ from tools.release.hydrate import (  # noqa: E402
     hydrate_release_intent_targets,
 )
 from tools.release.github_api import GitHubApiError, GitHubClient  # noqa: E402
-from tools.release.model import CANONICAL_BRANCH, CANONICAL_REPOSITORY, ReleaseModelError, canonical_json, canonical_sha256  # noqa: E402
+from tools.release.model import CANONICAL_BRANCH, CANONICAL_REPOSITORY, ReleaseModelError, canonical_json, canonical_sha256, load_policy  # noqa: E402
 from tools.release.publication import PublicationError, collect_publication  # noqa: E402
 from tools.release.publication_evidence import collect_publication_patch  # noqa: E402
 from tools.release.changelog import ChangelogError  # noqa: E402
@@ -165,6 +166,7 @@ def parse_arguments(argv: list[str]) -> argparse.Namespace:
     )
     reported = commands.add_parser("status")
     reported.add_argument("request_id", nargs="?")
+    commands.add_parser("doctor", help="read-only host preflight; run/resume/prepare refuse while it fails")
     audited = commands.add_parser("audit")
     mode = audited.add_mutually_exclusive_group(required=True)
     mode.add_argument("--local", action="store_true")
@@ -250,6 +252,23 @@ def release_carriers(context: PrepareContext, policy, request) -> tuple:
     from tools.release.entry_composition import compose_carriers
 
     return compose_carriers(context, policy, request)
+
+
+# Commands that start or continue the long local path and must find the host
+# ready: the pinned emsdk, both signing keys, GitHub auth, a free journal, no
+# second driver, disk, load, fseventsd/Spotlight and the M1 runner (#2422
+# items 5 and 7). Read-only commands (status, audit, hydrate, ...) never wait
+# on the doctor.
+_DOCTORED_COMMANDS = ("run", "resume", "prepare")
+
+
+def release_doctor(root: Path):
+    """The read-only host preflight bound to this repository's policy and journal."""
+    policy = load_policy(root / "tools/release/policy.json")
+    return run_doctor(
+        root, product_fingerprint=policy.product_fingerprint,
+        checksum_fingerprint=policy.checksum_fingerprint,
+        journal_root=release_journal_root(root, GitRepository(root)))
 
 
 def release_recheck(context: PrepareContext, policy, request):
@@ -776,6 +795,18 @@ def main(argv: list[str] | None = None) -> int:
         if options.command == "status":
             print(format_request_status(root, GitRepository(root), options.request_id), end="")
             return 0
+        if options.command == "doctor":
+            checks = release_doctor(root)
+            print(format_doctor(checks), end="")
+            return 0 if doctor_passed(checks) else 2
+        if options.command in _DOCTORED_COMMANDS:
+            checks = release_doctor(root)
+            if not doctor_passed(checks):
+                print(format_doctor(checks), end="")
+                print(f"release doctor: refusing {options.command}; apply the remedies above, "
+                      "then rerun (scripts/release.sh doctor re-checks without starting anything)",
+                      file=sys.stderr)
+                return 2
         reprove = bool(getattr(options, "reprove", False))
         if options.command == "resume" and not reprove:
             # A request once resumed or started with --reprove keeps it.
