@@ -54,6 +54,7 @@ import {
 } from "../state/creator_state";
 import {padAddress, slotAddress} from "../state/view_model";
 import {candidateSources, type CandidateSource} from "../state/candidate_state";
+import "./sample_pad_layout.css";
 import type {CreatorPadAssignmentRuntimeSession, PadAssignmentRequest} from "../runtime/runtime_types";
 
 export interface SampleAssignmentControls {
@@ -87,7 +88,8 @@ type SamplePage = typeof SAMPLE_PAGES[number][0];
 
 interface SampleSurfaceProps {
   assignment?: SampleAssignmentControls;
-  padColourControls?: ReactNode;
+  renderPadColourControls?: ((actions: ReactNode) => ReactNode) | null;
+  padAction?: ReactNode;
   state: CreatorState;
   externalCaptureBusy?: boolean;
   session?: CreatorSampleRuntimeSession;
@@ -231,7 +233,8 @@ function quotaErrorCopy(
 
 export function SampleSurface({
   assignment,
-  padColourControls,
+  renderPadColourControls,
+  padAction,
   state,
   session,
   padDropIntent,
@@ -1283,8 +1286,52 @@ export function SampleSurface({
       onCommit={(playback) => {encoderTurn.current?.cancel(); void performUpdate(playback);}}
       onCancel={() => {encoderTurn.current?.cancel(); cancelPreview();}}
       onReset={() => { void reset(); }}
+      padAction={padAction}
     />
   ) : null;
+
+  const fileAction = selectedSlot === null ? null : (
+    <button type="button"
+      className={`touch-control${selectedAssigned ? "" : " is-primary"}`}
+      aria-label={selectedAssigned ? undefined : `Add Sample to ${selectedAddress}`}
+      disabled={session === undefined || projectUnavailable ||
+        sample.pendingAction !== null || assignment?.busy === true}
+      onClick={() => chooseFile(selectedSlot)}>
+      {selectedAssigned ? "Replace Sample" : "Add Sample"}
+    </button>
+  );
+  const recordAction = selectedSlot === null ? null : (
+    <button type="button" className="touch-control"
+      disabled={session === undefined || projectUnavailable ||
+        sample.pendingAction !== null || captureTarget !== null || externalCaptureBusy}
+      onClick={() => {
+        replaceReturnFocus.current = document.activeElement instanceof HTMLElement
+          ? document.activeElement : null;
+        // Assigned Pad recording keeps the original replacement confirmation
+        // before microphone permission. Empty Pad uses the same capture owner.
+        if (selectedAssigned) setPendingCaptureSlot(selectedSlot);
+        else void openCapture(selectedSlot);
+      }}>
+      Record Sample
+    </button>
+  );
+  const padActions = <>
+    <div className="sample-pad-file-actions">{fileAction}{recordAction}</div>
+    {sampleControls ?? (padAction == null ? null :
+      <div className="sample-pad-edit-actions">{padAction}</div>)}
+    {selectedSlot === null ? null : <div className="selected-pad-actions">
+      <button type="button" className="touch-control is-danger"
+        aria-label={`Delete ${selectedAddress}`}
+        disabled={deleteDisabledReason !== null}
+        aria-describedby={deleteDisabledReason === null ? undefined : "pad-delete-reason"}
+        onClick={() => { void deleteSelectedPad(); }}>Delete Pad</button>
+      {deleteDisabledReason === null ? null : <small id="pad-delete-reason">{deleteDisabledReason}</small>}
+    </div>}
+  </>;
+  // Only an actual matching empty inspection can claim that no sound exists.
+  // An assigned sound whose metadata/prepare is unavailable keeps its error path.
+  const confirmedEmpty = selectedSlot !== null && inspect?.slot === selectedSlot &&
+    inspect.assetId === null && inspect.projectRevision === state.project.current?.revision;
 
   return (
     <main className="sample-surface">
@@ -1369,57 +1416,15 @@ export function SampleSurface({
 
       {page === "pad" ? (
         <section className="sample-pad-management" aria-label={`${selectedAddress} management`}>
+          {renderPadColourControls?.(padActions) ?? padActions}
           <details className="sample-details">
-            <summary>Sample details</summary>
+            <summary className="touch-control">Sample details</summary>
             <dl>
               <div><dt>Asset ID</dt><dd>{inspect?.assetId ?? "No Sample assigned"}</dd></div>
               <div><dt>Source</dt><dd>{metadataCopy(state)}</dd></div>
               <div><dt>Revision</dt><dd>{inspect?.projectRevision ?? "—"}</dd></div>
             </dl>
           </details>
-          {selectedSlot !== null ? (
-            <button
-              type="button"
-              disabled={session === undefined || projectUnavailable ||
-                sample.pendingAction !== null || assignment?.busy === true}
-              onClick={() => chooseFile(selectedSlot)}
-            >
-              {selectedAssigned ? "Replace Sample" : `Add Sample to ${selectedAddress}`}
-            </button>
-          ) : null}
-          {selectedSlot !== null ? (
-            <div className="selected-pad-actions">
-              <button type="button" aria-label={`Delete ${selectedAddress}`}
-                disabled={deleteDisabledReason !== null}
-                aria-describedby={deleteDisabledReason === null ? undefined : "pad-delete-reason"}
-                onClick={() => { void deleteSelectedPad(); }}>
-                Delete
-              </button>
-              {deleteDisabledReason === null ? null :
-                <small id="pad-delete-reason">{deleteDisabledReason}</small>}
-            </div>
-          ) : null}
-          {selectedSlot !== null ? (
-            <button
-              type="button"
-              disabled={session === undefined || projectUnavailable ||
-                sample.pendingAction !== null || captureTarget !== null || externalCaptureBusy}
-              onClick={() => {
-                replaceReturnFocus.current = document.activeElement instanceof HTMLElement
-                  ? document.activeElement
-                  : null;
-                // Recording onto an assigned Pad is a replacement, so it takes
-                // the existing confirmation before the microphone is ever
-                // requested (S8-D12, S8B-D2).
-                if (selectedAssigned) setPendingCaptureSlot(selectedSlot);
-                else void openCapture(selectedSlot);
-              }}
-            >
-              Record Sample
-            </button>
-          ) : null}
-          {sampleControls}
-          {padColourControls}
         </section>
       ) : null}
 
@@ -1446,17 +1451,16 @@ export function SampleSurface({
         </>
       ) : page !== "pad" ? (
         <section className="empty-sample" aria-label="Selected Pad Sample">
-          <p>Select an assigned Pad to edit its waveform and playback.</p>
-          {selectedSlot === null ? null : (
-            <button
-              type="button"
-              disabled={session === undefined || projectUnavailable ||
-                sample.pendingAction !== null || assignment?.busy === true}
-              onClick={() => chooseFile(selectedSlot)}
-            >
-              Add Sample to {selectedAddress}
-            </button>
-          )}
+          {confirmedEmpty ? <div className="empty-sample-card">
+            <h2>Make room for a new sound.</h2>
+            <p>Hold {selectedAddress} to record. Or choose an audio file below.</p>
+          </div> : <p>Select an assigned Pad to edit its waveform and playback.</p>}
+          {fileAction}
+          {confirmedEmpty ? <>
+            {recordAction}
+            <p className="empty-sample-permission">First microphone use asks for permission.
+              After allowing it, hold the Pad again.</p>
+          </> : null}
         </section>
       ) : null}
 

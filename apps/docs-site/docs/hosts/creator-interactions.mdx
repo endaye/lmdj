@@ -398,15 +398,26 @@ Mute 与 Reverse。每个开关显示真实的 On／Off；辅助技术继续通�
 | 中段：双击或双指触后上下拖动；聚焦后 Shift+↑↓ | 调 Q。普通拖动仍改频率和增益。手势结束保存一次，Escape 取消。 |
 | 焦点在 EQ 点上时按 Delete／Backspace | 关闭这一段 EQ。不会删除 Pad。 |
 
-空 Pad 在 Tone / EQ 页显示 Add Sample。
+确认当前 Pad 没有声音时，Trim、Playback 和 Tone / EQ 显示命名该目标的空槽卡片，
+下方为主要 Add Sample 和次要 Record Sample。按住空 Pad 的录入与 Record Sample
+面板仍是原有两条流程；首次麦克风权限只在实际开始录入时请求，显示页面不请求权限。
+已有声音但尚未取得可编辑 metadata 的状态保留原错误／准备提示，不标成空 Pad。
 
 ### 4.5 Pad 子页 \{#pad-page\}
+
+操作按颜色、Replace／Record、Slice／Reset、Delete Pad、恢复类别默认、Sample details
+的顺序排列；Tab／DOM 顺序跟随可见顺序。Slice 从这个 Pad 子页进入，沿用原来的
+Project／能力／Pattern 停止门禁，不要求当前 Pad 已分配声音，也不把当前 Pad 当作分析源。
+颜色仍取同一组稳定索引，五个色块填满可见面，当前值加白色描边；可访问名称保留类别。
+普通动作保留32单位可见面与至少44px有效命中区，长提示在同一触摸工作区内向下滚动。
+矮横屏的短触摸区内，四个 Sample 页签随内容滚动，保留全部入口，避免置顶行遮住
+下方动作；普通桌面和竖屏仍沿用原来的置顶页签。
 
 | 状态 | 操作 | 结果 |
 | --- | --- | --- |
 | 空 Pad（任一子页） | Add Sample | 打开本地音频选择，选好后进入[长源裁剪](#long-source)。Commit 前不写入 Pad。 |
 | 已分配 | Replace Sample | 选好文件后先确认替换（Confirm replace／Cancel replace／Escape）。确认后仍要经过导入裁剪。 |
-| 已分配或有待导入数据 | Delete | 停止这个 Pad，清除待导入数据和试听，删除声音。Pad 变空、颜色回中性，仍保持选中。Pattern 中对这个 Pad 的引用不变。 |
+| 已分配或有待导入数据 | Delete Pad | 停止这个 Pad，清除待导入数据和试听，删除声音。Pad 变空、颜色回中性，仍保持选中。Pattern 中对这个 Pad 的引用不变。 |
 | 已分配 | Reset Pad to Defaults → Confirm reset | 保留声音和颜色，恢复完整范围和播放默认值。Cancel reset 或 Escape 不改内容。 |
 | 已分配且可以改色 | 五个 PAD COLOUR 色块 | 设置这个 Pad 的颜色。Pad 边框变色，Sequence 的上屏轨道、网格标签和音符随后也用这个颜色。不改声音。选同一颜色不产生编辑。 |
 | 有自定义颜色 | Restore category default | 回到类别默认颜色或中性色。可以 Undo。 |
