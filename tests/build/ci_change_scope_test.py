@@ -452,6 +452,15 @@ class ChangeScopeTest(unittest.TestCase):
             if policy_match(rule["match"], path) for lane in rule["lanes"]
         }
 
+    def test_pattern_tempo_native_test_keeps_native_and_web_owners(self):
+        # Comparing only sibling routes could preserve a shared missing lane.
+        # Native Host compilation/coverage and Web consumers fix this oracle.
+        self.assertEqual(
+            self.lanes_for_path("packages/web-runtime-platform/test/pattern_tempo_preview_test.cpp"),
+            {"portal", "core_ubuntu", "core_asan", "core_coverage", "core_macos",
+             "web_toolchain", "web_runtime_host", "creator"},
+        )
+
     def test_every_tracked_path_has_explicit_ownership_or_full_rule(self):
         inventory = subprocess.run(
             ["git", "ls-files", "-z"], cwd=ROOT, check=True, capture_output=True

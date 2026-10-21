@@ -186,6 +186,10 @@ bool retained_owner_envelope(const Json& value) {
   // The Runtime still validates every exact identity and retained owner.
   // Admission, generation negotiation, replacement and ordinary Stop stay
   // sealed. This whitelist grants no new Native effect or caller receipt.
+  if (operation == "pattern.tempo.preview.status" || operation == "pattern.tempo.preview.cancel")
+    return exact_keys(payload, {"ticket"});
+  if (operation == "pattern.tempo.preview.commit")
+    return exact_keys(payload, {"ticket", "command_id"});
   if (operation == "pattern.transport.input.inspect")
     return exact_keys(payload, {"command_id", "runtime_generation", "frame_epoch", "ticket", "consume"});
   if (operation == "pattern.transport.count-in.inspect")
@@ -265,6 +269,8 @@ std::chrono::milliseconds operation_deadline(std::string_view operation) {
       operation == "host.status" || operation == "audio.activate" ||
       operation == "performance.live.control" ||
       operation == "performance.live.status" ||
+      operation == "pattern.tempo.preview.set" || operation == "pattern.tempo.preview.cancel" ||
+      operation == "pattern.tempo.preview.status" ||
       operation == "audio.suspend" || operation == "trigger" ||
       operation == "sample.preview.set" ||
       operation == "sample.preview.clear" || operation == "sample.stop") {
@@ -274,8 +280,13 @@ std::chrono::milliseconds operation_deadline(std::string_view operation) {
 }
 
 bool supported_operation(std::string_view operation) {
-  static constexpr std::array<std::string_view, 112> operations{
+  static constexpr std::array<std::string_view, 117> operations{
       "host.status",
+      "pattern.tempo.preview.begin",
+      "pattern.tempo.preview.set",
+      "pattern.tempo.preview.cancel",
+      "pattern.tempo.preview.commit",
+      "pattern.tempo.preview.status",
       "project.create",
       "project.duplicate",
       "project.open",

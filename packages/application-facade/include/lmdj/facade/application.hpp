@@ -587,6 +587,10 @@ class Application {
   // instead settle while render runs, after which destruction needs no Engine
   // lifecycle call. Core retains the
   // original prepared source; Hosts do not recook a source for each detent.
+  // Read-only preflight before preparing/adopting a revised Host source.
+  // Uses the same recording/import/transport policy as binding and set.
+  foundation::Result<void> check_pattern_tempo_preview_admission(
+      const std::filesystem::path& project_path);
   foundation::Result<PatternTempoPreviewStatus> bind_pattern_tempo_source(
       const PatternTempoSourceRequest&, const audio::PreparedPatternView&,
       audio::RealtimeEngine&);
@@ -597,6 +601,10 @@ class Application {
   foundation::Result<PatternTempoPreviewStatus> commit_pattern_tempo_preview(
       const PatternTempoPreviewCommit&);
   foundation::Result<PatternTempoPreviewStatus> service_pattern_tempo_preview(
+      std::uint64_t source_id);
+  // Retain the exact settled/adopted source before graceful release. Refuses
+  // pending/unknown or lost ownership; never recooks or changes publication.
+  foundation::Result<audio::PreparedPatternView> retain_pattern_tempo_source(
       std::uint64_t source_id);
   // Graceful release retains UNKNOWN and pending cancellation/adoption. Call
   // again after actual apply; only terminal status retires the binding. During

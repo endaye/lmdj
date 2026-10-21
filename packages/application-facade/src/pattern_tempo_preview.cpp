@@ -396,4 +396,10 @@ bool PatternTempoPreviewSession::releasable() const {
   return terminal(phase_) && !(command_ && !committed_revision_);
 }
 
+Result<audio::PreparedPatternView> PatternTempoPreviewSession::retain_source() const {
+  if (!releasable() || owner_lost() || !gateway_.observe(authority_))
+    return Result<audio::PreparedPatternView>::failure(refused("tempo_source_unsettled"));
+  return source_.with_tempo(source_.bpm());
+}
+
 }  // namespace lmdj::facade::detail
