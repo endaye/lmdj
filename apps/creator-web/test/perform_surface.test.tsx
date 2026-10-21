@@ -8,9 +8,10 @@ import type {RuntimeDiagnostics, RuntimeHostState} from "../src/runtime/runtime_
 import {PerformanceRecordingStore} from "../src/record/performance_recording_store";
 import {openWavStreamWriter} from "../src/record/wav_stream_writer";
 
-import type {ContextualEncoders} from "../src/components/physical_controls";
+import type {ContextualEncoders, ContextualNavigation} from "../src/components/physical_controls";
 import type {PatternTransportStatus, PerformanceMasterCapture, PerformanceEventResult} from
   "@lmdj/web-runtime-platform/runtime_types";
+import {FxSliderBank} from "../src/components/fx_slider_bank";
 import {PerformSurface} from "../src/components/perform_surface";
 import {PerformOverview} from "../src/components/perform_overview";
 import type {CreatorPerformanceRuntimeSession} from "../src/runtime/runtime_types";
@@ -424,7 +425,7 @@ function idlePatternTransport(): PatternTransportState {
   };
 }
 
-test("renders Pattern, fixed FX chain, one global HOLD, then the existing Pad surface", () => {
+test("renders the first-screen FX chain and one HOLD before the four-slot launch strip", () => {
   renderSurface();
   const surface = screen.getByRole("main", {name: "Perform"});
   const pattern = within(surface).getByRole("region", {name: "Pattern Launch"});
@@ -433,7 +434,7 @@ test("renders Pattern, fixed FX chain, one global HOLD, then the existing Pad su
   // The console's Pad matrix is the one Pad surface; Perform mounts none of
   // its own, so a second identical grid never competes for the same names.
   expect(within(surface).queryByRole("region", {name: "Perform instrument"})).toBeNull();
-  expect(pattern.compareDocumentPosition(fx) & Node.DOCUMENT_POSITION_FOLLOWING).not.toBe(0);
+  expect(fx.compareDocumentPosition(pattern) & Node.DOCUMENT_POSITION_FOLLOWING).not.toBe(0);
   expect(fx.compareDocumentPosition(hold) & Node.DOCUMENT_POSITION_FOLLOWING).not.toBe(0);
   expect(within(surface).getAllByRole("button", {name: "HOLD"})).toHaveLength(1);
   expect(within(fx).getAllByRole("slider").map((slider) => slider.getAttribute("aria-label")))
@@ -605,17 +606,17 @@ test("slot states follow the transport's queued switch and playing Pattern", () 
   expect(group.textContent).toContain("Playing");
 });
 
-test("keeps the other five confirmed FX behind FX / MORE", async () => {
+test("keeps the other five confirmed FX behind MORE", async () => {
   renderSurface();
   const fx = screen.getByRole("region", {name: "Performance FX"});
-  const more = within(fx).getByRole("button", {name: "FX / MORE"});
+  const more = within(fx).getByRole("button", {name: "MORE"});
   expect(more.getAttribute("aria-expanded")).toBe("false");
   expect(within(fx).queryByRole("slider", {name: "Stutter"})).toBeNull();
 
   await userEvent.click(more);
   expect(more.getAttribute("aria-expanded")).toBe("true");
   expect(within(fx).getAllByRole("slider").map((slider) => slider.getAttribute("aria-label")))
-    .toEqual(["Filter", "Delay", "Reverb", "Stutter", "Gate", "Reverse", "Crush", "Cutter"]);
+    .toEqual(["Stutter", "Gate", "Reverse", "Crush", "Cutter"]);
 
   await userEvent.click(more);
   expect(within(fx).queryByRole("slider", {name: "Cutter"})).toBeNull();
@@ -944,10 +945,10 @@ test("forwards every FX raw value with exact Core keys and no Host clock or sour
   expect(fixture.runtime.calls.fx).not.toHaveBeenCalled();
 });
 
-test("releases an open FX gesture when FX / MORE collapses it away", async () => {
+test("releases an open FX gesture when MORE collapses it away", async () => {
   const {fixture} = renderSurface();
   await userEvent.click(screen.getByRole("button", {name: "Record Performance"}));
-  const more = screen.getByRole("button", {name: "FX / MORE"});
+  const more = screen.getByRole("button", {name: "MORE"});
   await userEvent.click(more);
   const stutter = screen.getByRole("slider", {name: "Stutter"});
   fireEvent.pointerDown(stutter, {pointerId: 5});
@@ -1780,8 +1781,8 @@ test("subpages retain the recording and HOLD until explicit Stop", async () => {
 
 test("page navigation waits for an FX gesture and keeps More FX expansion", async () => {
   const {fixture} = renderSurface();
-  await userEvent.click(screen.getByRole("button", {name: "FX / MORE"}));
-  const filter = screen.getByRole("slider", {name: "Filter"});
+  await userEvent.click(screen.getByRole("button", {name: "MORE"}));
+  const filter = screen.getByRole("slider", {name: "Stutter"});
   fireEvent.pointerDown(filter, {pointerId: 41});
   fireEvent.change(filter, {target: {value: "650"}});
   const pages = within(screen.getByRole("navigation", {name: "Perform pages"}));
@@ -1795,8 +1796,8 @@ test("page navigation waits for an FX gesture and keeps More FX expansion", asyn
   expect(pages.getAllByRole("button").every(button => !(button as HTMLButtonElement).disabled)).toBe(true);
   selectPerformPage("Slots");
   selectPerformPage("Live");
-  expect(screen.getByRole("button", {name: "FX / MORE"}).getAttribute("aria-expanded")).toBe("true");
-  expect(screen.getByRole("slider", {name: "Reverb"})).toBeTruthy();
+  expect(screen.getByRole("button", {name: "MORE"}).getAttribute("aria-expanded")).toBe("true");
+  expect(screen.getByRole("slider", {name: "Stutter"})).toBeTruthy();
   // Component events fix one release; packaged native pointer capture covers
   // drag-off delivery, which jsdom cannot establish.
 });
@@ -1879,11 +1880,11 @@ test("Perform encoder groups retain their effect values across group switches an
   expect(Object.values(current!.bindings).map((binding) => binding.label)).toEqual(["Filter", "Delay", "Reverb"]);
   act(() => current!.bindings[1]!.onTurn(1, true));
   expect(fixture.controller.getState().fx.filter).toBe(501);
-  await userEvent.click(screen.getByRole("button", {name: "FX / MORE"}));
+  await userEvent.click(screen.getByRole("button", {name: "MORE"}));
   expect(Object.values(current!.bindings).map((binding) => binding.label)).toEqual(["Crush", "Stutter", "Gate"]);
   act(() => current!.bindings[1]!.onTurn(2));
   expect(fixture.controller.getState().fx.crush).toBe(520);
-  await userEvent.click(screen.getByRole("button", {name: "FX / MORE"}));
+  await userEvent.click(screen.getByRole("button", {name: "MORE"}));
   expect(fixture.controller.getState().fx).toMatchObject({filter: 501, crush: 520});
   for (const page of ["Slots", "Takes", "Replay", "Live"] as const) {
     selectPerformPage(page);
@@ -3185,7 +3186,7 @@ test("FILTER group maps Type/Cutoff/Resonance and entering it calls no producer"
   expect(fixture.runtime.calls.liveStatus).not.toHaveBeenCalled();
   expect(fixture.controller.getState().filter.engaged).toBe(false);
   // The MORE group is preserved.
-  await userEvent.click(screen.getByRole("button", {name: "FX / MORE"}));
+  await userEvent.click(screen.getByRole("button", {name: "MORE"}));
   expect(Object.values(current!.bindings).map((binding) => binding.label))
     .toEqual(["Crush", "Stutter", "Gate"]);
 });
@@ -3319,8 +3320,8 @@ test("rotary rest and group switches keep the Filter gesture; page exit releases
   const cutoffHz = fixture.controller.getState().filter.cutoffHz;
   // Group switches and page navigation never release the rotary gesture.
   await userEvent.click(screen.getByRole("button", {name: "FILTER"}));
-  await userEvent.click(screen.getByRole("button", {name: "FX / MORE"}));
-  await userEvent.click(screen.getByRole("button", {name: "FX / MORE"}));
+  await userEvent.click(screen.getByRole("button", {name: "MORE"}));
+  await userEvent.click(screen.getByRole("button", {name: "MORE"}));
   await userEvent.click(screen.getByRole("button", {name: "FILTER"}));
   await userEvent.click(screen.getByRole("button", {name: "FILTER"}));
   selectPerformPage("Slots");
@@ -3595,12 +3596,16 @@ test("an unavailable typed producer keeps the legacy Filter and says so", async 
   expect(screen.queryByText("20.0 kHz")).toBeNull();
   await userEvent.click(screen.getByRole("button", {name: "FILTER"}));
   expect(screen.getByRole("status", {name: "Filter status"}).textContent)
-    .toContain("unavailable");
+    .toContain("Unavailable");
+  expect(screen.getByRole("status", {name: "Filter status"}).getAttribute("data-provenance")).toBe("unavailable");
   expect(screen.getByRole("slider", {name: "Cutoff"})
     .hasAttribute("disabled")).toBe(true);
   expect(screen.getByRole("button", {name: "HP"}).hasAttribute("disabled"))
     .toBe(true);
-  // Legacy gestures still take the legacy route.
+  expect(screen.queryByText("20.0 kHz")).toBeNull();
+  expect(screen.getByRole("button", {name: "LP"}).getAttribute("aria-pressed")).toBe("false");
+  // Legacy gestures still take the legacy route after returning to PRIMARY.
+  await userEvent.click(screen.getByRole("button", {name: "PRIMARY"}));
   const filter = screen.getByRole("slider", {name: "Filter"});
   fireEvent.pointerDown(filter, {pointerId: 3});
   fireEvent.change(filter, {target: {value: "630"}});
@@ -4004,6 +4009,7 @@ test("current Pad controls expose independent multi-Solo and Mute priority acros
   enableTypedCore(fixture.runtime.calls);
   const view = render(<PerformSurface controller={fixture.controller} project={project}
     bank={0} currentPad={0} />);
+  fireEvent.click(screen.getByRole("button", {name: "Live Mute / Solo"}));
   await waitFor(() => expect(screen.getByRole("button", {name: "Solo A01"})).toHaveProperty("disabled", false));
   fireEvent.click(screen.getByRole("button", {name: "Solo A01"}));
   await waitFor(() => expect(screen.getByRole("button", {name: "Solo A01"}).getAttribute("aria-pressed")).toBe("true"));
@@ -4044,6 +4050,7 @@ test("Pad gate admission stays pending until the applied mask is read back", asy
 test("unavailable Pad gates preserve unknown state and send no fabricated neutral command", async () => {
   const fixture = controllerFixture();
   render(<PerformSurface controller={fixture.controller} project={project} bank={0} currentPad={0} />);
+  fireEvent.click(screen.getByRole("button", {name: "Live Mute / Solo"}));
   expect(screen.getByRole("button", {name: "Mute A01"})).toHaveProperty("disabled", true);
   expect(screen.getByRole("status", {name: "Live Pad status"}).textContent).toContain("Unavailable");
   fixture.controller.togglePadGate("mute", 0);
@@ -4395,4 +4402,144 @@ test("P2 a post-publication INVALID_ARGUMENT remains ambiguous and blocks exit",
   expect(calls.liveControl).not.toHaveBeenCalled();
   expect(fixture.controller.getState().error).not.toBeNull();
   expect(fixture.controller.getState().replay).toBeNull();
+});
+
+
+test("exclusive groups share one MASTER and HOLD without producer calls", async () => {
+  const fixture = controllerFixture();
+  const onChange = vi.fn();
+  render(<PerformSurface controller={fixture.controller} project={project} bank={0}
+    monitorVolume={{value: 73, disabled: false, onChange}} />);
+  for (const [group, sliders] of [
+    ["FILTER", ["Cutoff", "Resonance", "MASTER"]],
+    ["MORE", ["Stutter", "Gate", "Reverse", "Crush", "Cutter", "MASTER"]],
+    ["PRIMARY", ["Filter", "Delay", "Reverb", "MASTER"]],
+  ] as const) {
+    fireEvent.click(screen.getByRole("button", {name: group}));
+    expect(screen.getAllByRole("slider").map(node => node.getAttribute("aria-label"))).toEqual(sliders);
+    expect(screen.getAllByRole("button", {name: "HOLD"})).toHaveLength(1);
+    expect(screen.getByRole("slider", {name: "MASTER"})).toHaveProperty("value", "73");
+  }
+  expect(fixture.runtime.calls.fx).not.toHaveBeenCalled();
+  expect(fixture.runtime.calls.liveControl).not.toHaveBeenCalled();
+  expect(onChange).not.toHaveBeenCalled();
+});
+
+test("switching groups closes removed Primary touch while retaining rotary ownership", async () => {
+  const {fixture} = renderSurface();
+  act(() => fixture.controller.turnFx("reverb", 2));
+  const delay = screen.getByRole("slider", {name: "Delay"});
+  fireEvent.pointerDown(delay, {pointerId: 91});
+  fireEvent.change(delay, {target: {value: "700"}});
+  fireEvent.click(screen.getByRole("button", {name: "FILTER"}));
+  await waitFor(() => expect(fixture.runtime.calls.fx.mock.calls
+    .filter(([event]) => event.fx === "delay").map(([event]) => event.kind))
+    .toEqual(["fx_engage", "fx_move", "fx_release"]));
+  expect(fixture.runtime.calls.fx.mock.calls.filter(([event]) => event.fx === "reverb")
+    .map(([event]) => event.kind)).toEqual(["fx_engage"]);
+  expect(fixture.controller.getState().fx.reverb).toBe(520);
+  expect(screen.getByRole("button", {name: "Live"})).toHaveProperty("disabled", false);
+});
+
+test("replacing main Cutoff with FILTER closes the old touch before admitting the new input", async () => {
+  const fixture = controllerFixture();
+  enableTypedCore(fixture.runtime.calls);
+  renderSurface(fixture);
+  await waitFor(() => expect(fixture.controller.getState().filter.provenance).toBe("core"));
+  const old = screen.getByRole("slider", {name: "Filter"});
+  fireEvent.pointerDown(old, {pointerId: 92});
+  fireEvent.change(old, {target: {value: "700"}});
+  await waitFor(() => expect(fixture.runtime.calls.liveControl).toHaveBeenCalledTimes(2));
+  fireEvent.click(screen.getByRole("button", {name: "FILTER"}));
+  await waitFor(() => expect(fixture.runtime.calls.liveControl.mock.calls.at(-1)?.[0].intent.kind)
+    .toBe("filter_release"));
+  const replacement = screen.getByRole("slider", {name: "Cutoff"});
+  expect(replacement).not.toBe(old);
+  fireEvent.pointerDown(replacement, {pointerId: 93});
+  await waitFor(() => expect(fixture.runtime.calls.liveControl).toHaveBeenCalledTimes(4));
+  fireEvent.lostPointerCapture(old, {pointerId: 92});
+  expect(fixture.runtime.calls.liveControl).toHaveBeenCalledTimes(4);
+  fireEvent.pointerUp(replacement, {pointerId: 93});
+  await waitFor(() => expect(fixture.runtime.calls.liveControl.mock.calls
+    .map(([request]) => request.intent.kind))
+    .toEqual(["filter_parameter", "filter_parameter", "filter_release", "filter_parameter", "filter_release"]));
+});
+
+test("physical group navigation is bounded UI state and unregisters on leave", async () => {
+  const fixture = controllerFixture();
+  const bind = vi.fn();
+  let current: ContextualNavigation | null = null;
+  const ready = (value: ContextualNavigation | null) => {current = value; bind(value);};
+  const view = render(<PerformSurface controller={fixture.controller} project={project}
+    bank={0} onNavigationReady={ready} />);
+  expect(current!.directionStep!.backAvailable).toBe(false);
+  act(() => current!.directionStep!.onForward());
+  expect(screen.getByRole("button", {name: "FILTER"}).getAttribute("aria-pressed")).toBe("true");
+  act(() => current!.directionStep!.onForward());
+  expect(screen.getByRole("button", {name: "MORE"}).getAttribute("aria-pressed")).toBe("true");
+  expect(current!.directionStep!.forwardAvailable).toBe(false);
+  act(() => current!.directionStep!.onForward());
+  expect(current!.directionStep!.forwardAvailable).toBe(false);
+  act(() => current!.directionStep!.onBack());
+  act(() => current!.directionStep!.onBack());
+  expect(current!.directionStep!.backAvailable).toBe(false);
+  expect(fixture.runtime.calls.fx).not.toHaveBeenCalled();
+  expect(fixture.runtime.calls.liveControl).not.toHaveBeenCalled();
+  view.unmount();
+  expect(bind).toHaveBeenLastCalledWith(null);
+});
+
+
+test("touch retirement calls its admitting owner when the controller is replaced", () => {
+  const firstRelease = vi.fn();
+  const nextRelease = vi.fn();
+  const props: Parameters<typeof FxSliderBank>[0] = {
+    order: ["filter", "delay", "reverb"], values: {filter: 500, delay: 500, reverb: 500,
+      stutter: 500, gate: 500, reverse: 500, crush: 500, cutter: 500},
+    filter: {type: "lp", cutoffHz: 20000, resonanceMilli: 0,
+      engaged: false, frozen: false, provenance: "unavailable"},
+    group: "main", legacyFilterGesture: false, onGroupChange: vi.fn(),
+    onEngage: () => "old-token", onMove: vi.fn(), onRelease: firstRelease,
+    onFilterType: vi.fn(), onFilterTouchEngage: () => "filter-token",
+    onFilterTouchMove: vi.fn(), onFilterTouchRelease: vi.fn(), gestureOwner: {},
+  };
+  const pointer = (node: HTMLElement, type: string, pointerId: number) => {
+    const event = new Event(type, {bubbles: true});
+    Object.defineProperty(event, "pointerId", {value: pointerId});
+    fireEvent(node, event);
+  };
+  const view = render(<FxSliderBank {...props} />);
+  pointer(screen.getByRole("slider", {name: "Delay"}), "pointerdown", 96);
+  view.rerender(<FxSliderBank {...props} gestureOwner={{}} onRelease={nextRelease}
+    onEngage={() => "new-token"} />);
+  expect(firstRelease).toHaveBeenCalledExactlyOnceWith("old-token", "delay");
+  expect(nextRelease).not.toHaveBeenCalled();
+  const replacement = screen.getByRole("slider", {name: "Delay"});
+  pointer(replacement, "pointerdown", 97);
+  pointer(replacement, "lostpointercapture", 96);
+  expect(nextRelease).not.toHaveBeenCalled();
+  pointer(replacement, "pointerup", 97);
+  expect(nextRelease).toHaveBeenCalledExactlyOnceWith("new-token", "delay");
+});
+
+test("all-64 mask summary distinguishes a pending mask from an applied empty list", async () => {
+  const fixture = controllerFixture();
+  const {calls} = fixture.runtime;
+  enableTypedCore(calls);
+  render(<PerformSurface controller={fixture.controller} project={project} bank={3} currentPad={63} />);
+  fireEvent.click(screen.getByRole("button", {name: "Live Mute / Solo"}));
+  await waitFor(() => expect(screen.getByRole("button", {name: "Solo D16"})).toHaveProperty("disabled", false));
+  fireEvent.click(screen.getByRole("button", {name: "Solo D16"}));
+  const summary = () => document.querySelector(".perform-pad-gate-summary")!;
+  await waitFor(() => expect(summary().textContent).toContain("D16"));
+  const read = calls.liveStatus.getMockImplementation()!;
+  const applied = deferred<unknown>();
+  calls.liveStatus.mockImplementationOnce(() => applied.promise);
+  fireEvent.click(screen.getByRole("button", {name: "Mute D16"}));
+  await waitFor(() => expect(summary().getAttribute("data-provenance")).toBe("pending"));
+  expect([...summary().querySelectorAll("dd")].map(node => node.textContent)).toEqual(["Pending", "Pending"]);
+  applied.resolve(await read());
+  await waitFor(() => expect([...summary().querySelectorAll("dd")].map(node => node.textContent))
+    .toEqual(["D16", "D16"]));
+  expect(summary().getAttribute("data-provenance")).toBe("core");
 });

@@ -149,10 +149,14 @@ const stagePortrait = window.matchMedia(
   "(max-width: 959px) and (orientation: portrait)",
 );
 let fittedWorkspace: HTMLElement | null = null;
+let fittedNarrowPerform = false;
+const narrowPerform = (workspace: HTMLElement) => window.innerWidth <= 480 &&
+  stagePortrait.matches && workspace.querySelector(".perform-surface[data-page]") !== null;
 function fitStage(): void {
   const workspace = document.querySelector<HTMLElement>(".hardware-workspace");
   if (workspace === null) return;
   fittedWorkspace = workspace;
+  fittedNarrowPerform = narrowPerform(workspace);
   const layout = consoleLayoutForViewport({width: window.innerWidth, height: window.innerHeight});
   document.documentElement.dataset.creatorLayout = layout;
   workspace.style.width = "";
@@ -172,6 +176,7 @@ function fitStage(): void {
   if (fit === null) return;
   workspace.style.width = `${naturalWidth}px`;
   workspace.style.height = `${naturalHeight}px`;
+  workspace.style.setProperty("--creator-stage-scale", String(fit.scale));
   workspace.style.transformOrigin = "0 0";
   workspace.style.transform = `translate(${fit.dx}px, ${fit.dy}px)${
     fit.rotate ? " rotate(-90deg)" : ""} scale(${fit.scale})`;
@@ -183,13 +188,13 @@ requestAnimationFrame(fitStage);
 // The App commits .hardware-workspace only after the Runtime session attempt
 // resolves, later than any of the events above, and a later remount produces
 // a fresh element without these inline styles. Keep watching and refit
-// whenever the mounted element changes; the identity check keeps steady-state
-// mutations free of refits, and the childList-only filter keeps our own
+// whenever the mounted element or narrow Perform composition changes. Other
+// steady-state mutations do not refit; the childList-only filter keeps our own
 // inline-style writes from retriggering.
 const stageMount = new MutationObserver(() => {
   const workspace = document.querySelector<HTMLElement>(".hardware-workspace");
-  if (workspace === null || workspace === fittedWorkspace) return;
-  fittedWorkspace = workspace;
+  if (workspace === null || (workspace === fittedWorkspace &&
+      narrowPerform(workspace) === fittedNarrowPerform)) return;
   fitStage();
 });
 stageMount.observe(root, {childList: true, subtree: true});

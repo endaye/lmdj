@@ -1,4 +1,4 @@
-import {type ReactNode, useEffect, useRef} from "react";
+import {type ReactNode, useLayoutEffect, useRef} from "react";
 
 import type {
   PerformanceFilterTypeName,
@@ -23,7 +23,7 @@ const LABELS: Readonly<Record<PerformanceFx, string>> = Object.freeze({
 });
 
 // The three main FX mirror the approved rotary group; other existing FX
-// remain available in the touch drawer. In the typed profile the first main
+// remain available in the MORE group. In the typed profile the first main
 // slot is the independent Filter cutoff, not the legacy scalar.
 const LIVE_FADERS: readonly PerformanceFx[] = Object.freeze(["filter", "delay", "reverb"]);
 
@@ -45,6 +45,7 @@ export interface MonitorVolumeControl {
 
 interface FxSliderBankProps {
   readonly active?: boolean;
+  readonly gestureOwner?: object;
   readonly action?: ReactNode;
   readonly onGestureActiveChange?: (active: boolean) => void;
   readonly order: readonly PerformanceFx[];
@@ -68,8 +69,11 @@ interface FxSliderBankProps {
 }
 
 export function FxSliderBank(props: FxSliderBankProps) {
-  const gestures = useRef(new Map<PerformanceFx, string>());
-  const filterGestures = useRef(new Map<"cutoff" | "resonance", string>());
+  // Each DOM input owns its token and the callback that admitted it. A late
+  // lost-capture/blur from a removed input cannot close its replacement.
+  type Touch = {token: string; node: HTMLInputElement; pointerId?: number; release: () => void};
+  const gestures = useRef(new Map<PerformanceFx, Touch>());
+  const filterGestures = useRef(new Map<"cutoff" | "resonance", Touch>());
   const typedFilter = props.filter.provenance !== "unavailable" &&
     !props.legacyFilterGesture;
   const gestureIdle = () => {
@@ -77,50 +81,31 @@ export function FxSliderBank(props: FxSliderBankProps) {
       props.onGestureActiveChange?.(false);
     }
   };
-  const release = (fx: PerformanceFx) => {
-    const gestureId = gestures.current.get(fx);
-    if (gestureId === undefined) return;
-    gestures.current.delete(fx);
-    props.onRelease(gestureId, fx);
+  const release = <Key,>(map: Map<Key, Touch>, key: Key,
+    node: HTMLInputElement, pointerId?: number) => {
+    const touch = map.get(key);
+    if (touch === undefined || touch.node !== node ||
+      (pointerId !== undefined && touch.pointerId !== undefined && pointerId !== touch.pointerId)) return;
+    map.delete(key);
+    touch.release();
     gestureIdle();
   };
-  const releaseFilter = (parameter: "cutoff" | "resonance") => {
-    const token = filterGestures.current.get(parameter);
-    if (token === undefined) return;
-    filterGestures.current.delete(parameter);
-    props.onFilterTouchRelease(token, parameter);
-    gestureIdle();
-  };
-  // Switching groups unmounts the other groups' inputs, so their open touch
-  // gestures close here; the unmount effect below only fires when the whole
-  // bank goes away. Rotary gestures are not held here and survive (D04).
-  useEffect(() => {
-    if (props.group === "more") return;
-    for (const fx of [...gestures.current.keys()]) {
-      if (!isLive(fx)) release(fx);
-    }
-  }, [props.group]);
-  useEffect(() => {
-    if (props.group === "filter") return;
-    releaseFilter("cutoff");
-    releaseFilter("resonance");
-  }, [props.group]);
-  useEffect(() => () => {
-    for (const [fx, gestureId] of gestures.current) {
-      props.onRelease(gestureId, fx);
-    }
+  useLayoutEffect(() => () => {
+    // Only UI touch tokens live here. Rotary/HOLD belong to the controller.
+    const touches = [...gestures.current.values(), ...filterGestures.current.values()];
     gestures.current.clear();
-    for (const [parameter, token] of filterGestures.current) {
-      props.onFilterTouchRelease(token, parameter);
-    }
     filterGestures.current.clear();
-  }, []);
+    for (const touch of touches) touch.release();
+    if (touches.length > 0) props.onGestureActiveChange?.(false);
+  }, [props.group, props.active, props.gestureOwner]);
   const slider = (fx: PerformanceFx) => (
     <input type="range" min={0} max={1000} step={1}
       aria-label={LABELS[fx]} value={props.values[fx]}
       onPointerDown={(event) => {
         if (!gestures.current.has(fx)) {
-          gestures.current.set(fx, props.onEngage(fx, props.values[fx]));
+          const token = props.onEngage(fx, props.values[fx]);
+          gestures.current.set(fx, {token, node: event.currentTarget, pointerId: event.pointerId,
+            release: () => props.onRelease(token, fx)});
           props.onGestureActiveChange?.(true);
         }
         try { event.currentTarget.setPointerCapture(event.pointerId); } catch {
@@ -128,18 +113,19 @@ export function FxSliderBank(props: FxSliderBankProps) {
         }
       }}
       onChange={(event) => {
-        let gestureId = gestures.current.get(fx);
-        if (gestureId === undefined) {
-          gestureId = props.onEngage(fx, props.values[fx]);
-          gestures.current.set(fx, gestureId);
+        let touch = gestures.current.get(fx);
+        if (touch === undefined) {
+          const token = props.onEngage(fx, props.values[fx]);
+          touch = {token, node: event.currentTarget, release: () => props.onRelease(token, fx)};
+          gestures.current.set(fx, touch);
           props.onGestureActiveChange?.(true);
         }
-        props.onMove(gestureId, fx, event.currentTarget.valueAsNumber);
+        props.onMove(touch.token, fx, event.currentTarget.valueAsNumber);
       }}
-      onPointerUp={() => release(fx)}
-      onPointerCancel={() => release(fx)}
-      onLostPointerCapture={() => release(fx)}
-      onBlur={() => release(fx)} />
+      onPointerUp={(event) => release(gestures.current, fx, event.currentTarget, event.pointerId)}
+      onPointerCancel={(event) => release(gestures.current, fx, event.currentTarget, event.pointerId)}
+      onLostPointerCapture={(event) => release(gestures.current, fx, event.currentTarget, event.pointerId)}
+      onBlur={(event) => release(gestures.current, fx, event.currentTarget)} />
   );
   const filterSlider = (parameter: "cutoff" | "resonance", label: string,
     value: number) => (
@@ -147,8 +133,9 @@ export function FxSliderBank(props: FxSliderBankProps) {
       value={value} disabled={!typedFilter}
       onPointerDown={(event) => {
         if (!filterGestures.current.has(parameter)) {
-          filterGestures.current.set(parameter,
-            props.onFilterTouchEngage(parameter));
+          const token = props.onFilterTouchEngage(parameter);
+          filterGestures.current.set(parameter, {token, node: event.currentTarget, pointerId: event.pointerId,
+            release: () => props.onFilterTouchRelease(token, parameter)});
           props.onGestureActiveChange?.(true);
         }
         try { event.currentTarget.setPointerCapture(event.pointerId); } catch {
@@ -156,26 +143,44 @@ export function FxSliderBank(props: FxSliderBankProps) {
         }
       }}
       onChange={(event) => {
-        let token = filterGestures.current.get(parameter);
-        if (token === undefined) {
-          token = props.onFilterTouchEngage(parameter);
-          filterGestures.current.set(parameter, token);
+        let touch = filterGestures.current.get(parameter);
+        if (touch === undefined) {
+          const token = props.onFilterTouchEngage(parameter);
+          touch = {token, node: event.currentTarget,
+            release: () => props.onFilterTouchRelease(token, parameter)};
+          filterGestures.current.set(parameter, touch);
           props.onGestureActiveChange?.(true);
         }
-        props.onFilterTouchMove(token, parameter,
+        props.onFilterTouchMove(touch.token, parameter,
           event.currentTarget.valueAsNumber);
       }}
-      onPointerUp={() => releaseFilter(parameter)}
-      onPointerCancel={() => releaseFilter(parameter)}
-      onLostPointerCapture={() => releaseFilter(parameter)}
-      onBlur={() => releaseFilter(parameter)} />
+      onPointerUp={(event) => release(filterGestures.current, parameter, event.currentTarget, event.pointerId)}
+      onPointerCancel={(event) => release(filterGestures.current, parameter, event.currentTarget, event.pointerId)}
+      onLostPointerCapture={(event) => release(filterGestures.current, parameter, event.currentTarget, event.pointerId)}
+      onBlur={(event) => release(filterGestures.current, parameter, event.currentTarget)} />
   );
   if (props.active === false) return null;
   const live = props.order.filter(isLive);
   const more = props.order.filter((fx) => !isLive(fx));
   return (
-    <section className="perform-fx" aria-label="Performance FX">
-      <div className={`perform-live-faders${props.monitorVolume === undefined ? "" : " has-master"}`}>
+    <section className="perform-fx" aria-label="Performance FX" data-group={props.group}>
+      <nav className="perform-fx-actions" aria-label="Performance parameter groups">
+        <button type="button" aria-pressed={props.group === "main"}
+          onClick={() => props.onGroupChange("main")}>PRIMARY</button>
+        <button type="button" aria-pressed={props.group === "filter"}
+          aria-expanded={props.group === "filter"}
+          onClick={() => props.onGroupChange(props.group === "filter" ? "main" : "filter")}>FILTER</button>
+        <button type="button" aria-pressed={props.group === "more"}
+          aria-expanded={props.group === "more"}
+          onClick={() => props.onGroupChange(props.group === "more" ? "main" : "more")}>MORE</button>
+        {props.action}
+      </nav>
+      <output role="status" aria-label="Filter status" data-provenance={props.filter.provenance}>
+        Filter · {props.filter.provenance === "pending" ? "Pending" :
+          props.filter.provenance === "unavailable" ? "Unavailable" :
+          props.filter.frozen ? "Frozen" : props.filter.engaged ? "Engaged" : "Off"}
+      </output>
+      {props.group === "main" ? <div className="perform-live-faders">
         {live.map((fx) => {
           if (fx === "filter" && typedFilter) {
             // The typed Filter keeps the legacy slot and accessible name —
@@ -203,7 +208,51 @@ export function FxSliderBank(props: FxSliderBankProps) {
             </label>
           );
         })}
-        {props.monitorVolume === undefined ? null : (
+      </div> : null}
+      {props.group === "more" && more.length > 0 ? (
+        <div className="perform-fx-more-bank" role="group"
+          aria-label="More Performance FX">
+          {more.map((fx) => (
+            <label className="perform-fader" key={fx}>
+              <span className="perform-fader-name">{LABELS[fx]}</span>
+              <span className="perform-fader-value">{Math.round(props.values[fx] / 10)}%</span>
+              {slider(fx)}
+            </label>
+          ))}
+        </div>
+      ) : null}
+      {props.group === "filter" ? (
+        <div className="perform-filter-panel" role="group" aria-label="Filter">
+          <div className="perform-filter-types" role="group"
+            aria-label="Filter type">
+            {FILTER_TYPES.map((type) => (
+              <button type="button" key={type} disabled={!typedFilter}
+                aria-pressed={typedFilter && props.filter.type === type}
+                onClick={() => props.onFilterType(type)}>
+                {type.toUpperCase()}
+              </button>
+            ))}
+          </div>
+          <label className="perform-fader">
+            <span className="perform-fader-name">Cutoff</span>
+            <span className="perform-fader-value">
+              {typedFilter ? formatCutoffHz(props.filter.cutoffHz) : "—"}
+            </span>
+            {filterSlider("cutoff", "Cutoff",
+              cutoffHzToPosition(props.filter.cutoffHz))}
+          </label>
+          <label className="perform-fader">
+            <span className="perform-fader-name">Resonance</span>
+            <span className="perform-fader-value">
+              {typedFilter ? `${Math.round(props.filter.resonanceMilli / 10)}%` : "—"}
+            </span>
+            {filterSlider("resonance", "Resonance",
+              props.filter.resonanceMilli)}
+          </label>
+
+        </div>
+      ) : null}
+      {props.monitorVolume === undefined ? null : (
           <label className="perform-fader perform-master-fader">
             <span className="perform-fader-name">MASTER</span>
             <span className="perform-fader-value">{props.monitorVolume.value}%</span>
@@ -216,66 +265,6 @@ export function FxSliderBank(props: FxSliderBankProps) {
               }} />
           </label>
         )}
-      </div>
-      <div className="perform-fx-actions">
-        {props.action}
-        {more.length === 0 ? null : (
-          <button type="button" className="perform-fx-more"
-            aria-expanded={props.group === "more"}
-            onClick={() => props.onGroupChange(
-              props.group === "more" ? "main" : "more")}>FX / MORE</button>
-        )}
-        <button type="button" className="perform-fx-filter"
-          aria-expanded={props.group === "filter"}
-          onClick={() => props.onGroupChange(
-            props.group === "filter" ? "main" : "filter")}>FILTER</button>
-      </div>
-      {props.group === "more" && more.length > 0 ? (
-        <div className="perform-fx-more-bank" role="group"
-          aria-label="More Performance FX">
-          {more.map((fx) => (
-            <label key={fx}>
-              <span>{LABELS[fx]}</span>
-              {slider(fx)}
-            </label>
-          ))}
-        </div>
-      ) : null}
-      {props.group === "filter" ? (
-        <div className="perform-filter-panel" role="group" aria-label="Filter">
-          <div className="perform-filter-types" role="group"
-            aria-label="Filter type">
-            {FILTER_TYPES.map((type) => (
-              <button type="button" key={type} disabled={!typedFilter}
-                aria-pressed={props.filter.type === type}
-                onClick={() => props.onFilterType(type)}>
-                {type.toUpperCase()}
-              </button>
-            ))}
-          </div>
-          <label className="perform-fader">
-            <span className="perform-fader-name">Cutoff</span>
-            <span className="perform-fader-value">
-              {formatCutoffHz(props.filter.cutoffHz)}
-            </span>
-            {filterSlider("cutoff", "Cutoff",
-              cutoffHzToPosition(props.filter.cutoffHz))}
-          </label>
-          <label className="perform-fader">
-            <span className="perform-fader-name">Resonance</span>
-            <span className="perform-fader-value">
-              {Math.round(props.filter.resonanceMilli / 10)}%
-            </span>
-            {filterSlider("resonance", "Resonance",
-              props.filter.resonanceMilli)}
-          </label>
-          <output role="status" aria-label="Filter status">
-            {props.filter.engaged ? "engaged" : "OFF"}
-            {props.filter.frozen ? " · frozen" : ""}
-            {` · ${props.filter.provenance}`}
-          </output>
-        </div>
-      ) : null}
     </section>
   );
 }
