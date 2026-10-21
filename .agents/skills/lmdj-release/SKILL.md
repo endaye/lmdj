@@ -112,6 +112,14 @@ read-only post-publication Release check. Audits before and after
 pre-publication mutations use `scripts/release.sh audit --remote --tag TAG`;
 publication is followed by `verify-published`.
 
+`prepare` and the Web proofs activate the pinned Emscripten SDK from `EMSDK`,
+falling back to `build/toolchains/emsdk`. On the operator host install it
+outside the repository (any path, exported as `EMSDK` in the shell that runs
+`scripts/release.sh`), so a branch/worktree or `build/` sweep cannot delete it;
+the in-tree default stays for CI workspaces. The toolchain tree and the
+prepared output tree are release-owned and never a cleanup target (issue-list
+Mode 2); `doctor` reports a missing or drifted SDK with its reinstall command.
+
 On a fresh clone or a fresh runner workspace, run `scripts/release.sh hydrate`
 before the first audit. It is the only stable subcommand that writes the local
 Git object store: it fetches by SHA exactly the release intent target objects

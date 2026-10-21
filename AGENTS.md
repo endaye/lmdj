@@ -68,7 +68,7 @@ over this standing authorization.
 ## Task shipping and issue operations
 
 - For querying/triaging open issues, parallel workstreams, and auditing/cleaning local branches and worktrees, follow `.agents/skills/issue-list/SKILL.md`.
-- Branch/worktree cleanup never removes or prunes release-owned state (`.local/release-worktrees/`, `.git/worktrees/candidate-*`, `.git/lmdj-release-requests/`) or another agent's active worktree; see issue-list Mode 2.
+- Branch/worktree cleanup never removes or prunes release-owned state (`.local/release-worktrees/`, `.git/worktrees/candidate-*`, `.git/lmdj-release-requests/`, the pinned toolchain under `build/toolchains/` and the prepared release outputs under `build/release/`) or another agent's active worktree; a `build/` or `clean` sweep must exclude those two trees; see issue-list Mode 2.
 - For shipping a locally completed issue or task, coding agents must follow `.agents/skills/issue-done/SKILL.md` (handles verification, Conventional Commit, push, PR creation, current-head review, authorized merge, and separately authorized cleanup).
 
 ## Pitfall ledger
