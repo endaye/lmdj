@@ -50,10 +50,11 @@ freezes one request from the authenticated canonical control and drives it
 through the one ordered driver; `resume` continues that same request ID
 without replaying an unresolved intent. A step the journal already verified is
 not re-driven and not re-proven: the driver rechecks only its immutable
-identity — the candidate and reviewed PR merge commits, the executor run, the
-Release's numeric identity and plan digest, the deployment runs — through a
-handful of reads, and any drift (a moved merge, a re-run, a missing Release)
-fails closed as `evidence-conflict` or `evidence-absent`. A begun but unverified
+identity — the candidate and reviewed PR merge commits and heads, the executor
+run, the Release's numeric identity, plan digest and asset inventory, the
+deployment runs — through a handful of reads, and any drift (a moved merge, a
+re-run, a replaced asset, a missing Release) fails closed as
+`evidence-conflict` or `evidence-absent`. A begun but unverified
 step is still observed in full. Expect a resume with only publication and
 deployment left to take minutes, not the 25–30 minutes a full re-proof cost
 (#2422). Both refuse

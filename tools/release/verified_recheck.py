@@ -10,19 +10,23 @@ the immutable identity the proof named is still the same object. These
 rechecks read exactly that and nothing more:
 
 - `candidate`: the retained transition state still hashes to the recorded
-  evidence, and both squash merges (cut and witness) are still the merged
-  commit of their Pull Request and reachable canonical history;
+  evidence, and both squash merges (cut and witness) are still their Pull
+  Request's merge of the reviewed head and reachable canonical history;
 - `verification`: the executor run is still a completed, passed first attempt
-  of the batch workflow, for the witness the candidate recorded;
+  of the pinned batch workflow on canonical main, for the witness the
+  candidate recorded, and the reviewed intent (once its record exists) still
+  binds the same batch reference digest and run;
 - `intent` / `changelog` / `promotion` / `published_record`: the Pull Request
-  is still merged at the merge commit the gate digest binds, and that commit is
-  reachable canonical history;
-- `draft`: the Release under the tag still carries the prepared plan digest and
-  the recorded numeric identity (draft or published);
+  is still merged from the reviewed head at the merge commit the gate digest
+  binds, and that commit is reachable canonical history;
+- `draft`: the Release under the tag still carries the prepared plan digest,
+  the recorded numeric identity (draft or published) and exactly the plan's
+  asset inventory, every asset uploaded;
 - `publication`: the Release the dispatch named is published, not a draft,
-  and the local plan is the one it was dispatched with;
+  with the dispatched plan and the plan's asset inventory;
 - `runtime` / `creator`: the recorded deployment run is still a completed,
-  passed first attempt of the pinned deploy workflow on main.
+  passed first attempt of the retained dispatch's pinned workflow, dispatched
+  for this release on canonical main.
 
 Every check fails closed: a changed merge commit, a moved Release, a re-run or
 deleted run, a missing local record are `conflict`/`absent`, never a pass.
@@ -113,12 +117,14 @@ def read_private_document(root, name):
 class VerifiedRecheck:
     """The enrolled verified-transition recheck for one request's records."""
 
-    def __init__(self, *, root, operations, repository, git, github):
+    def __init__(self, *, root, operations, repository, git, github,
+                 batch_workflow_id):
         """git: `is_main_ancestor(sha)`. github: the release GitHub client's
         `get_pull_request`, `get_release_by_tag`, `get_batch_evidence` and
         `get_dispatch_evidence` readers. `operations` is this request's own
         journal operations directory; `root` is the repository root the
-        prepared output lives under.
+        prepared output lives under. `batch_workflow_id` is the policy's
+        pinned batch executor workflow identity.
         """
         for name, reader in (("is_main_ancestor", git),):
             if not callable(getattr(reader, name, None)):
@@ -129,10 +135,13 @@ class VerifiedRecheck:
                 _fail(f"requires a GitHub reader with {name}")
         if type(repository) is not str or not re.fullmatch(r"[a-z0-9_.-]+/[a-z0-9_.-]+", repository):
             _fail("requires the canonical repository name")
+        if type(batch_workflow_id) is not int or batch_workflow_id <= 0:
+            _fail("requires the pinned batch workflow identity")
         self.root = Path(root).absolute()
         self.operations = Path(operations).absolute()
         self.repository = repository
         self.git, self.github = git, github
+        self.batch_workflow_id = batch_workflow_id
 
     # -- driver protocol -------------------------------------------------
 
@@ -167,7 +176,7 @@ class VerifiedRecheck:
             return self._draft(state, evidence)
         if step == "publication":
             return self._publication(state, evidence)
-        return self._deployment(step, evidence)
+        return self._deployment(step, state, evidence)
 
     # -- shared readers --------------------------------------------------
 
@@ -201,18 +210,20 @@ class VerifiedRecheck:
 
     @staticmethod
     def _merge(record):
-        """(number, merge_sha) from a retained observe_merge record, or None."""
+        """(number, merge_sha, head_sha) from a retained merge record, or None."""
         merge = record.get("merge") if type(record) is dict else None
         if type(merge) is not dict:
             return None
-        number, merge_sha = merge.get("number"), merge.get("merge_sha")
+        number, merge_sha, head = merge.get("number"), merge.get("merge_sha"), merge.get("head_sha")
         if type(number) is not int or isinstance(number, bool) or number <= 0 \
-                or type(merge_sha) is not str or _SHA.fullmatch(merge_sha) is None:
+                or type(merge_sha) is not str or _SHA.fullmatch(merge_sha) is None \
+                or type(head) is not str or _SHA.fullmatch(head) is None:
             _fail("a retained merge record carries no valid Pull Request identity")
-        return number, merge_sha
+        return number, merge_sha, head
 
-    def _merged_pull_request(self, number):
-        """The live merged Pull Request row, or an Observation refusing it."""
+    def _merged_pull_request(self, number, head_sha):
+        """The live Pull Request row still merged from the reviewed head, or an
+        Observation refusing it."""
         row = self.github.get_pull_request(self.repository, number)
         if row is None:
             return Observation("absent")
@@ -220,6 +231,8 @@ class VerifiedRecheck:
         if row.get("merged") is not True or type(merge_sha) is not str \
                 or _SHA.fullmatch(merge_sha) is None:
             return _conflict(f"pull request #{number} is no longer a merged squash")
+        if row.get("head_sha") != head_sha:
+            return _conflict(f"pull request #{number} no longer merges the reviewed head")
         if not self.git.is_main_ancestor(merge_sha):
             return _conflict(f"pull request #{number}'s merge commit is not reachable canonical history")
         return row
@@ -230,18 +243,71 @@ class VerifiedRecheck:
             _fail(f"run {run_id} is not readable")
         return document
 
-    @staticmethod
-    def _completed_first_attempt(run, run_id, *, path):
+    def _completed_first_attempt(self, run, run_id, *, path, workflow_id):
         if run.get("id") != run_id:
             return f"run {run_id} answers for another run"
-        if run.get("path") != path:
-            return f"run {run_id} is not a {path} run"
+        if run.get("path") != path or run.get("workflow_id") != workflow_id:
+            return f"run {run_id} is not a run of the pinned {path}"
         if run.get("run_attempt") != 1:
             return f"run {run_id} was re-run; attempt 1 is the verified evidence"
         if run.get("status") != "completed" or run.get("conclusion") != "success":
             return f"run {run_id} is no longer a completed, passed run"
-        if run.get("head_branch") != "main":
-            return f"run {run_id} did not run on main"
+        head = run.get("head_sha")
+        if run.get("head_branch") != "main" or type(head) is not str \
+                or _SHA.fullmatch(head) is None or not self.git.is_main_ancestor(head):
+            return f"run {run_id} did not run on canonical main"
+        return None
+
+    def _dispatch_spec(self, step, tag):
+        """The retained durable dispatch spec for this step and tag, or None."""
+        record = read_private_document(self.operations / f"dispatch-{step}", "dispatch.json")
+        if record is None:
+            return None
+        spec = record.get("spec") if record.get("schema") == "lmdj.durable-dispatch.v1" else None
+        inputs = spec.get("inputs") if type(spec) is dict else None
+        if type(inputs) is not dict or inputs.get("tag") != tag \
+                or type(spec.get("workflow_id")) is not int or spec["workflow_id"] <= 0:
+            _fail(f"{step}: the retained dispatch does not name this release")
+        return spec
+
+    def _plan_assets(self, tag):
+        """The prepared plan's closed asset inventory as {name: bytes}."""
+        from .prepared_step import _PLAN_DOCUMENT, output_relative
+
+        try:
+            document = json.loads((self.root / output_relative(tag) / _PLAN_DOCUMENT).read_bytes())
+        except (OSError, ValueError, UnicodeError):
+            _fail("the prepared plan document is unreadable")
+        assets = document.get("assets") if type(document) is dict else None
+        if type(assets) is not list or not assets or any(
+                type(item) is not dict or type(item.get("name")) is not str
+                or type(item.get("bytes")) is not int for item in assets):
+            _fail("the prepared plan carries no closed asset inventory")
+        inventory = {item["name"]: item["bytes"] for item in assets}
+        if len(inventory) != len(assets):
+            _fail("the prepared plan names an asset twice")
+        return inventory
+
+    def _assets_drift(self, step, tag, release):
+        """Why the live asset inventory differs from the prepared plan, or None.
+
+        Names and sizes only: the bytes were verified when the step first
+        verified (and again by the publish workflow); what a resume must see
+        is an asset removed, replaced by another size, or no longer uploaded.
+        """
+        inventory = self._plan_assets(tag)
+        live = {}
+        for asset in release.assets:
+            if asset.name in live:
+                return f"{step}: the Release carries asset {asset.name} twice"
+            live[asset.name] = asset
+        if set(live) != set(inventory):
+            return f"{step}: the Release asset inventory differs from the prepared plan"
+        for name, size in inventory.items():
+            if live[name].size != size:
+                return f"{step}: asset {name} no longer has the prepared size"
+            if live[name].state != "uploaded":
+                return f"{step}: asset {name} is no longer uploaded"
         return None
 
     # -- steps -------------------------------------------------------------
@@ -259,8 +325,8 @@ class VerifiedRecheck:
             identity = self._merge(document.get(name))
             if identity is None:
                 return _conflict(f"candidate: the retained state records no verified {name}")
-            number, merge_sha = identity
-            row = self._merged_pull_request(number)
+            number, merge_sha, head = identity
+            row = self._merged_pull_request(number, head)
             if type(row) is Observation:
                 return row
             if row["merge_commit_sha"] != merge_sha:
@@ -283,9 +349,21 @@ class VerifiedRecheck:
         if not self.git.is_main_ancestor(witness):
             return _conflict("verification: the verified target is not reachable canonical history")
         run = self._run(self.github.get_batch_evidence, run_id)
-        drift = self._completed_first_attempt(run, run_id, path=_BATCH_WORKFLOW)
+        drift = self._completed_first_attempt(run, run_id, path=_BATCH_WORKFLOW,
+                                              workflow_id=self.batch_workflow_id)
         if drift is not None:
             return _conflict("verification: " + drift)
+        # The reviewed intent freezes the same batch reference the verification
+        # step verified; once its record exists, the two must still agree.
+        intent = read_private_document(self.operations / "intent-sequence/pr", "pr-state.json")
+        if intent is not None:
+            spec = intent.get("spec") if intent.get("schema") == "lmdj.evidence-pr-state.v1" else None
+            if type(spec) is not dict:
+                _fail("verification: the retained intent record is not the expected record")
+            if (canonical_sha256(spec.get("batch_reference")) != evidence["sha256"]
+                    or spec.get("batch_run_id") != run_id
+                    or spec.get("target_revision") != witness):
+                return _conflict("verification: the reviewed intent binds another batch reference")
         # The reference document hashes retained controller attestations; the
         # recorded digest is the proof already made, bound here to a run that
         # is still the same completed first attempt for the same witness.
@@ -304,7 +382,11 @@ class VerifiedRecheck:
                 or type(review.get("sha256")) is not str \
                 or _DIGEST.fullmatch(review["sha256"]) is None:
             return _conflict(f"{step}: the retained state records no reviewed merge")
-        row = self._merged_pull_request(number)
+        spec = record.get("spec")
+        head = spec.get("head_sha") if type(spec) is dict else None
+        if type(head) is not str or _SHA.fullmatch(head) is None:
+            _fail(f"{step}: the retained Pull Request state names no reviewed head")
+        row = self._merged_pull_request(number, head)
         if type(row) is Observation:
             return row
         merge_sha = row["merge_commit_sha"]
@@ -314,6 +396,7 @@ class VerifiedRecheck:
         return self._settle(step, evidence, live)
 
     def _release(self, tag):
+        """(projection, release) for the Release under the tag, or None."""
         from .draft_step import release_projection
 
         release = self.github.get_release_by_tag(self.repository, tag)
@@ -322,7 +405,7 @@ class VerifiedRecheck:
         projection = release_projection(release)
         if type(projection.id) is not int or projection.id <= 0:
             _fail("the far-side Release carries no valid numeric identity")
-        return projection
+        return projection, release
 
     def _plan(self, tag):
         from .carriers import read_prepared_plan
@@ -334,11 +417,15 @@ class VerifiedRecheck:
         plan = self._plan(tag)
         if plan is None:
             return _conflict("draft: the prepared plan this Draft was verified against is missing")
-        projection = self._release(tag)
-        if projection is None:
+        found = self._release(tag)
+        if found is None:
             return Observation("absent")
+        projection, release = found
         if projection.tag != tag or projection.plan_sha256 != plan:
             return _conflict("draft: the far-side Release no longer carries the prepared plan")
+        drift = self._assets_drift("draft", tag, release)
+        if drift is not None:
+            return _conflict(drift)
         live = {"sha256": canonical_sha256({"tag": tag, "plan_sha256": plan,
                                             "release_id": projection.id}),
                 "reference": "draft:" + str(projection.id)}
@@ -348,13 +435,10 @@ class VerifiedRecheck:
         tag = self._tag(state)
         if evidence["reference"] != f"https://github.com/{self.repository}/releases/tag/{tag}":
             return _conflict("publication: the recorded reference is not this release's publication")
-        record = read_private_document(self.operations / "dispatch-publication", "dispatch.json")
-        if record is None:
+        spec = self._dispatch_spec("publication", tag)
+        if spec is None:
             return Observation("absent")
-        spec = record.get("spec") if record.get("schema") == "lmdj.durable-dispatch.v1" else None
-        inputs = spec.get("inputs") if type(spec) is dict else None
-        if type(inputs) is not dict or inputs.get("tag") != tag:
-            _fail("publication: the retained dispatch does not name this release")
+        inputs = spec["inputs"]
         try:
             release_id = int(inputs.get("release_id"))
         except (TypeError, ValueError):
@@ -362,24 +446,32 @@ class VerifiedRecheck:
         plan = self._plan(tag)
         if plan is None or inputs.get("plan_sha256") != plan:
             return _conflict("publication: the prepared plan differs from the dispatched one")
-        projection = self._release(tag)
-        if projection is None:
+        found = self._release(tag)
+        if found is None:
             return Observation("absent")
+        projection, release = found
         if projection.id != release_id:
             return _conflict("publication: the Release under this tag is not the one dispatched")
         if projection.draft:
             return _conflict("publication: the dispatched Release is still a draft")
         if projection.plan_sha256 != plan:
             return _conflict("publication: the published Release no longer carries the prepared plan")
+        drift = self._assets_drift("publication", tag, release)
+        if drift is not None:
+            return _conflict(drift)
         return Observation("verified", deepcopy(evidence))
 
-    def _deployment(self, step, evidence):
+    def _deployment(self, step, state, evidence):
         matched = _RUN_URL.fullmatch(evidence["reference"])
         if matched is None:
             return _conflict(f"{step}: the recorded reference is not a deployment run")
         run_id = int(matched.group(1))
+        spec = self._dispatch_spec(step, self._tag(state))
+        if spec is None:
+            return Observation("absent")
         run = self._run(self.github.get_dispatch_evidence, run_id)
-        drift = self._completed_first_attempt(run, run_id, path=_DEPLOY_WORKFLOWS[step])
+        drift = self._completed_first_attempt(run, run_id, path=_DEPLOY_WORKFLOWS[step],
+                                              workflow_id=spec["workflow_id"])
         if drift is None and run.get("event") != "workflow_dispatch":
             drift = f"run {run_id} was not dispatched"
         if drift is not None:

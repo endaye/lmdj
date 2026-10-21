@@ -19,7 +19,7 @@ import unittest
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
-from tools.release.github_api import GitHubRelease  # noqa: E402
+from tools.release.github_api import GitHubAsset, GitHubRelease  # noqa: E402
 from tools.release.model import canonical_json, canonical_sha256  # noqa: E402
 from tools.release.orchestration import JournalError  # noqa: E402
 from tools.release.orchestration_backend import ReleaseBackend  # noqa: E402
@@ -37,8 +37,15 @@ CUT_MERGE, WITNESS_MERGE = "c" * 40, "d" * 40
 INTENT_MERGE, CHANGELOG_MERGE, RECORD_MERGE, PROMOTION_MERGE = ("1" * 40, "2" * 40,
                                                                 "3" * 40, "4" * 40)
 BATCH_RUN, RUNTIME_RUN, CREATOR_RUN = 39221726945, 40000000001, 40000000002
+BATCH_WORKFLOW, RUNTIME_WORKFLOW, CREATOR_WORKFLOW = 352307416, 502, 503
 RELEASE_ID = 418182265
 REPOSITORY = "endaye/lmdj"
+HEAD = "9" * 40
+RUN_HEAD = "8" * 40
+PLAN_ASSETS = [{"name": "lmdj-creator-web-6.0.1-product-2.0.122.0.zip", "bytes": 3092602,
+                "sha256": "0b" * 32},
+               {"name": "lmdj-creator-web-6.0.1-product-2.0.122.0.zip.sha256", "bytes": 111,
+                "sha256": "34" * 32}]
 
 
 def request(**changes):
@@ -60,7 +67,7 @@ def state(**changes):
 def merge_record(number, merge_sha):
     return {"status": "verified",
             "evidence": {"sha256": "b" * 64, "reference": f"squash:{number}"},
-            "merge": {"id": number * 10, "number": number, "head_sha": "9" * 40,
+            "merge": {"id": number * 10, "number": number, "head_sha": HEAD,
                       "merge_sha": merge_sha}}
 
 
@@ -76,26 +83,50 @@ def candidate_state():
             "witness_merge": merge_record(2400, WITNESS_MERGE)}
 
 
-def pr_state(number, review_digest):
-    return {"schema": "lmdj.evidence-pr-state.v1", "spec": {"operation_id": "8" * 64},
+def pr_state(number, review_digest, **spec):
+    return {"schema": "lmdj.evidence-pr-state.v1",
+            "spec": dict({"operation_id": "8" * 64, "head_sha": HEAD}, **spec),
             "create_intent": True, "number": number, "merge_intent": True,
             "merge_sha": None,
             "review_evidence": {"sha256": review_digest,
                                 "reference": f"review:kind:pr-{number}"}}
 
 
-def run_document(run_id, path, **changes):
-    document = {"id": run_id, "path": path, "run_attempt": 1, "status": "completed",
-                "conclusion": "success", "head_branch": "main",
-                "event": "workflow_dispatch", "head_sha": "f" * 40}
+def run_document(run_id, path, workflow_id, **changes):
+    document = {"id": run_id, "path": path, "workflow_id": workflow_id, "run_attempt": 1,
+                "status": "completed", "conclusion": "success", "head_branch": "main",
+                "event": "workflow_dispatch", "head_sha": RUN_HEAD}
     document.update(changes)
     return document
+
+
+def dispatch_record(workflow, workflow_id, **inputs):
+    return {"schema": "lmdj.durable-dispatch.v1", "baseline": [1], "post_intent": True,
+            "spec": {"workflow": workflow, "workflow_id": workflow_id,
+                     "inputs": dict({"tag": TAG, "request_id": "8" * 64}, **inputs)}}
+
+
+def release(plan, **changes):
+    fields = dict(
+        id=RELEASE_ID, tag_name=TAG, name=TAG,
+        body=f'<!-- lmdj.release-plan-marker.v3 {{"plan_sha256": "{plan}"}} -->',
+        draft=True, prerelease=True, make_latest=None,
+        html_url="https://example.invalid/release",
+        upload_url="https://example.invalid/upload",
+        assets=tuple(GitHubAsset(id=index + 1, name=item["name"], size=item["bytes"],
+                                 api_url="https://api.example.invalid/a", browser_download_url="",
+                                 release_id=RELEASE_ID, label=None, content_type="application/zip",
+                                 state="uploaded")
+                     for index, item in enumerate(PLAN_ASSETS)),
+        target_commitish="f" * 40)
+    fields.update(changes)
+    return GitHubRelease(**fields)
 
 
 class Git:
     def __init__(self):
         self.ancestors = {CUT_MERGE, WITNESS_MERGE, INTENT_MERGE, CHANGELOG_MERGE,
-                          RECORD_MERGE, PROMOTION_MERGE}
+                          RECORD_MERGE, PROMOTION_MERGE, RUN_HEAD}
         self.asked = []
 
     def is_main_ancestor(self, target):
@@ -110,18 +141,15 @@ class GitHub:
         self.pull_requests = {
             2399: CUT_MERGE, 2400: WITNESS_MERGE, 2407: INTENT_MERGE,
             2417: CHANGELOG_MERGE, 2424: RECORD_MERGE, 2425: PROMOTION_MERGE}
+        self.heads = {}
         self.runs = {
             BATCH_RUN: run_document(BATCH_RUN, ".github/workflows/self-test-report.yml",
-                                    event="workflow_run"),
-            RUNTIME_RUN: run_document(RUNTIME_RUN, ".github/workflows/deploy-web-runtime-host.yml"),
-            CREATOR_RUN: run_document(CREATOR_RUN, ".github/workflows/deploy-creator-web.yml")}
-        self.release = GitHubRelease(
-            id=RELEASE_ID, tag_name=TAG, name=TAG,
-            body=f'<!-- lmdj.release-plan-marker.v3 {{"plan_sha256": "{plan}"}} -->',
-            draft=True, prerelease=True, make_latest=None,
-            html_url="https://example.invalid/release",
-            upload_url="https://example.invalid/upload", assets=(),
-            target_commitish="f" * 40)
+                                    BATCH_WORKFLOW, event="workflow_run"),
+            RUNTIME_RUN: run_document(RUNTIME_RUN, ".github/workflows/deploy-web-runtime-host.yml",
+                                      RUNTIME_WORKFLOW),
+            CREATOR_RUN: run_document(CREATOR_RUN, ".github/workflows/deploy-creator-web.yml",
+                                      CREATOR_WORKFLOW)}
+        self.release = release(plan)
         self.reads = []
 
     def get_pull_request(self, repository, number):
@@ -131,7 +159,8 @@ class GitHub:
         if merge_sha is None:
             return None
         return {"number": number, "state": "closed", "merged": True,
-                "merge_commit_sha": merge_sha, "head_sha": "9" * 40, "title": "t"}
+                "merge_commit_sha": merge_sha, "head_sha": self.heads.get(number, HEAD),
+                "title": "t"}
 
     def get_release_by_tag(self, repository, tag):
         self.reads.append(("release", tag))
@@ -177,7 +206,8 @@ class VerifiedRecheckTest(unittest.TestCase):
         self.operations.mkdir(parents=True, mode=0o700)
         os.chmod(self.operations.parent, 0o700)
         os.chmod(self.operations.parent.parent, 0o700)
-        plan_document = b'{"plan": "fixture"}\n'
+        plan_document = canonical_json({"schema": "lmdj.release-plan.v1", "tag": TAG,
+                                        "assets": PLAN_ASSETS})
         self.plan = hashlib.sha256(plan_document).hexdigest()
         output = self.root / "build/release" / TAG
         output.mkdir(parents=True)
@@ -188,23 +218,30 @@ class VerifiedRecheckTest(unittest.TestCase):
                       "candidate-transition.json", self.candidate)
         self.reviews = {"intent": "11" * 32, "changelog": "22" * 32,
                         "published_record": "33" * 32, "promotion": "44" * 32}
+        self.batch_reference = {"schema": "lmdj.ci-batch-release-reference.v1",
+                                "request": {"target": WITNESS_MERGE}, "run_attempt": 1}
         write_private(self.operations / "intent-sequence/pr", "pr-state.json",
-                      pr_state(2407, self.reviews["intent"]))
+                      pr_state(2407, self.reviews["intent"], batch_reference=self.batch_reference,
+                               batch_run_id=BATCH_RUN, target_revision=WITNESS_MERGE))
         write_private(self.operations / "changelog-sequence/pr", "pr-state.json",
                       pr_state(2417, self.reviews["changelog"]))
         write_private(self.operations / "published-record-pr", "pr-state.json",
                       pr_state(2424, self.reviews["published_record"]))
         write_private(self.operations / "promotion-sequence/pr", "pr-state.json",
                       pr_state(2425, self.reviews["promotion"]))
-        write_private(self.operations / "dispatch-publication", "dispatch.json", {
-            "schema": "lmdj.durable-dispatch.v1", "baseline": [1], "post_intent": True,
-            "spec": {"workflow": "publish-release.yml",
-                     "inputs": {"tag": TAG, "release_id": str(RELEASE_ID),
-                                "plan_sha256": self.plan, "request_id": "8" * 64}}})
+        write_private(self.operations / "dispatch-publication", "dispatch.json",
+                      dispatch_record("publish-release.yml", 501, release_id=str(RELEASE_ID),
+                                      plan_sha256=self.plan))
+        write_private(self.operations / "dispatch-runtime", "dispatch.json",
+                      dispatch_record("deploy-web-runtime-host.yml", RUNTIME_WORKFLOW,
+                                      prior_site_sha256="7" * 64))
+        write_private(self.operations / "dispatch-creator", "dispatch.json",
+                      dispatch_record("deploy-creator-web.yml", CREATOR_WORKFLOW,
+                                      prior_site_sha256="7" * 64))
         self.git, self.github = Git(), GitHub(self.plan)
         self.recheck = VerifiedRecheck(root=self.root, operations=self.operations,
                                        repository=REPOSITORY, git=self.git,
-                                       github=self.github)
+                                       github=self.github, batch_workflow_id=BATCH_WORKFLOW)
 
     # -- the evidence each step's full observation recorded ---------------
 
@@ -213,7 +250,8 @@ class VerifiedRecheckTest(unittest.TestCase):
             return {"sha256": canonical_sha256(self.candidate),
                     "reference": "candidate:" + "5" * 64}
         if step == "verification":
-            return {"sha256": "9a" * 32, "reference": f"batch-result:{BATCH_RUN}:{WITNESS_MERGE}"}
+            return {"sha256": canonical_sha256(self.batch_reference),
+                    "reference": f"batch-result:{BATCH_RUN}:{WITNESS_MERGE}"}
         if step in ("intent", "changelog", "promotion"):
             number, merge = {"intent": (2407, INTENT_MERGE), "changelog": (2417, CHANGELOG_MERGE),
                              "promotion": (2425, PROMOTION_MERGE)}[step]
@@ -239,9 +277,8 @@ class VerifiedRecheckTest(unittest.TestCase):
         return {"step": step, "operation_id": canonical_sha256({"request": DIGEST, "step": step}),
                 "status": status, "evidence": self.evidence(step) if evidence is None else evidence}
 
-    def publish(self):
-        self.github.release = GitHubRelease(
-            **dict(self.github.release.__dict__, draft=False))
+    def publish(self, **changes):
+        self.github.release = release(self.plan, draft=False, **changes)
 
     def check(self, step, **state_changes):
         return self.recheck.recheck(state(**state_changes), self.operation(step))
@@ -335,21 +372,82 @@ class VerifiedRecheckTest(unittest.TestCase):
         self.assertIn("differs from the recorded evidence", observed.diagnostic)
 
     def test_a_release_that_dropped_the_prepared_plan_is_a_conflict(self):
-        self.github.release = GitHubRelease(**dict(self.github.release.__dict__,
-                                                   body="no marker"))
+        self.github.release = release(self.plan, body="no marker")
         self.assertEqual(self.check("draft").status, "conflict")
-        self.publish()
+        self.publish(body="no marker")
         self.assertEqual(self.check("publication").status, "conflict")
 
     def test_publication_requires_the_dispatched_release_to_be_published(self):
         observed = self.check("publication")
         self.assertEqual(observed.status, "conflict")
         self.assertIn("still a draft", observed.diagnostic)
-        self.publish()
-        self.github.release = GitHubRelease(**dict(self.github.release.__dict__, id=RELEASE_ID + 1))
+        self.publish(id=RELEASE_ID + 1)
         observed = self.check("publication")
         self.assertEqual(observed.status, "conflict")
         self.assertIn("not the one dispatched", observed.diagnostic)
+
+    def test_an_asset_inventory_that_drifted_from_the_plan_is_a_conflict(self):
+        assets = self.github.release.assets
+        cases = {"missing": assets[:1],
+                 "foreign": assets + (GitHubAsset(**dict(assets[0].__dict__, id=9, name="extra.zip")),),
+                 "size": (GitHubAsset(**dict(assets[0].__dict__, size=assets[0].size + 1)), assets[1]),
+                 "state": (GitHubAsset(**dict(assets[0].__dict__, state="starter")), assets[1])}
+        for name, drifted in cases.items():
+            for step in ("draft", "publication"):
+                with self.subTest(case=name, step=step):
+                    self.github.release = release(self.plan, draft=step == "draft", assets=drifted)
+                    observed = self.check(step)
+                    self.assertEqual(observed.status, "conflict", (name, step))
+                    self.assertIn(step + ":", observed.diagnostic)
+        # The plan itself is the inventory: a plan without one fails closed.
+        output = self.root / "build/release" / TAG
+        (output / "release-plan.json").write_bytes(b'{"plan": "fixture"}\n')
+        replaced = hashlib.sha256(b'{"plan": "fixture"}\n').hexdigest()
+        (output / "release-plan.sha256").write_text(replaced + "\n")
+        self.github.release = release(replaced)
+        with self.assertRaisesRegex(JournalError, "asset inventory"):
+            self.check("draft")
+
+    def test_a_pull_request_merged_from_another_head_is_a_conflict(self):
+        for step, number in (("candidate", 2399), ("candidate", 2400), ("intent", 2407),
+                             ("changelog", 2417), ("published_record", 2424),
+                             ("promotion", 2425)):
+            with self.subTest(step=step, number=number):
+                self.github.heads[number] = "a" * 40
+                observed = self.check(step)
+                del self.github.heads[number]
+                self.assertEqual(observed.status, "conflict")
+                self.assertIn("reviewed head", observed.diagnostic)
+
+    def test_a_run_of_another_workflow_identity_or_off_main_is_a_conflict(self):
+        for step, run_id in (("verification", BATCH_RUN), ("runtime", RUNTIME_RUN),
+                             ("creator", CREATOR_RUN)):
+            for key, value in (("workflow_id", 999), ("head_sha", "e" * 40)):
+                with self.subTest(step=step, key=key):
+                    saved = self.github.runs[run_id][key]
+                    self.github.runs[run_id][key] = value
+                    observed = self.check(step)
+                    self.github.runs[run_id][key] = saved
+                    self.assertEqual(observed.status, "conflict", (step, key))
+        # A deployment with no retained dispatch is absent, never a pass.
+        (self.operations / "dispatch-runtime/dispatch.json").unlink()
+        self.assertEqual(self.check("runtime").status, "absent")
+
+    def test_a_reviewed_intent_that_binds_another_batch_is_a_conflict(self):
+        for change in ({"batch_run_id": BATCH_RUN + 1},
+                       {"batch_reference": {"schema": "other"}},
+                       {"target_revision": CUT_MERGE}):
+            with self.subTest(change=change):
+                spec = {**dict(batch_reference=self.batch_reference, batch_run_id=BATCH_RUN,
+                               target_revision=WITNESS_MERGE), **change}
+                write_private(self.operations / "intent-sequence/pr", "pr-state.json",
+                              pr_state(2407, self.reviews["intent"], **spec))
+                observed = self.check("verification")
+                self.assertEqual(observed.status, "conflict")
+                self.assertIn("another batch reference", observed.diagnostic)
+        # Before the intent step records anything, the run and witness carry the check.
+        (self.operations / "intent-sequence/pr/pr-state.json").unlink()
+        self.assertEqual(self.check("verification").status, "verified")
 
     def test_a_rerun_failed_or_foreign_run_is_a_conflict(self):
         cases = {"run_attempt": 2, "conclusion": "failure", "status": "in_progress",
@@ -367,7 +465,8 @@ class VerifiedRecheckTest(unittest.TestCase):
         self.assertEqual(self.check("runtime").status, "conflict")
 
     def test_a_verification_target_that_differs_from_the_candidate_witness_is_a_conflict(self):
-        foreign = {"sha256": "9a" * 32, "reference": f"batch-result:{BATCH_RUN}:{CUT_MERGE}"}
+        foreign = {"sha256": canonical_sha256(self.batch_reference),
+                   "reference": f"batch-result:{BATCH_RUN}:{CUT_MERGE}"}
         observed = self.recheck.recheck(state(), self.operation("verification", foreign))
         self.assertEqual(observed.status, "conflict")
         self.assertIn("witness merge differs", observed.diagnostic)
@@ -426,6 +525,12 @@ class BackendRecheckTest(unittest.TestCase):
         git = type("Git", (), {"is_main_ancestor": lambda self, t: True})()
         github = type("GitHub", (), {"get_authenticated_actor": lambda self: 34})()
         return ReleaseBackend(git, github, carriers=(self.Carrier("draft"),), recheck=recheck)
+
+    def test_the_recheck_requires_the_pinned_batch_workflow(self):
+        git = type("Git", (), {"is_main_ancestor": lambda self, t: True})()
+        with self.assertRaisesRegex(JournalError, "batch workflow"):
+            VerifiedRecheck(root=".", operations=".", repository=REPOSITORY, git=git,
+                            github=GitHub("a" * 64), batch_workflow_id=None)
 
     def test_the_backend_consults_the_enrolled_recheck_and_declines_without_one(self):
         operation = {"step": "draft", "operation_id": DIGEST, "status": "verified",

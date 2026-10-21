@@ -680,9 +680,14 @@ def compose_recheck(context, policy, request):
     root = Path(context.repo_root)
     git = context.git
     operations = release_journal_root(root, git) / "operations" / request["id"]
+    source = context.policy.batch_evidence_source
+    workflow_id = source.get("workflow_id") if source is not None else None
+    if type(workflow_id) is not int or workflow_id <= 0:
+        _fail("the policy pins no batch executor workflow identity")
     return VerifiedRecheck(root=root, operations=operations,
                            repository=context.policy.repository,
-                           git=git, github=context.github)
+                           git=git, github=context.github,
+                           batch_workflow_id=workflow_id)
 
 
 def compose_carriers(context, policy, request):
