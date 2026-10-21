@@ -70,6 +70,70 @@ function sha256(bytes) {
   return createHash("sha256").update(bytes).digest("hex");
 }
 
+async function observeReplayTraffic(page) {
+  await page.addInitScript(() => {
+    let exposed;
+    window.__replayWire = [];
+    window.__replayCaptureLoss = 0;
+    Object.defineProperty(window, "lmdjWebRuntimeHost", {
+      configurable: true,
+      get: () => exposed,
+      set(host) {
+        const native = host.transport;
+        host.transport = Object.freeze({
+          async send(...args) {
+            const response = await native.send(...args);
+            if (args[0]?.operation?.startsWith("performance.replay.") ||
+                args[0]?.operation === "performance.inspect") {
+              try {
+                window.__replayWire.push({request: structuredClone(args[0]), response: structuredClone(response)});
+              } catch {window.__replayCaptureLoss += 1;}
+            }
+            return response;
+          },
+          subscribe: (...args) => native.subscribe(...args),
+          subscribeFailure: (...args) => native.subscribeFailure(...args),
+          terminate: (...args) => native.terminate(...args),
+          get terminated() {return native.terminated;},
+          get terminalOwnerReleased() {return native.terminalOwnerReleased;},
+        });
+        exposed = host;
+      },
+    });
+  });
+}
+
+async function replayEventWitness(page) {
+  return page.evaluate(() => {
+    const card = document.querySelector('[aria-label="Replay event readout"]');
+    const output = card?.querySelector('[aria-label="Replay events"]');
+    const ui = card === null || output == null ? null : {
+      replayId: card.dataset.replayId, state: card.dataset.replayState,
+      revision: Number(card.dataset.resolvedRevision), neutral: card.dataset.neutralConfirmed === "true",
+      cursor: Number(output.dataset.eventCursor), count: Number(output.dataset.eventCount), text: output.textContent,
+    };
+    const wire = structuredClone(window.__replayWire);
+    const source = ui === null ? null : wire.findLast(({response}) => response.ok &&
+      response.result.replay_id === ui.replayId && response.result.state === ui.state &&
+      response.result.resolved_revision === ui.revision && response.result.event_cursor === ui.cursor &&
+      response.result.event_count === ui.count) ?? null;
+    return {ui, source, wire, captureLoss: window.__replayCaptureLoss};
+  });
+}
+
+async function expectReplayEvents(page, state, count) {
+  await expect.poll(async () => {
+    const read = await replayEventWitness(page);
+    return {state: read.ui?.state, count: read.ui?.count, matched: read.source !== null,
+      neutral: read.ui?.neutral, captureLoss: read.captureLoss};
+  }, {timeout: PROJECT_TRANSITION_TIMEOUT_MS}).toEqual({state, count, matched: true,
+    neutral: state !== "playing", captureLoss: 0});
+  const read = await replayEventWitness(page);
+  expect(read.ui.cursor).toBeGreaterThanOrEqual(0);expect(read.ui.cursor).toBeLessThanOrEqual(count);
+  expect(read.ui.text).toBe(`${read.ui.cursor} / ${count} events`);
+  return read;
+}
+
 async function expectLocalAudioFrames(page, frames, sampleRate = 48_000) {
   const output = page.getByRole("status", {name: "Local WAV audio", exact: true});
   await expect(output).toHaveAttribute("data-frames", String(frames));
@@ -786,7 +850,7 @@ async function expectRevisionAfter(page, before) {
   return projectRevision(page);
 }
 
-async function savePerformanceWithBusyRetry(page, name) {
+async function savePerformanceWithBusyRetry(page, name, {allowPendingWavBind = false} = {}) {
   await showPerformPage(page, "Takes");
   const nameField = page.getByRole("textbox", {name: "Performance name"});
   const save = page.getByRole("button", {name: "Save Performance"});
@@ -795,6 +859,12 @@ async function savePerformanceWithBusyRetry(page, name) {
   const busy = alert.filter({
     hasText: /Project is busy.*retry Save Performance/i,
   });
+  const before = allowPendingWavBind ? await projectRevision(page) : null;
+  const pendingRecording = allowPendingWavBind ? await page.evaluate(() =>
+    window.lmdjWebRuntimeHost.session.queryPerformanceRecordingStatus()) : null;
+  if (pendingRecording !== null) {
+    expect(pendingRecording.state).toBe("stopped");expect(pendingRecording.performanceId).not.toBeNull();
+  }
   await nameField.fill(name);
   for (let attempt = 0; attempt < 5; attempt += 1) {
     await expect(save).toBeEnabled();
@@ -804,6 +874,17 @@ async function savePerformanceWithBusyRetry(page, name) {
     }));
     const outcome = async () => {
       if (await saved.isVisible()) return "saved";
+      if (allowPendingWavBind) {
+        const confirmed = page.getByRole("status", {name: "Performance save confirmation"});
+        if (await confirmed.isVisible() && await page.getByRole("button", {name: "Retry WAV bind"}).isVisible() &&
+            await page.getByRole("status", {name: "WAV binding status"}).textContent() === "retry") {
+          expect(await confirmed.getAttribute("data-performance-id")).toBe(pendingRecording.performanceId);
+          expect(await confirmed.getAttribute("data-confirmation-source")).toBe("save");
+          expect(Number(await confirmed.getAttribute("data-project-revision"))).toBeGreaterThan(before);
+          await expect(confirmed).toHaveText("Performance saved");
+          return "saved-pending-bind";
+        }
+      }
       const stopped = await save.count() > 0 && await save.isEnabled();
       const idle = await page.getByRole("button", {name: "Record Performance", exact: true}).count() === 1;
       if (stopped || idle) {
@@ -820,6 +901,7 @@ async function savePerformanceWithBusyRetry(page, name) {
     await expect.poll(outcome, {timeout: PROJECT_TRANSITION_TIMEOUT_MS})
       .not.toBe("pending");
     const settled = await outcome();
+    if (settled === "saved-pending-bind") return;
     if (settled === "saved") {
       await expect(saved).toBeVisible();
       return;
@@ -998,7 +1080,7 @@ async function replacePadSample(page) {
 
 async function recordShortPerformance(
   page,
-  {name = "Night Set", withFx = false, tailMs = 0} = {},
+  {name = "Night Set", withFx = false, tailMs = 0, allowPendingWavBind = false} = {},
 ) {
   const recordingStatus = await beginRecording(page);
   const pad = page.getByRole("button", {name: /^Pad A01\b/});
@@ -1058,7 +1140,7 @@ async function recordShortPerformance(
     });
   }
   await stopRecording(page);
-  await savePerformanceWithBusyRetry(page, name);
+  await savePerformanceWithBusyRetry(page, name, {allowPendingWavBind});
 }
 
 test("Perform Launch selects while stopped and queues, withdraws and applies without Performance recording", async ({page, browserName}, testInfo) => {
@@ -1863,6 +1945,41 @@ test("discard deletes its temporary WAV and owner-loss recovery applies or disca
       .toContainText(/applied.*closed.*Pad/i);
     await expect(applyingPage.getByRole("button", {name: "Replay Untitled Performance"}))
       .toBeVisible();
+    const stoppedDraft = applyingPage.getByRole("region", {name: "Stopped Performance draft"});
+    await expect(stoppedDraft).toContainText("Not saved yet");
+    const recoveredId = await stoppedDraft.getAttribute("data-performance-id");
+    const recovered = await applyingPage.evaluate(id =>
+      window.lmdjWebRuntimeHost.session.inspectPerformance(id), recoveredId);
+    expect(recovered.events.length).toBeGreaterThan(0);expect(recovered.recordingArtifact).toBeNull();
+    // A fresh Session reconstructs readiness from Core's stopped Journal,
+    // rather than remembering that this Host previously clicked Apply.
+    await applyingPage.reload();await openLocalProject(applyingPage);await activateAudio(applyingPage);
+    await openPerform(applyingPage);await showPerformPage(applyingPage, "Replay");
+    await expect(stoppedDraft).toBeVisible();
+    const reopenedDraft = await applyingPage.evaluate(id =>
+      window.lmdjWebRuntimeHost.session.inspectPerformance(id), recoveredId);
+    expect(reopenedDraft.events).toEqual(recovered.events);
+    expect(reopenedDraft.recordingArtifact).toEqual(recovered.recordingArtifact);
+    await stoppedDraft.getByRole("button", {name: "Replay Untitled Performance"}).click();
+    await expect(applyingPage.getByRole("status", {name: "Replay status"}))
+      .toContainText(/complete.*neutral/, {timeout: PROJECT_TRANSITION_TIMEOUT_MS});
+    await stoppedDraft.getByRole("button", {name: "Save stopped recording"}).click();
+    await expect(stoppedDraft).toHaveCount(0);
+    await expect(applyingPage.getByRole("button", {name: "Replay Untitled Performance"})).toBeVisible();
+    const savedRecovered = await applyingPage.evaluate(async id => {
+      const session = window.lmdjWebRuntimeHost.session;
+      return {inspected: await session.inspectPerformance(id), recovery: await session.listPerformanceRecovery(),
+        status: await session.queryPerformanceRecordingStatus()};
+    }, recoveredId);
+    expect(savedRecovered.inspected.events).toEqual(recovered.events);
+    expect(savedRecovered.inspected.recordingArtifact).toBeNull();
+    expect(savedRecovered.recovery).toEqual([]);expect(savedRecovered.status.state).toBe("idle");
+    await applyingPage.reload();await openLocalProject(applyingPage);await activateAudio(applyingPage);
+    await openPerform(applyingPage);await showPerformPage(applyingPage, "Replay");
+    await expect(stoppedDraft).toHaveCount(0);
+    await expect(applyingPage.getByRole("button", {name: "Replay Untitled Performance"})).toBeVisible();
+    expect((await applyingPage.evaluate(id => window.lmdjWebRuntimeHost.session.inspectPerformance(id), recoveredId)).events)
+      .toEqual(recovered.events);
   } finally {
     await ownerProcess?.kill().catch(() => {});
     await applyingProcess?.kill().catch(() => {});
@@ -1899,6 +2016,18 @@ test("discard deletes its temporary WAV and owner-loss recovery applies or disca
     await expect(discardingPage.getByRole("status", {name: "Performance recovery status"}))
       .toContainText("discarded");
     expect(await projectRevision(discardingPage)).toBe(beforeDiscard);
+    const draft = discardingPage.getByRole("region", {name: "Stopped Performance draft"});
+    await expect(draft).toBeVisible();
+    const draftId = await draft.getAttribute("data-performance-id");
+    await draft.getByRole("button", {name: "Discard stopped recording"}).click();
+    await expect(draft).toHaveCount(0);
+    const discarded = await discardingPage.evaluate(async () => {
+      const session = window.lmdjWebRuntimeHost.session;
+      return {performances: await session.listPerformances(), recovery: await session.listPerformanceRecovery(),
+        status: await session.queryPerformanceRecordingStatus()};
+    });
+    expect(discarded.performances.some(value => value.performanceId === draftId)).toBe(false);
+    expect(discarded.recovery).toEqual([]);expect(discarded.status.state).toBe("idle");
   } finally {
     await discardOwnerProcess?.kill().catch(() => {});
     await discardingProcess?.kill().catch(() => {});
@@ -1949,13 +2078,16 @@ test("a retryable WAV bind keeps the real Store receipt path and removes the tem
   test.setTimeout(240_000);
   await importActivateAndPerform(page, "bind-retry");
   const baselineWavs = await opfsWavFiles(page);
-  await recordShortPerformance(page, {name: "Retry Set"});
+  await recordShortPerformance(page, {name: "Retry Set", allowPendingWavBind: true});
 
   await expect(page.getByRole("alert")).toContainText("The recording could not be saved into the Project. Choose Retry WAV bind.");
   expect((await opfsWavFiles(page)).length).toBeGreaterThan(baselineWavs.length);
   const revision = await projectRevision(page);
   await showPerformPage(page, "Takes");
-  const retainedWav = parsePcm16StereoWav(await exportPerformanceWav(page));
+  const confirmedId = await page.getByRole("status", {name: "Performance save confirmation"})
+    .getAttribute("data-performance-id");
+  const retainedBytes = await exportPerformanceWav(page);
+  const retainedWav = parsePcm16StereoWav(retainedBytes);
   await expectLocalAudioFrames(page, retainedWav.frames);
   await page.getByRole("button", {name: "Retry WAV bind"}).click();
   await expect(page.getByRole("status", {name: "WAV binding status"}))
@@ -1965,6 +2097,17 @@ test("a retryable WAV bind keeps the real Store receipt path and removes the tem
   await expect.poll(async () => (await opfsWavFiles(page)).filter(
     ({path}) => !/[0-9a-f]{64}\.wav$/.test(path),
   )).toEqual([]);
+  await showPerformPage(page, "Replay");
+  await expect(page.getByRole("button", {name: "Replay Retry Set", exact: true})).toBeVisible();
+  const bound = await page.evaluate(id => window.lmdjWebRuntimeHost.session.inspectPerformance(id), confirmedId);
+  expect(bound.recordingArtifact).toEqual({sha256: sha256(retainedBytes), mediaType: "audio/wav",
+    byteLength: retainedBytes.byteLength});
+  await page.reload();await openLocalProject(page);await activateAudio(page);await openPerform(page);
+  await showPerformPage(page, "Replay");
+  await expect(page.getByRole("button", {name: "Replay Retry Set", exact: true})).toBeVisible();
+  const reopened = await page.evaluate(id => window.lmdjWebRuntimeHost.session.inspectPerformance(id), confirmedId);
+  expect(reopened.events).toEqual(bound.events);
+  expect(reopened.recordingArtifact).toEqual(bound.recordingArtifact);
 });
 
 test("an active recording receives an empty-slot acknowledgement and interruption closes the same capture", async ({page, browserName}) => {
@@ -3261,4 +3404,169 @@ test("Takes verifies saved WAV audio including thirty minutes across two reopens
   const path = info.outputPath("saved-take-audio-two-reopens.json");
   await writeFile(path, JSON.stringify({seeded, reports, geometry}, null, 2));
   await info.attach("saved Take WAV audio and physical readback", {path, contentType: "application/json"});
+});
+
+test("Replay event progress follows real receipts, completion, reopen and Stop across six viewports", async ({page, browserName}, info) => {
+  test.skip(browserName !== "chromium");
+  test.setTimeout(300_000);
+  await observeReplayTraffic(page);
+  const candidate = await importActivateAndPerform(page);
+  const name = "Evening take - live pads, Filter and HOLD ".padEnd(64, "x");
+  expect(Array.from(name)).toHaveLength(64);
+  await recordShortPerformance(page, {name, withFx: true, tailMs: 6_000});
+  let saved;
+  try {
+    saved = await page.evaluate(async name => {
+      const session = window.lmdjWebRuntimeHost.session;
+      const summary = (await session.listPerformances()).find(value => value.name === name);
+      if (summary === undefined) throw new Error("The real saved Take is missing");
+      return {summary, inspected: await session.inspectPerformance(summary.performanceId)};
+    }, name);
+  } catch (error) {
+    const diagnostic = info.outputPath("replay-performance-inspect-failure.json");
+    await writeFile(diagnostic, JSON.stringify(await page.evaluate(() => ({
+      wire: window.__replayWire, captureLoss: window.__replayCaptureLoss,
+    })), null, 2));
+    await info.attach("actual Performance inspect failure", {path: diagnostic, contentType: "application/json"});
+    throw error;
+  }
+  expect(saved.summary.eventCount).toBeGreaterThan(4);
+  expect(saved.inspected.events).toHaveLength(saved.summary.eventCount);
+  expect(saved.summary.recordingArtifact.mediaType).toBe("audio/wav");
+  await showPerformPage(page, "Replay");
+  const replayButton = page.getByRole("button", {name: `Replay ${name}`, exact: true});
+  await expect(replayButton).toBeEnabled();
+  await expect(page.getByRole("status", {name: "Take WAV audio"})).toHaveCount(0);
+  await replayButton.click();
+  const playing = await expectReplayEvents(page, "playing", saved.summary.eventCount);
+  await expect(replayButton).toBeDisabled();
+  const begin = playing.wire.find(({request}) => request.operation === "performance.replay.begin");
+  expect(begin.response.ok).toBe(true);
+  expect(begin.response.result.event_cursor).toBe(0);
+  expect(begin.response.result.event_count).toBe(saved.summary.eventCount);
+  let progressing;
+  await expect.poll(async () => {
+    progressing = await replayEventWitness(page);
+    return {state: progressing.ui?.state,
+      advancing: progressing.ui?.cursor > 0 && progressing.ui.cursor < saved.summary.eventCount,
+      matched: progressing.source !== null, neutral: progressing.ui?.neutral,
+      captureLoss: progressing.captureLoss};
+  }, {timeout: PROJECT_TRANSITION_TIMEOUT_MS}).toEqual({state: "playing", advancing: true,
+    matched: true, neutral: false, captureLoss: 0});
+  expect(progressing.ui.replayId).toBe(playing.ui.replayId);
+  const completed = await expectReplayEvents(page, "complete", saved.summary.eventCount);
+  expect(completed.ui.cursor).toBe(saved.summary.eventCount);
+  expect(completed.wire.filter(({request}) => request.operation === "performance.replay.stop")).toEqual([]);
+  await expect(page.getByRole("button", {name: "Stop Replay"})).toBeDisabled();
+
+  const journeyViewport = page.viewportSize(), geometry = [];
+  for (const viewport of [{width: 1440, height: 900}, {width: 1280, height: 720},
+    {width: 1024, height: 768}, {width: 820, height: 1180}, {width: 768, height: 1024}, {width: 390, height: 844}]) {
+    await page.setViewportSize(viewport);
+    await page.waitForFunction(({width, height}) => innerWidth === width && innerHeight === height, viewport);
+    await page.evaluate(() => new Promise(resolve => requestAnimationFrame(resolve)));
+    const surface = page.locator('.perform-surface[data-page="replay"]');
+    const targets = surface.locator('button,input,select,summary');
+    const hits = [];
+    for (let n = 0; n < await targets.count(); n++) {
+      const target = targets.nth(n);if (!await target.isVisible()) continue;
+      await target.scrollIntoViewIfNeeded();
+      const hit = await target.evaluate(node => {
+        const b = node.getBoundingClientRect(), touch = node.closest('[data-testid="touch-workspace"]').getBoundingClientRect();
+        return {name: node.getAttribute("aria-label") ?? node.textContent,
+          width: b.width, height: b.height,
+          contained: b.x >= touch.x-1 && b.y >= touch.y-1 && b.right <= touch.right+1 && b.bottom <= touch.bottom+1,
+          hit: node.contains(document.elementFromPoint(b.x+b.width/2, b.y+b.height/2))};
+      });
+      expect(hit.width, JSON.stringify({viewport, hit})).toBeGreaterThanOrEqual(43.5);
+      expect(hit.height, JSON.stringify({viewport, hit})).toBeGreaterThanOrEqual(43.5);
+      expect(hit.contained, JSON.stringify({viewport, hit})).toBe(true);expect(hit.hit).toBe(true);
+      hits.push(hit);
+    }
+    const text = await surface.evaluate(root => [...root.querySelectorAll('h2,h3,dt,dd,[aria-label="Replay events"],.perform-replay-status-card p')]
+      .map(node => ({text: node.textContent, width: node.clientWidth, scroll: node.scrollWidth})));
+    for (const value of text) expect(value.scroll, JSON.stringify({viewport, value})).toBeLessThanOrEqual(value.width+1);
+    const scrollers = await surface.evaluate(root => [...root.querySelectorAll('*')].filter(node =>
+      ['auto', 'scroll'].includes(getComputedStyle(node).overflowY) && node.scrollHeight > node.clientHeight+1).length);
+    expect(scrollers).toBe(0);
+    geometry.push({viewport, hits, text, scrollers});
+    for (const [kind, locator] of [["take", replayButton], ["status", page.getByRole("region", {name: "Replay event readout"})]]) {
+      if (kind === "take") {
+        await surface.evaluate(node => {node.closest('[data-testid="touch-workspace"]').scrollTop = 0;});
+        await page.evaluate(() => new Promise(resolve => requestAnimationFrame(resolve)));
+        const heading = surface.locator('.perform-replay-take h3');
+        const frame = await heading.evaluate(async node => {
+          const b = node.getBoundingClientRect();
+          const touch = node.closest('[data-testid="touch-workspace"]').getBoundingClientRect();
+          const observer = await new Promise(resolve => {
+            const observer = new IntersectionObserver(([entry]) => {
+              observer.disconnect();resolve({ratio: entry.intersectionRatio,
+                bounds: entry.boundingClientRect.toJSON(), intersection: entry.intersectionRect.toJSON()});
+            });
+            observer.observe(node);
+          });
+          const dx = Math.min(.5, b.width / 2), dy = Math.min(.5, b.height / 2);
+          const points = [[b.left+dx,b.top+dy], [b.right-dx,b.top+dy],
+            [b.left+dx,b.bottom-dy], [b.right-dx,b.bottom-dy], [b.x+b.width/2,b.y+b.height/2]];
+          return {bounds: b.toJSON(), touch: touch.toJSON(), observer,
+            contained: b.width > 0 && b.height > 0 && b.left >= Math.max(0,touch.left) &&
+              b.top >= Math.max(0,touch.top) && b.right <= Math.min(innerWidth,touch.right) &&
+              b.bottom <= Math.min(innerHeight,touch.bottom),
+            unobscured: points.every(([x,y]) => node.contains(document.elementFromPoint(x,y)))};
+        });
+        expect(frame.contained, JSON.stringify({viewport,frame})).toBe(true);
+        expect(frame.unobscured, JSON.stringify({viewport,frame})).toBe(true);
+        geometry.at(-1).takeHeading = frame;
+      } else await locator.scrollIntoViewIfNeeded();
+      const path = info.outputPath(`replay-${kind}-${viewport.width}x${viewport.height}.png`);
+      await page.screenshot({path});await info.attach(`Replay ${kind} ${viewport.width}`, {path, contentType: "image/png"});
+    }
+  }
+  await page.setViewportSize(journeyViewport);
+  await page.waitForFunction(({width, height}) => innerWidth === width && innerHeight === height, journeyViewport);
+  await page.evaluate(() => new Promise(resolve => requestAnimationFrame(resolve)));
+
+  await page.reload();await openLocalProject(page);await activateAudio(page);await openPerform(page);
+  await showPerformPage(page, "Replay");
+  const reopened = await page.evaluate(async id => window.lmdjWebRuntimeHost.session.inspectPerformance(id), saved.summary.performanceId);
+  expect(reopened.events).toEqual(saved.inspected.events);
+  expect(reopened.recordingArtifact).toEqual(saved.inspected.recordingArtifact);
+  await page.getByRole("button", {name: `Replay ${name}`, exact: true}).click();
+  const reopenedPlaying = await expectReplayEvents(page, "playing", saved.summary.eventCount);
+  await page.getByRole("button", {name: "Stop Replay"}).click();
+  const stopped = await expectReplayEvents(page, "stopped", saved.summary.eventCount);
+  expect(stopped.ui.replayId).toBe(reopenedPlaying.ui.replayId);
+  expect(stopped.wire.some(({request, response}) => request.operation === "performance.replay.stop" &&
+    response.ok && response.result.state === "stopped")).toBe(true);
+
+  // A genuine empty Performance goes through public begin/stop/save, then a
+  // fresh session. It has no Host capture/WAV and cannot supply an audio clock.
+  const empty = await page.evaluate(async () => {
+    const {session, inspection} = window.lmdjWebRuntimeHost;
+    const before = await inspection.inspectProject();
+    const live = await session.queryPerformanceLiveStatus();
+    if (!live.available) throw new Error("Current live-control owner is unavailable");
+    const sessionId = crypto.randomUUID(), performanceId = crypto.randomUUID();
+    await session.beginPerformanceRecording({sessionId, performanceId,
+      expectedRevision: before.project_revision, controlEpoch: live.controlEpoch});
+    await session.stopPerformanceRecording({sessionId, requestId: crypto.randomUUID()});
+    const current = await inspection.inspectProject();
+    await session.savePerformance({performanceId, expectedRevision: current.project_revision,
+      name: "Empty event Take", recordingArtifact: null});
+    const inspected = await session.inspectPerformance(performanceId);
+    await session.close();
+    return {inspected, retired: await session.waitForTerminalCleanup()};
+  });
+  expect(empty.retired).toBe(true);expect(empty.inspected.events).toEqual([]);
+  expect(empty.inspected.recordingArtifact).toBeNull();
+  await page.reload();await openLocalProject(page);await activateAudio(page);await openPerform(page);
+  await showPerformPage(page, "Replay");
+  await page.getByRole("button", {name: "Replay Empty event Take", exact: true}).click();
+  const emptyComplete = await expectReplayEvents(page, "complete", 0);
+  await expect(page.getByRole("progressbar", {name: "Replay event progress"})).toHaveCount(0);
+  await expect(page.getByRole("status", {name: "Replay events"})).toHaveText("0 / 0 events");
+  const path = info.outputPath("replay-event-progress-receipts.json");
+  await writeFile(path, JSON.stringify({distribution: candidate.candidateManifest, saved, playing, progressing, completed,
+    geometry, reopened, reopenedPlaying, stopped, empty, emptyComplete}, null, 2));
+  await info.attach("Replay actual receipts and six viewport readback", {path, contentType: "application/json"});
 });
