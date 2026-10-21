@@ -10,6 +10,7 @@ import type {
   PerformanceMasterCaptureStatus,
   PerformanceRawEvent,
   PerformanceRecordStatus,
+  PerformanceRecordingMetadata,
   PerformanceReplayStatus,
 } from "@lmdj/web-runtime-platform/runtime_types";
 
@@ -28,7 +29,7 @@ import {
   type WavWriterSnapshot,
   type WavWriterFormat,
 } from "../record/wav_stream_writer";
-import type {CreatorPerformanceRuntimeSession} from "../runtime/runtime_types";
+import type {CreatorPerformanceRuntimeSession, ProjectView} from "../runtime/runtime_types";
 import {selectCanTrigger, type Bank, type CreatorState} from "./creator_state";
 import {slotAddress} from "./view_model";
 
@@ -48,6 +49,26 @@ export interface PerformanceSummary {
   }> | null;
   readonly eventCount: number;
 }
+
+export function sameRecordingArtifact(a: PerformanceSummary["recordingArtifact"],
+  b: PerformanceSummary["recordingArtifact"]): boolean {
+  return a === null || b === null ? a === b
+    : a.sha256 === b.sha256 && a.mediaType === b.mediaType && a.byteLength === b.byteLength;
+}
+
+// A Creator owner object changes even when the same Project/revision reopens.
+// This is a transient view receipt, never persisted Project Truth.
+export type TakeAudioState = Readonly<{
+  owner: ProjectView;
+  performanceId: string;
+  artifact: PerformanceSummary["recordingArtifact"];
+}> & (Readonly<{
+  state: "reading" | "no-wav" | "damaged" | "unavailable";
+  metadata: null;
+}> | Readonly<{
+  state: "verified" | "unsupported";
+  metadata: PerformanceRecordingMetadata;
+}>);
 
 export interface PerformanceRecoverySummary {
   readonly sessionId: string;
@@ -217,6 +238,10 @@ export interface PerformState {
   readonly legacyFilterGesture: boolean;
   readonly padGates: LivePadGates;
   readonly performances: readonly PerformanceSummary[];
+  readonly performancesOwner: ProjectView | null;
+  readonly performancesStatus: "unloaded" | "loading" | "ready" | "unavailable";
+  readonly performanceDraftIds: readonly string[];
+  readonly takeAudio: TakeAudioState | null;
   readonly recovery: readonly PerformanceRecoverySummary[];
   readonly recoveryLoaded: boolean;
   readonly replay: PerformanceReplayStatus | null;
@@ -243,7 +268,11 @@ export type PerformAction =
   | {readonly type: "live-status"; readonly status: PerformanceLiveStatus}
   | {readonly type: "pad-gates-pending"}
   | {readonly type: "hold"; readonly value: boolean}
-  | {readonly type: "performances"; readonly values: readonly PerformanceSummary[]}
+  | {readonly type: "performances"; readonly values: readonly PerformanceSummary[];
+      readonly owner: ProjectView; readonly drafts: readonly string[]}
+  | {readonly type: "take-audio"; readonly value: TakeAudioState | null}
+  | {readonly type: "performance-list-status"; readonly owner: ProjectView;
+      readonly status: "loading" | "unavailable"}
   | {readonly type: "recovery"; readonly values: readonly PerformanceRecoverySummary[]}
   | {readonly type: "recovery-checking"}
   | {readonly type: "replay"; readonly replay: PerformanceReplayStatus | null}
@@ -286,6 +315,10 @@ export function initialPerformState(
     legacyFilterGesture: false,
     padGates: PAD_GATES_UNAVAILABLE,
     performances: Object.freeze([]),
+    performancesOwner: null,
+    performancesStatus: "unloaded",
+    performanceDraftIds: Object.freeze([]),
+    takeAudio: null,
     recovery: Object.freeze([]),
     recoveryLoaded: false,
     replay: null,
@@ -368,7 +401,12 @@ export function reducePerform(state: PerformState, action: PerformAction): Perfo
       padGates: Object.freeze({...state.padGates, provenance: "pending"})});
     case "hold": return Object.freeze({...state, hold: action.value});
     case "performances": return Object.freeze({...state,
-      performances: Object.freeze([...action.values])});
+      performances: Object.freeze([...action.values]), performancesOwner: action.owner,
+      performancesStatus: "ready", performanceDraftIds: Object.freeze([...action.drafts])});
+    case "performance-list-status": return Object.freeze({...state,
+      performances: Object.freeze([]), performancesOwner: action.owner,
+      performancesStatus: action.status, performanceDraftIds: Object.freeze([])});
+    case "take-audio": return Object.freeze({...state, takeAudio: action.value});
     case "recovery": return Object.freeze({...state,
       recovery: Object.freeze([...action.values]), recoveryLoaded: true});
     case "recovery-checking": return Object.freeze({...state, recoveryLoaded: false});
@@ -599,6 +637,8 @@ export interface PerformController {
   launchPattern(patternSlot: number): Promise<void>;
   refreshAuthority(): Promise<void>;
   refreshPerformances(): Promise<void>;
+  inspectTakeAudio(performanceId: string): Promise<void>;
+  clearTakeAudio(): void;
   refreshRecovery(): Promise<void>;
   applyRecovery(sessionId: string): Promise<void>;
   discardRecovery(sessionId: string): Promise<void>;
@@ -655,6 +695,8 @@ export function createPerformController(options: PerformControllerOptions): Perf
   let stopPromise: Promise<void> | null = null;
   let finalizationPromise: Promise<void> | null = null;
   let projectMutationTail: Promise<void> = Promise.resolve();
+  let performanceHeaderReads: Promise<void> = Promise.resolve();
+  let managedWavBinding: Promise<void> = Promise.resolve();
   let saveCommitted = false;
   let saveOutcomeUnknown = false;
   let savedName: string | null = null;
@@ -694,11 +736,21 @@ export function createPerformController(options: PerformControllerOptions): Perf
   // a Host-local gesture id is not a Core identity).
   const legacyPinnedFx = new Set<PerformanceFx>();
   let closed = false;
+  const projectId = options.getCreatorState().project.current?.projectId;
+  let performanceListGeneration = 0;
+  let takeAudioGeneration = 0;
+  let takeAudioAbort: AbortController | null = null;
   const listeners = new Set<() => void>();
 
   const dispatch = (action: PerformAction) => {
     state = reducePerform(state, action);
     for (const listener of listeners) listener();
+  };
+  const retireTakeAudio = () => {
+    takeAudioGeneration += 1;
+    takeAudioAbort?.abort();
+    takeAudioAbort = null;
+    if (state.takeAudio !== null) dispatch({type: "take-audio", value: null});
   };
   const report = (error: unknown) => options.reportFailure?.("Perform", error);
   const fail = (error: unknown) => {
@@ -719,9 +771,31 @@ export function createPerformController(options: PerformControllerOptions): Perf
     return authoringRevision;
   };
   const runProjectMutation = <T,>(operation: () => Promise<T>): Promise<T> => {
+    retireTakeAudio();
     const result = projectMutationTail.then(operation);
     projectMutationTail = result.then(() => {}, () => {});
     return result;
+  };
+  const readPerformanceHeaders = () => {
+    const read = managedWavBinding.then(async () => {
+      // performance.list can recover storage and remove an unreferenced WAV.
+      // A failed bind retains that WAV for its existing owner's explicit retry.
+      if (resources !== null && !bindingCommitted && !discardCommitted &&
+          (state.bindingStatus === "binding" || state.bindingStatus === "retry")) {
+        throw new Error("Bind or discard the pending WAV before refreshing saved Takes");
+      }
+      const [values, recovery] = await Promise.allSettled([
+        session.listPerformances(), session.listPerformanceRecovery(),
+      ]);
+      if (values.status === "rejected") throw values.reason;
+      if (recovery.status === "rejected") throw recovery.reason;
+      return [values.value, recovery.value] as const;
+    });
+    // Concurrent header reads retain their own generations. A later managed
+    // install waits for every read to settle, including a rejected read's peer.
+    performanceHeaderReads = Promise.allSettled([performanceHeaderReads, read])
+      .then(() => {});
+    return read;
   };
   const mutate = <T,>(operation: () => Promise<T>): Promise<T> => {
     return runProjectMutation(async () => {
@@ -1199,7 +1273,9 @@ export function createPerformController(options: PerformControllerOptions): Perf
     dispatch({type: "binding-status", status: "binding"});
     if (!bindingCommitted) {
       try {
-        await runProjectMutation(async () => {
+        const priorReads = performanceHeaderReads;
+        const binding = runProjectMutation(async () => {
+          await priorReads;
           const receipt = await bindingResources.store.bind({
             expectedRevision: expectedProjectRevision(), performanceId,
           });
@@ -1208,6 +1284,8 @@ export function createPerformController(options: PerformControllerOptions): Perf
           settleShutdownFailure(owner, "bind", "save-projection");
           return receipt;
         });
+        managedWavBinding = binding.then(() => {}, () => {});
+        await binding;
       } catch (error) {
         rememberShutdownFailure(owner, "bind", error);
         dispatch({type: "binding-status", status: "retry"});
@@ -1296,6 +1374,8 @@ export function createPerformController(options: PerformControllerOptions): Perf
       };
     },
     leave() {
+      retireTakeAudio();
+      performanceListGeneration += 1;
       if (leavePromise !== null) return leavePromise;
       const operation = (async () => {
         // An admitted begin may already own a producer before its reply.
@@ -1324,6 +1404,8 @@ export function createPerformController(options: PerformControllerOptions): Perf
     close() {
       if (closePromise !== null) return closePromise;
       closed = true;
+      retireTakeAudio();
+      performanceListGeneration += 1;
       dispatch({type: "recording-audio", value: null});
       launchPollGeneration += 1;
       disconnectCapture?.();
@@ -2105,8 +2187,81 @@ export function createPerformController(options: PerformControllerOptions): Perf
       if (revision === controlRevision) dispatch({type: "authority", status});
     },
     async refreshPerformances() {
-      dispatch({type: "performances",
-        values: await session.listPerformances() as readonly PerformanceSummary[]});
+      retireTakeAudio();
+      const generation = ++performanceListGeneration;
+      const owner = options.getCreatorState().project.current;
+      if (closed || owner === null || owner.projectId !== projectId) return;
+      const owns = () => !closed && generation === performanceListGeneration &&
+        options.getCreatorState().project.phase === "ready" &&
+        options.getCreatorState().project.current === owner;
+      dispatch({type: "performance-list-status", owner, status: "loading"});
+      try {
+        // The public list includes begin's durable draft. A fresh recovery
+        // snapshot distinguishes pending Takes without inventing a saved flag.
+        const [values, recovery] = await readPerformanceHeaders();
+        if (owns()) dispatch({type: "performances", values: values as readonly PerformanceSummary[],
+          owner, drafts: recovery.map(value => value.performanceId)});
+      } catch (error) {
+        if (!owns()) return;
+        dispatch({type: "performance-list-status", owner, status: "unavailable"});
+        throw error;
+      }
+    },
+    clearTakeAudio: retireTakeAudio,
+    async inspectTakeAudio(performanceId) {
+      retireTakeAudio();
+      const owner = options.getCreatorState().project.current;
+      const performance = state.performances.find(value => value.performanceId === performanceId);
+      if (closed || owner === null || owner.projectId !== projectId ||
+          options.getCreatorState().project.phase !== "ready" ||
+          state.performancesOwner !== owner || performance === undefined ||
+          state.performanceDraftIds.includes(performanceId) ||
+          (state.recording.phase !== "idle" && state.recording.performanceId === performanceId)) return;
+      const artifact = performance.recordingArtifact === null ? null
+        : Object.freeze({...performance.recordingArtifact});
+      const selector = {owner, performanceId, artifact};
+      if (artifact === null) {
+        dispatch({type: "take-audio", value: Object.freeze({...selector, state: "no-wav", metadata: null})});
+        return;
+      }
+      const generation = takeAudioGeneration;
+      const abort = new AbortController();
+      takeAudioAbort = abort;
+      const owns = () => !closed && generation === takeAudioGeneration && !abort.signal.aborted &&
+        options.getCreatorState().project.phase === "ready" &&
+        options.getCreatorState().project.current === owner &&
+        state.performancesOwner === owner &&
+        state.performances.some(value => value.performanceId === performanceId &&
+          sameRecordingArtifact(value.recordingArtifact, artifact));
+      dispatch({type: "take-audio", value: Object.freeze({...selector, state: "reading", metadata: null})});
+      try {
+        if (typeof session.queryPerformanceRecordingMetadata !== "function")
+          throw new Error("Recording audio metadata is unavailable");
+        const metadata = await session.queryPerformanceRecordingMetadata({
+          projectId: owner.projectId, performanceId, expectedRevision: owner.revision,
+          recordingArtifact: artifact,
+        }, {signal: abort.signal});
+        if (!owns()) return;
+        if (metadata.projectId !== owner.projectId || metadata.performanceId !== performanceId ||
+            metadata.projectRevision !== owner.revision ||
+            !sameRecordingArtifact(metadata.recordingArtifact, artifact) ||
+            (metadata.audioMetadata === null && metadata.audioError?.code !== "UNSUPPORTED_AUDIO"))
+          throw new Error("Recording audio receipt does not match the selected Take");
+        dispatch({type: "take-audio", value: Object.freeze({...selector,
+          state: metadata.audioMetadata === null ? "unsupported" : "verified", metadata})});
+      } catch (error) {
+        if (!owns()) return;
+        report(error);
+        const details = error !== null && typeof error === "object" && "details" in error
+          ? error.details : null;
+        const damaged = errorCode(error) === "COOK_FAILED" && details !== null &&
+          typeof details === "object" && "storage_condition" in details &&
+          details.storage_condition === "artifact_mismatch";
+        dispatch({type: "take-audio", value: Object.freeze({...selector,
+          state: damaged ? "damaged" : "unavailable", metadata: null})});
+      } finally {
+        if (takeAudioAbort === abort) takeAudioAbort = null;
+      }
     },
     async refreshRecovery() {
       await loadRecovery();

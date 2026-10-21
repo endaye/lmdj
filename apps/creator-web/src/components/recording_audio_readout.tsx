@@ -1,12 +1,12 @@
 import type {RecordingAudioProgress} from "../state/perform_state";
 
-function audioTime(frames: number, sampleRate: number): string {
+export function audioTime(frames: number, sampleRate: number): string {
   if (!Number.isSafeInteger(frames) || frames < 0 ||
       !Number.isSafeInteger(sampleRate) || sampleRate <= 0) return "Unavailable";
-  const milliseconds = Math.floor(frames / sampleRate * 1000);
-  const minutes = String(Math.floor(milliseconds / 60_000)).padStart(2, "0");
-  const seconds = String(Math.floor(milliseconds / 1000) % 60).padStart(2, "0");
-  const fraction = String(milliseconds % 1000).padStart(3, "0");
+  const milliseconds = BigInt(frames) * 1000n / BigInt(sampleRate);
+  const minutes = String(milliseconds / 60_000n).padStart(2, "0");
+  const seconds = String(milliseconds / 1000n % 60n).padStart(2, "0");
+  const fraction = String(milliseconds % 1000n).padStart(3, "0");
   return `${minutes}:${seconds}.${fraction}`;
 }
 

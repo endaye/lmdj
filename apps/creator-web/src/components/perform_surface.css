@@ -171,3 +171,76 @@
 .hardware-workspace .perform-audio-readout output { font: inherit; color: inherit; }
 .hardware-workspace .perform-audio-readout [aria-label="Captured audio"] { color: var(--creator-rose); }
 .hardware-workspace .perform-audio-readout p { margin: 6px 0 0; font: 400 10px/14px var(--creator-font-mono); color: var(--creator-rose); }
+
+/* Figure11: stopped audio, name and explicit commit actions. Saved audio
+   checks are selected individually; none of these cards adds a scroller. */
+.hardware-workspace .perform-surface[data-page="takes"] .perform-recording,
+.hardware-workspace .perform-saved-takes {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 8px;
+  min-width: 0;
+}
+.hardware-workspace .perform-take-heading {
+  margin: 0;
+  font: 500 18px/25px var(--creator-font-heading);
+  color: var(--creator-lime);
+}
+.hardware-workspace .perform-stopped-card {
+  display: grid;
+  gap: 6px;
+  padding: 12px;
+  border-radius: 7px;
+  background: var(--creator-base);
+}
+.hardware-workspace .perform-stopped-card .perform-audio-readout { padding: 0; }
+.hardware-workspace .perform-take-name {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+  padding: 12px;
+  border-radius: 7px;
+  background: var(--creator-base);
+  font: 400 10px/14px var(--creator-font-mono);
+  color: var(--creator-muted);
+}
+.hardware-workspace .perform-take-name input {
+  width: 100%;
+  box-sizing: border-box;
+  font: 500 14px/20px var(--creator-font-heading);
+  color: var(--creator-text);
+}
+.hardware-workspace .perform-take-actions {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+.hardware-workspace .perform-take-save:not(:disabled) {
+  --control-fill: var(--creator-lime);
+  --control-text: var(--creator-ink);
+}
+.hardware-workspace .perform-take-discard:not(:disabled) { color: var(--creator-rose); }
+.hardware-workspace .perform-saved-takes { padding-top: 8px; border-top: 1px solid var(--creator-line); }
+.hardware-workspace .perform-take-list { display: grid; gap: 4px; min-width: 0; }
+.hardware-workspace .perform-take-list button {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  width: 100%;
+  min-width: 0;
+  padding: 8px;
+  text-align: left;
+}
+.hardware-workspace .perform-take-list button span { min-width: 0; overflow-wrap: anywhere; }
+.hardware-workspace .perform-take-list button span:first-child { flex-shrink: 0; color: var(--creator-muted); }
+.hardware-workspace .perform-take-list button[aria-pressed="true"] {
+  --control-text: var(--creator-lime);
+  outline: 1px solid var(--creator-lime);
+  outline-offset: -1px;
+}
+.hardware-workspace .perform-take-audio dd { white-space: normal; text-align: right; overflow-wrap: anywhere; min-width: 0; }
+.hardware-workspace .perform-take-audio p { color: var(--creator-muted); }
+.hardware-workspace .perform-take-audio button { margin-top: 8px; width: 100%; }
