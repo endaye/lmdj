@@ -263,12 +263,30 @@ _DOCTORED_COMMANDS = ("run", "resume", "prepare")
 
 
 def release_doctor(root: Path):
-    """The read-only host preflight bound to this repository's policy and journal."""
-    policy = load_policy(root / "tools/release/policy.json")
+    """The read-only host preflight bound to this repository's policy and journal.
+
+    Its own inputs are reported the same way as every other check: a checkout
+    without a readable policy or Git directory is a failed check with a
+    remedy, not a traceback.
+    """
+    from tools.release.doctor import Check
+
+    try:
+        policy = load_policy(root / "tools/release/policy.json")
+    except (OSError, ReleaseModelError) as error:
+        return [Check("release policy", "fail",
+                      f"tools/release/policy.json is unreadable here: {error}",
+                      "run from the main checkout of endaye/lmdj (scripts/release.sh "
+                      "resolves its own root) and restore tools/release/policy.json from main")]
+    try:
+        journal = release_journal_root(root, GitRepository(root))
+    except (OSError, CommandError, GitRepositoryError) as error:
+        return [Check("repository", "fail",
+                      f"{root} is not a Git checkout the release tool can read: {error}",
+                      "run from the main checkout of endaye/lmdj, not a copy or an export")]
     return run_doctor(
         root, product_fingerprint=policy.product_fingerprint,
-        checksum_fingerprint=policy.checksum_fingerprint,
-        journal_root=release_journal_root(root, GitRepository(root)))
+        checksum_fingerprint=policy.checksum_fingerprint, journal_root=journal)
 
 
 def confirm_canonical_signing_keys(context: PrepareContext):

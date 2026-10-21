@@ -105,6 +105,21 @@ class HostProbes:
                 continue
         return rows
 
+    def ancestors(self):
+        """The pids of this process's ancestors (a wrapper shell is not a second driver)."""
+        found, pid = set(), self.pid
+        for _ in range(64):
+            code, stdout, _ = self.run(["ps", "-o", "ppid=", "-p", str(pid)])
+            try:
+                parent = int(stdout.strip()) if code == 0 else 0
+            except ValueError:
+                break
+            if parent <= 1 or parent in found:
+                break
+            found.add(parent)
+            pid = parent
+        return found
+
     def lock_free(self, path):
         """Whether the journal writer lock can be taken right now (released at once).
 
@@ -272,9 +287,13 @@ def _release_subcommand(arguments):
 
 
 def check_release_processes(probes):
+    # This process and the shells wrapping it (a `sh -c 'python3 cli.py run'`
+    # parent repeats the driving command line) are the command being started,
+    # not a second driver.
+    own = {probes.pid} | set(probes.ancestors())
     others = []
     for pid, _, command in probes.processes():
-        if pid == probes.pid:
+        if pid in own:
             continue
         arguments = _release_cli_arguments(command)
         if arguments is not None and _release_subcommand(arguments) in DRIVING_COMMANDS:
@@ -358,13 +377,21 @@ def check_runner(probes):
         pause = f"launchctl bootout gui/$(id -u)/{label}"
         resume = f"launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/{label}.plist"
         # A worker belongs to this service when it runs from the service's own
-        # working directory (the launch agent's WorkingDirectory); without a
-        # readable agent definition any worker counts, conservatively.
+        # directory: the launch agent's WorkingDirectory, else the directory of
+        # its program (runsvc.sh sits in the runner root). Without a readable
+        # agent definition any worker counts, conservatively.
         workdir = None
         try:
             agent = plistlib.loads(probes.read_text(
                 probes.home / "Library/LaunchAgents" / f"{label}.plist").encode("utf-8"))
-            workdir = agent.get("WorkingDirectory") if isinstance(agent, dict) else None
+            if isinstance(agent, dict):
+                workdir = agent.get("WorkingDirectory")
+                program = agent.get("ProgramArguments")
+                if not isinstance(workdir, str) and isinstance(program, list) \
+                        and program and isinstance(program[0], str):
+                    workdir = str(Path(program[0]).parent)
+                if not isinstance(workdir, str):
+                    workdir = None
         except (OSError, ValueError, plistlib.InvalidFileException, UnicodeError):
             workdir = None
         busy = any(workdir is None or command.startswith(workdir.rstrip("/") + "/")

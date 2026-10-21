@@ -59,6 +59,7 @@ class Probes:
         self.free = 100 * 1024 ** 3
         self.load, self.cpus = 2.0, 8
         self.rows = []
+        self.ancestor_pids = set()
         self.locks_free = True
         self.asked = []
 
@@ -90,6 +91,9 @@ class Probes:
 
     def lock_free(self, path):
         return self.locks_free
+
+    def ancestors(self):
+        return set(self.ancestor_pids)
 
     # fixture helpers
     def install_emsdk(self, sdk, *, head=REVISION, mapped=RELEASES, installed=TAG):
@@ -221,6 +225,11 @@ class DoctorChecksTest(unittest.TestCase):
                 check = check_release_processes(self.probes)
                 self.assertFails(check, detail=f"9 ({arguments})", remedy="kill <pid>")
                 self.probes.rows.pop()
+        # A wrapper shell above this process repeats the command being started.
+        self.probes.rows.append((3, 0.0, "sh -c python3 /repo/tools/release/cli.py --repo-root /repo run --authority x"))
+        self.assertEqual(check_release_processes(self.probes).status, "fail")
+        self.probes.ancestor_pids = {3}
+        self.assertEqual(check_release_processes(self.probes).status, "ok")
 
     # disk and load
     def test_disk_and_load_thresholds_name_what_to_free_and_stop(self):
@@ -270,6 +279,13 @@ class DoctorChecksTest(unittest.TestCase):
         self.probes.rows = [(90, 50.0, "/Users/x/actions-runner/lmdj/bin/Runner.Worker spawnclient 1 2")]
         busy = check_runner(self.probes)
         self.assertFails(busy, detail="executing a CI job", remedy=f"launchctl bootout gui/$(id -u)/{label}")
+        # An agent without WorkingDirectory is located by its program's directory.
+        self.probes.files[str(self.probes.home / "Library/LaunchAgents" / f"{label}.plist")] = plistlib.dumps(
+            {"Label": label, "ProgramArguments": ["/Users/x/actions-runner/lmdj/runsvc.sh"]}).decode()
+        self.probes.rows = [(90, 50.0, "/Users/x/actions-runner/other/bin/Runner.Worker spawnclient 1 2")]
+        self.assertEqual(check_runner(self.probes).status, "ok")
+        self.probes.rows = [(90, 50.0, "/Users/x/actions-runner/lmdj/bin/Runner.Worker spawnclient 1 2")]
+        self.assertEqual(check_runner(self.probes).status, "fail")
         # Without a readable agent definition any worker counts, conservatively.
         del self.probes.files[str(self.probes.home / "Library/LaunchAgents" / f"{label}.plist")]
         self.probes.rows = [(90, 50.0, "/Users/x/actions-runner/other/bin/Runner.Worker spawnclient 1 2")]
@@ -342,6 +358,16 @@ class HostProbesTest(unittest.TestCase):
             finally:
                 os.close(fd)
             self.assertTrue(probes.lock_free(lock))
+
+    def test_ancestors_walks_the_parent_chain_and_excludes_init(self):
+        class Fake(HostProbes):
+            parents = {100: 50, 50: 7, 7: 1}
+
+            def run(self, argv, *, env=None):
+                return 0, f"{self.parents.get(int(argv[-1]), 0)}\n", ""
+        probes = Fake()
+        probes.pid = 100
+        self.assertEqual(probes.ancestors(), {50, 7})
 
     def test_processes_parses_ps_rows_and_tolerates_a_failed_ps(self):
         class Fake(HostProbes):

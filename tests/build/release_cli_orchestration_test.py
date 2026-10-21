@@ -862,6 +862,15 @@ class ReleaseEntryPointTest(unittest.TestCase):
                 if expected:
                     self.assertIn("remedy: stop heavy work", output.getvalue())
 
+    def test_release_doctor_reports_its_own_unreadable_inputs_as_checks(self):
+        # No policy in this checkout: a failed check with a remedy, not a traceback.
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output), contextlib.redirect_stderr(output):
+            self.assertEqual(cli.main(["--repo-root", str(self.root), "doctor"]), 2)
+        self.assertIn("[fail] release policy: tools/release/policy.json is unreadable here", output.getvalue())
+        self.assertIn("remedy: run from the main checkout", output.getvalue())
+        self.assertNotIn("release verification error", output.getvalue())
+
     def test_release_doctor_binds_the_policy_keys_and_the_journal_root(self):
         policy_dir = self.root / "tools/release"
         shutil.copy(ROOT / "tools/release/policy.json", policy_dir / "policy.json")
