@@ -17,7 +17,8 @@ export function RecordingAudioReadout({progress}: {
   const capture = progress.capture;
   const wav = progress.wav;
   const prefix = wav !== null && (wav.snapshot.droppedFrames > 0 ||
-    (wav.snapshot.reason !== null && wav.snapshot.reason !== "stopped"));
+    (wav.snapshot.reason !== null && wav.snapshot.reason !== "stopped" &&
+      wav.snapshot.reason !== "frame-limit"));
   const unknownLoss = progress.tapLoss === null && (prefix ||
     (capture.state === "available" && capture.phase === "failed"));
   return <section className="perform-audio-readout" aria-label="Recording audio readout"

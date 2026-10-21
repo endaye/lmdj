@@ -251,7 +251,7 @@ Stage 10 在 mode rail 上新增 Perform 入口（`project` / `sample` / `sequen
 Live／Takes 的录音卡区分 **Captured audio** 与 **Local WAV**：前者只按同一已确认
 capture 的真实接收帧数和实际采样率显示 `mm:ss.mmm`，静音计入，回调延迟不补时。
 后者使用 WAV writer 自己编码的格式与已完成 checkpoint/seal 的 durableFrames；写入
-仍待关闭时不提前增长。正常 Stop 包含最后 partial batch，失败显示 Local WAV prefix、
+仍待关闭时不提前增长。正常 Stop 包含最后 partial batch；到达帧数上限且没有掉帧时仍显示 Local WAV。失败或已知掉帧显示 Local WAV prefix、
 已知 Dropped frames，未量化的 tap loss 另标未知。读取和卡片更新不发 I/O、RPC 或新时钟。
 
 这些是本地录音事实，不表示 Save 或 WAV bind 已成功。Save UNKNOWN／Retry WAV bind

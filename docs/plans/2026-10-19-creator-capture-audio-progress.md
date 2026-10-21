@@ -45,6 +45,25 @@ original Host/Module/Platform routes; diagram edges remain unchanged. #2135,
 authority covers commit/push/current-head review/squash; release, deployment
 and cleanup remain outside this work.
 
+## Current-head review correction
+
+The #2392 review on `2b69156c2002e81bbafc5384b18b9cfb2e53f92f`
+identified a presentation error: a normal zero-drop `frame-limit` seal was
+labelled Local WAV prefix. Existing writer tests establish both exact-limit
+zero-drop and over-limit dropped-frame receipts. Keep those limits and receipts
+unchanged. Within the existing sixteen paths, add a two-case readout regression
+that distinguishes the zero-drop label from an actual dropped-frame prefix;
+observe its failure before repairing the reason classification. Other failure
+reasons and unknown capture loss retain their existing presentation.
+
+Re-run the focused readout/writer coverage, complete Creator tests and types,
+Portal and ownership checks. The writer, controller, queue, SDK and browser
+journeys are unchanged; preserve their prior source-bound mutation/Node receipts.
+Build/package the repaired head and repeat the complete Perform/touch-fit/meter
+browser selection plus canonical WebKit boundaries. Publish a normal follow-up
+commit and obtain current-head review; keep the earlier receipt set as prior-head
+evidence. No timeout, storage limit or recording lifecycle changes.
+
 ## Premises and ownership
 
 Fresh main: `f0979f2754faca2a2b26efae8c1a411608b2bbf0`.

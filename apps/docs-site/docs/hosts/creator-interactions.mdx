@@ -640,7 +640,7 @@ SEQ SNAP 决定切 Pattern 的时机，Grid tools 的 Snap 决定网格编辑吸
 | Slots，结构编辑可用 | Pattern assignment／slot、Clear slot、Move from／to 下拉 | 在 Assign／Move／Clear 分区选择参数。Pattern 以序号区分；目标槽读数来自实际工程映射。选择、Escape 或返回 Live 都不写工程、不 Launch，切页后保留选项。 |
 | Slots，结构编辑可用 | Assign Pattern／Clear Pattern／Move Pattern | 按对应按钮才提交分配、清空或移动，并刷新工程；失败不把草稿当成已提交读数。源和目标相同时 Move 不可用。演出录制非空闲、全局 Pattern 录制及工程／transport 结算时禁用全部结构编辑；稳定普通播放可编辑，全局录制中的正常 Launch 规则不变。 |
 | Live／Takes，有当前录音 | Captured audio（只读） | 真实接收 PCM 帧数／实际 sampleRate，显示音频时长。静音也计入，没有 batch 不补数，不是完整演出 elapsed。 |
-| Live／Takes，有当前本地 WAV | Local WAV／Local WAV prefix（只读） | 使用文件实际编码格式和已落盘帧数。待 checkpoint 的数据不提前计入；Stop 等最后一批与 seal 回执。失败保留可读前缀、已知掉帧和未量化 loss 的区别。Save／绑定状态仍独立。 |
+| Live／Takes，有当前本地 WAV | Local WAV／Local WAV prefix（只读） | 使用文件实际编码格式和已落盘帧数。待 checkpoint 的数据不提前计入；Stop 等最后一批与 seal 回执。零掉帧的上限 seal 仍为 Local WAV；失败或已知掉帧保留可读前缀、已知掉帧和未量化 loss 的区别。Save／绑定状态仍独立。 |
 | 任意 | Recording details 折叠项 | 只读：WAV 录制和关联状态，以及未结束的 Pad／FX 手势数和 HOLD。 |
 | Slots，或有 Replay 的任意子页 | Project details／Replay details 折叠项 | 只读：Project 修订号，或回放状态和 Neutral FX。 |
 

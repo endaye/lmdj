@@ -13,6 +13,7 @@ import type {PatternTransportStatus, PerformanceMasterCapture, PerformanceEventR
   "@lmdj/web-runtime-platform/runtime_types";
 import {FxSliderBank} from "../src/components/fx_slider_bank";
 import {PerformSurface} from "../src/components/perform_surface";
+import {RecordingAudioReadout} from "../src/components/recording_audio_readout";
 import {PerformOverview} from "../src/components/perform_overview";
 import type {CreatorPerformanceRuntimeSession} from "../src/runtime/runtime_types";
 import {
@@ -4748,4 +4749,24 @@ test("audio facts survive Save UNKNOWN and bind retry until confirmed finalizati
   await f.controller.retryWavBind();
   expect(f.controller.getState().bindingStatus).toBe("bound");expect(f.controller.getState().recordingAudio).toBeNull();
   expect(f.save).toHaveBeenCalledTimes(1);
+});
+
+
+test.each([
+  [0, "Local WAV"],
+  [1, "Local WAV prefix"],
+] as const)("frame-limit readout with %i dropped frames uses %s", (droppedFrames, label) => {
+  render(<RecordingAudioReadout progress={{
+    sessionId: ids.session,
+    performanceId: ids.performance,
+    capture: {state: "available", captureId: "60000000-0000-4000-8000-000000000001",
+      generation: 1, binding: null, sampleRate: 48_000,
+      receivedFrames: 86_400_000 + droppedFrames, phase: "stopped",
+      droppedFrames: 0, failure: null},
+    tapLoss: 0,
+    wav: {format: {sampleRate: 48_000, channels: 2}, settled: true,
+      snapshot: {state: "sealed", durableFrames: 86_400_000, byteLength: 345_600_044,
+        reason: "frame-limit", droppedFrames}},
+  }} />);
+  expect(screen.getByText(label, {selector: "dt", exact: true})).toBeTruthy();
 });
