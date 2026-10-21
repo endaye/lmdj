@@ -61,6 +61,13 @@ Creator 左栏按 2026-10-09 决策绑定旋钮，上屏持续显示当前功能
 
 Creator 在用户明确授权 Web MIDI 后监听每个可用 input，在 channels 1–16 上接受 Note On `36..51` 并保留 velocity；Note On velocity `0` 与对应 Note Off 释放 Pad，范围外 note 仍忽略。共享 Platform adapter 保留可选的单 channel filter，Creator 不启用该限制，也不按设备名称分支。
 
+矮横屏宽度至少648px、高度364–599px时，现有 System、四个旋钮与实体键重排到
+上方输入栏，Mode／Bank 在第一行，SHIFT、方向与录放键在第二行；SHIFT 保留
+双格和原 DOM／键盘顺序。Pad 矩阵移到下方左侧，上屏与单一触摸滚动区在右侧。
+实际输入框至少44px，普通硬件可见面保持32px，舞台不再整体缩小；这是布局变化，
+不新增输入映射或改写 Project Truth。浏览器几何、导航、重开与原布局之间的切换
+分别验证，仍不替代真实设备触控与音频验收。
+
 ## 生命周期
 
 普通输入只在 `running` admitted；拒绝输入不重放。Gate/Loop Gate release、Loop Toggle latch 与 Voice sequence 精确关联；blur/hidden/suspend/close 先禁 admission、清 preview、stop all，再暴露状态。恢复期只有 Context 与 generation 就绪后开启的一次真实用户 probe 例外；MIDI 断开清理状态，不合成 Trigger。
