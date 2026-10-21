@@ -1,0 +1,142 @@
+/* One outer touch scroller. Physical hit regions stay >=44px even when the
+   reference's painted faces are 24/32px. Scope above the legacy mode rules. */
+.hardware-workspace .perform-surface[data-page] {
+  --perform-control-hit: max(44px, round(up, calc(44px / var(--creator-stage-scale, 1)), 1px));
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+  overflow: visible;
+}
+.hardware-workspace .perform-surface[data-page] > * { order: 6; min-width: 0; }
+.hardware-workspace .perform-surface[data-page] > .perform-page-nav { order: 0; }
+.hardware-workspace .perform-surface[data-page] > .perform-live-header { order: 1; }
+.hardware-workspace .perform-surface[data-page] > .perform-fx { order: 2; }
+.hardware-workspace .perform-surface[data-page] > .perform-patterns { order: 3; }
+.hardware-workspace .perform-surface[data-page] > .perform-pad-gates-entry { order: 4; }
+.hardware-workspace .perform-surface[data-page] > .perform-pad-gates { order: 4; }
+.hardware-workspace .perform-surface[data-page] > .perform-recording { order: 5; }
+.hardware-workspace .perform-surface[data-page] :is(button, input, select, summary) {
+  min-height: var(--perform-control-hit);
+  min-width: var(--perform-control-hit);
+  box-sizing: border-box;
+}
+.hardware-workspace .perform-surface[data-page] :is(.perform-page-nav, .perform-fx-actions, .perform-launch-groups, .perform-pattern-slots) {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 4px;
+  width: 100%;
+}
+.hardware-workspace .perform-surface[data-page] .perform-live-header { margin: 0; }
+.hardware-workspace .perform-surface[data-page] .perform-live-title { margin: 0; font-size: 10px; line-height: 16px; }
+.hardware-workspace .perform-surface[data-page] .perform-fx { display: grid; gap: 8px; }
+.hardware-workspace .perform-surface[data-page] .perform-fx > output { font-size: 10px; line-height: 14px; }
+.hardware-workspace .perform-surface[data-page] .perform-live-faders {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+.hardware-workspace .perform-surface[data-page] .perform-fader {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 4px;
+  min-width: 0;
+  padding: 8px;
+  border-radius: 6px;
+  background: var(--creator-base);
+}
+.hardware-workspace .perform-surface[data-page] .perform-fader-name {
+  font: 500 10px/14px var(--creator-font-action);
+}
+.hardware-workspace .perform-surface[data-page] .perform-fader-value {
+  font: 500 16px/20px var(--creator-font-mono);
+  font-variant-numeric: tabular-nums;
+}
+.hardware-workspace .perform-surface[data-page] input[type="range"] {
+  writing-mode: horizontal-tb;
+  direction: ltr;
+  inline-size: 100%;
+  block-size: var(--perform-control-hit);
+  min-inline-size: var(--perform-control-hit);
+  margin: 0;
+  padding: 0;
+  touch-action: none;
+}
+.hardware-workspace .perform-surface[data-page] :is(.perform-fx-more-bank, .perform-filter-panel) {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 8px;
+}
+.hardware-workspace .perform-surface[data-page] .perform-filter-types {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+.hardware-workspace .perform-surface[data-page] :is(.perform-master-fader, .perform-fx-more-bank .perform-fader, .perform-filter-panel .perform-fader) {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+}
+.hardware-workspace .perform-surface[data-page] :is(.perform-master-fader, .perform-fx-more-bank .perform-fader, .perform-filter-panel .perform-fader) input { grid-column: 1 / -1; }
+.hardware-workspace .perform-surface[data-page] .perform-patterns { display: grid; gap: 8px; }
+.hardware-workspace .perform-surface[data-page] .perform-pattern-slots button {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  padding: 6px 2px;
+}
+.hardware-workspace .perform-surface[data-page] .perform-slot-index { font-size: 16px; line-height: 20px; }
+.hardware-workspace .perform-surface[data-page] .perform-slot-state { font-size: 10px; line-height: 14px; }
+.hardware-workspace .perform-surface[data-page] .perform-pad-gates { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+.hardware-workspace .perform-surface[data-page] .perform-pad-gates > :not(button) { grid-column: 1 / -1; }
+.hardware-workspace .perform-surface[data-page] .perform-pad-gates > button:last-child { grid-column: 1 / -1; }
+.hardware-workspace .perform-surface[data-page] .perform-pad-gates p { margin: 0; line-height: 1.5; }
+.hardware-workspace .perform-surface[data-page] .perform-pad-gate-summary { display: grid; gap: 8px; margin: 0; }
+.hardware-workspace .perform-surface[data-page] .perform-pad-gate-summary dd { margin: 4px 0 0; overflow-wrap: anywhere; }
+
+/* The compact portrait console has no room for the desktop side-by-side
+   matrix/touch pair. Keep Perform to the right of the physical rail, with
+   its one touch scroller below the matrix. At390x844 the console fits at1:1. */
+@media (max-width: 480px) and (orientation: portrait) {
+  html[data-creator-layout="compact"] .hardware-workspace:has(.perform-surface[data-page]) .hardware-console {
+    height: 778px;
+  }
+  html[data-creator-layout="compact"] .hardware-console:has(.perform-surface[data-page]) > [aria-label="Pad matrix"] {
+    left: 108px;
+    right: 8px;
+    top: 168px;
+    width: auto;
+    height: 250px;
+  }
+  html[data-creator-layout="compact"] .hardware-console:has(.perform-surface[data-page]) .pad-grid {
+    width: min(100%, 250px);
+    height: 250px;
+  }
+  html[data-creator-layout="compact"] .hardware-console:has(.perform-surface[data-page]) > [aria-label="Touch workspace"] {
+    left: 108px;
+    right: 8px;
+    top: 426px;
+    width: auto;
+    height: 344px;
+  }
+  .hardware-workspace .perform-surface[data-page] .perform-live-faders .perform-fader { padding: 4px; }
+  .hardware-workspace .perform-surface[data-page] .perform-live-faders .perform-fader-value {
+    font-size: 11px;
+    line-height: 16px;
+  }
+  .hardware-workspace .perform-surface[data-page] .perform-fx-actions button {
+    font-size: 9.5px;
+    white-space: nowrap;
+  }
+  html[data-creator-layout="compact"] .hardware-console:has(.perform-surface[data-page]) .pad span {
+    left: 5px;
+    right: 5px;
+    font-size: 8px;
+    line-height: 10px;
+  }
+  html[data-creator-layout="compact"] .hardware-console:has(.perform-surface[data-page]) .pad.is-selected span { padding-right: 7px; font-size: 7.5px; }
+  html[data-creator-layout="compact"] .hardware-console:has(.perform-surface[data-page]) .pad-live-gate { font-size: 8px; line-height: 10px; }
+}

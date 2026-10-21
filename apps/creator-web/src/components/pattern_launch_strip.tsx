@@ -138,12 +138,12 @@ export function PatternLaunchStrip(props: PatternLaunchStripProps) {
               <span className="perform-slot-index">
                 {String(patternSlot + 1).padStart(2, "0")}
               </span>
-              <span className="perform-slot-id">
+              <span className="perform-slot-id visually-hidden">
                 {patternId === null ? "Empty" : patternId.slice(0, 8)}
               </span>
               {/* D04 fills the playing section and outlines the queued one.
                   This word carries the same distinction without colour. */}
-              <span className="perform-slot-state">{LAUNCH_STATE[launch]}</span>
+              <span className="perform-slot-state">{LAUNCH_STATE[launch] || (patternId === null ? "Empty" : "Ready")}</span>
             </button>
           );
         })}

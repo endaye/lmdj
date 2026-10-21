@@ -1,7 +1,8 @@
+import "./perform_surface.css";
 import {performCaptureUnavailableMessage} from "../state/error_messages";
 import {useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore} from "react";
 import type {PerformanceFx} from "@lmdj/web-runtime-platform/runtime_types";
-import type {ContextualEncoders} from "./physical_controls";
+import type {ContextualEncoders, ContextualNavigation} from "./physical_controls";
 
 import type {ProjectView} from "../runtime/runtime_types";
 import type {Bank} from "../state/creator_state";
@@ -39,6 +40,7 @@ export interface PerformSurfaceProps {
   readonly reviewRequested?: boolean;
   readonly onReviewShown?: () => void;
   readonly onEncodersReady?: (encoders: ContextualEncoders | null) => void;
+  readonly onNavigationReady?: (navigation: ContextualNavigation | null) => void;
   readonly monitorVolume?: MonitorVolumeControl | undefined;
   // #1958: without a Performance recording, a Launch slot selects its Pattern
   // through the app's Sequence selection path, which queues a transport switch
@@ -176,6 +178,24 @@ export function PerformSurface(props: PerformSurfaceProps) {
   const [fxGestureActive, setFxGestureActive] = useState(false);
   useEffect(() => { controller.setBank(props.bank); }, [controller, props.bank]);
   const [encoderGroup, setEncoderGroup] = useState<FxGroup>("main");
+  const [padGatesOpen, setPadGatesOpen] = useState(false);
+  const navigation = useMemo<ContextualNavigation>(() => {
+    const groups: readonly FxGroup[] = ["main", "filter", "more"];
+    const index = groups.indexOf(encoderGroup);
+    const step = (direction: -1 | 1) => {
+      setPadGatesOpen(false);
+      setEncoderGroup(groups[Math.max(0, Math.min(2, index + direction))]!);
+    };
+    return {directionStep: {
+      backLabel: "Previous FX group — ←", forwardLabel: "Next FX group — →",
+      backAvailable: index > 0, forwardAvailable: index < 2,
+      onBack: () => step(-1), onForward: () => step(1),
+    }};
+  }, [encoderGroup]);
+  useLayoutEffect(() => {
+    props.onNavigationReady?.(navigation);
+    return () => props.onNavigationReady?.(null);
+  }, [navigation, props.onNavigationReady]);
   const state = useSyncExternalStore(
     controller.subscribe,
     controller.getState,
@@ -186,13 +206,13 @@ export function PerformSurface(props: PerformSurfaceProps) {
       // The FILTER group is pure UI state: entering it calls no producer and
       // engages nothing (D04); the first actual turn engages.
       return {bindings: {
-        1: {label: "Type", value: state.filter.type.toUpperCase(),
+        1: {label: "Type", value: state.filter.provenance === "unavailable" ? "—" : state.filter.type.toUpperCase(),
           onTurn: (detents: number) => controller.turnFilterType(detents)},
-        2: {label: "Cutoff", value: formatCutoffHz(state.filter.cutoffHz),
+        2: {label: "Cutoff", value: state.filter.provenance === "unavailable" ? "—" : formatCutoffHz(state.filter.cutoffHz),
           onTurn: (detents: number, fine?: boolean) =>
             controller.turnFilterCutoff(detents, fine)},
         3: {label: "Resonance",
-          value: `${(state.filter.resonanceMilli / 10).toFixed(1)}%`,
+          value: state.filter.provenance === "unavailable" ? "—" : `${(state.filter.resonanceMilli / 10).toFixed(1)}%`,
           onTurn: (detents: number, fine?: boolean) =>
             controller.turnFilterResonance(detents, fine)},
       }};
@@ -227,7 +247,7 @@ export function PerformSurface(props: PerformSurfaceProps) {
     }};
   }, [controller, encoderGroup, state.fx, state.filter,
     state.liveControl.available, state.legacyFilterGesture]);
-  useEffect(() => {
+  useLayoutEffect(() => {
     props.onEncodersReady?.(encoders);
     return () => props.onEncodersReady?.(null);
   }, [props.onEncodersReady, encoders]);
@@ -276,7 +296,7 @@ export function PerformSurface(props: PerformSurfaceProps) {
   const transportPlaying = props.transport !== undefined &&
     selectTransportPlaying(props.transport);
   return (
-    <main ref={surface} className="perform-surface" aria-label="Perform" data-page={page}>
+    <main ref={surface} className="perform-surface" aria-label="Perform" data-page={page} data-pad-gates={padGatesOpen}>
       <nav className="perform-page-nav" aria-label="Perform pages">
         {(["live", "slots", "takes", "replay"] as const).map((value) => (
           <button type="button" key={value} disabled={fxGestureActive}
@@ -289,6 +309,22 @@ export function PerformSurface(props: PerformSurfaceProps) {
       <header className="perform-live-header">
         <p className="perform-live-title">{{live: "LIVE CONTROLS", slots: "PATTERN SLOTS", takes: "RECORDING", replay: "REPLAY"}[page]}</p>
       </header>
+      <FxSliderBank action={<button className="perform-hold" type="button" aria-pressed={state.hold}
+        onClick={() => controller.toggleHold()}>HOLD</button>} gestureOwner={controller} active={page === "live" && !padGatesOpen} onGestureActiveChange={setFxGestureActive} order={PERFORMANCE_FX_ORDER} values={state.fx}
+        filter={state.filter}
+        legacyFilterGesture={state.legacyFilterGesture}
+        onFilterType={(type) => controller.setFilterType(type)}
+        onFilterTouchEngage={(parameter) => controller.touchFilterEngage(parameter)}
+        onFilterTouchMove={(token, parameter, value) =>
+          controller.touchFilterMove(token, parameter, value)}
+        onFilterTouchRelease={(token, parameter) =>
+          controller.touchFilterRelease(token, parameter)}
+        monitorVolume={props.monitorVolume}
+        group={encoderGroup}
+        onGroupChange={setEncoderGroup}
+        onEngage={(fx, value) => controller.engageFx(fx, value)}
+        onMove={(gestureId, fx, value) => controller.moveFx(gestureId, fx, value)}
+        onRelease={(gestureId, fx) => controller.releaseFx(gestureId, fx)} />
       <PatternLaunchStrip slots={props.project.patternSlots}
         patterns={props.project.patterns}
         pending={state.pendingLaunch} lastAck={state.lastLaunchAck}
@@ -324,25 +360,14 @@ export function PerformSurface(props: PerformSurfaceProps) {
           <dd role="definition">{props.project.revision}</dd>
         </div>
       </dl></details> : null}
-      <FxSliderBank action={<button className="perform-hold" type="button" aria-pressed={state.hold}
-        onClick={() => controller.toggleHold()}>HOLD</button>} active={page === "live"} onGestureActiveChange={setFxGestureActive} order={PERFORMANCE_FX_ORDER} values={state.fx}
-        filter={state.filter}
-        legacyFilterGesture={state.legacyFilterGesture}
-        onFilterType={(type) => controller.setFilterType(type)}
-        onFilterTouchEngage={(parameter) => controller.touchFilterEngage(parameter)}
-        onFilterTouchMove={(token, parameter, value) =>
-          controller.touchFilterMove(token, parameter, value)}
-        onFilterTouchRelease={(token, parameter) =>
-          controller.touchFilterRelease(token, parameter)}
-        monitorVolume={props.monitorVolume}
-        group={encoderGroup}
-        onGroupChange={setEncoderGroup}
-        onEngage={(fx, value) => controller.engageFx(fx, value)}
-        onMove={(gestureId, fx, value) => controller.moveFx(gestureId, fx, value)}
-        onRelease={(gestureId, fx) => controller.releaseFx(gestureId, fx)} />
-      {page === "live" && currentPad !== undefined && currentGate !== null ? (
+      {page === "live" && !padGatesOpen ? <button type="button" className="perform-pad-gates-entry"
+        onClick={() => { setPadGatesOpen(true); }}>
+        Live Mute / Solo
+      </button> : null}
+      {page === "live" && padGatesOpen && currentPad !== undefined && currentGate !== null ? (
         <section className="perform-pad-gates" aria-label="Current Pad live controls">
-          <strong>Current Pad {slotAddress(currentPad)}</strong>
+          <header><p>LIVE MUTE / SOLO · Bank {slotAddress(currentPad)[0]}</p>
+            <strong>Current Pad {slotAddress(currentPad)}</strong></header>
           <button type="button" aria-label={`Mute ${slotAddress(currentPad)}`}
             aria-pressed={currentGate.muted} disabled={gatesDisabled}
             onClick={() => controller.togglePadGate("mute", currentPad)}>Mute</button>
@@ -356,6 +381,18 @@ export function PerformSurface(props: PerformSurfaceProps) {
               currentGate.silenced ? "Silenced · other Pads soloed" :
               currentGate.solo ? "Active · Solo" : "Active"}
           </output>
+          <dl className="perform-pad-gate-summary" data-provenance={state.padGates.provenance}>
+            {(["mutedSlots", "soloSlots"] as const).map((kind) => <div key={kind}>
+              <dt>{kind === "mutedSlots" ? "Muted Pads" : "Soloed Pads"}</dt>
+              <dd>{state.padGates.provenance !== "core" ?
+                (state.padGates.provenance === "pending" ? "Pending" : "Unavailable") :
+                [...state.padGates[kind]].sort((a, b) => a - b).map(slotAddress).join(" · ") || "None"}</dd>
+            </div>)}
+          </dl>
+          <p>Mute silences a Pad even when it is soloed. Multiple Pads can be soloed together.</p>
+          <button type="button" onClick={() => {setEncoderGroup("filter"); setPadGatesOpen(false);}}>
+            Back to Filter
+          </button>
         </section>
       ) : null}
       <RecordingPanel page={page} navigationDisabled={fxGestureActive} onReview={() => setPage("takes")} state={state} canRecord={!props.recordingBusy && controller.canRecord()}
