@@ -126,6 +126,8 @@ class ReleaseEntryPointTest(unittest.TestCase):
         with patch.object(cli, "build_context", return_value=self.context), \
                 patch.object(cli, "release_carriers", return_value=selected), \
                 patch.object(cli, "release_recheck", return_value=None), \
+                patch.object(cli, "release_doctor", return_value=[]), \
+                patch.object(cli, "confirm_canonical_signing_keys", return_value=[]), \
                 patch.object(cli, "compose_candidate", return_value=None), \
                 contextlib.redirect_stdout(stream), contextlib.redirect_stderr(stream):
             return cli.main(["--repo-root", str(self.root), *arguments])
@@ -653,6 +655,8 @@ class ReleaseEntryPointTest(unittest.TestCase):
         recheck = type("Recheck", (), {"recheck": lambda self, state, operation: None})()
         with patch.object(cli, "build_context", return_value=self.context), \
                 patch.object(cli, "release_carriers", return_value=tuple(self.carriers.values())), \
+                patch.object(cli, "release_doctor", return_value=[]), \
+                patch.object(cli, "confirm_canonical_signing_keys", return_value=[]), \
                 patch.object(cli, "release_recheck", return_value=recheck) as composed, \
                 patch.object(cli, "compose_candidate", return_value=None), \
                 patch.object(cli, "ReleaseDriver", Driver), \
@@ -688,17 +692,23 @@ class ReleaseEntryPointTest(unittest.TestCase):
         })()
         self_root = self.root
         reader = lambda tree: (self.context.policy.selected, type("Ledger", (), {})())
+        # A resume reaches the context only for a request the journal holds.
+        self.carriers["publication"].fail_after_write = True
+        self.assertEqual(self.run_cli(["run", "--authority", "issue:1301"]), 2)
+        (known,) = self.request_ids()
         for arguments, expected in ((["prepare", "lmdj-v1.0.61.0"], False),
                                     (["prepare", "lmdj-v1.0.61.0", "--reprove"], True),
                                     (["run", "--authority", "issue:1301", "--reprove"], True),
-                                    (["resume", "release-" + "0" * 16], False),
-                                    (["resume", "release-" + "0" * 16, "--reprove"], True)):
+                                    (["resume", known], False),
+                                    (["resume", known, "--reprove"], True)):
             with self.subTest(arguments=arguments):
                 seen.clear()
                 with patch.object(cli, "ProfileRuntime", recording_runtime), \
                         patch.object(cli, "GitRepository", return_value=fake_git), \
                         patch.object(cli, "_authenticated_github_client", return_value=github), \
                         patch.object(cli, "load_authority_documents", reader), \
+                        patch.object(cli, "release_doctor", return_value=[]), \
+                        patch.object(cli, "confirm_canonical_signing_keys", return_value=[]), \
                         patch.object(cli, "prepare", side_effect=CommandError("stop after context")), \
                         patch.object(cli, "build_orchestration_policy", side_effect=CommandError("stop after context")), \
                         contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
@@ -735,6 +745,8 @@ class ReleaseEntryPointTest(unittest.TestCase):
                     patch.object(cli, "GitRepository", return_value=fake_git), \
                     patch.object(cli, "_authenticated_github_client", return_value=github), \
                     patch.object(cli, "load_authority_documents", reader), \
+                    patch.object(cli, "release_doctor", return_value=[]), \
+                    patch.object(cli, "confirm_canonical_signing_keys", return_value=[]), \
                     patch.object(cli, "release_carriers", return_value=carriers), \
                     patch.object(cli, "release_recheck", return_value=None), \
                     patch.object(cli, "compose_candidate", return_value=None), \
@@ -786,10 +798,171 @@ class ReleaseEntryPointTest(unittest.TestCase):
         self.assertEqual(code, 0, report)
         self.assertFalse(marker.exists())
 
+    def test_run_resume_and_prepare_refuse_while_the_doctor_fails(self):
+        # The host preflight runs first and a failed check stops the long
+        # local path before any context, request or build exists (#2422 item 5).
+        from tools.release.doctor import Check
+
+        failed = [Check("emsdk", "fail", "no emsdk at /x", "install emsdk 6.0.5 under /x"),
+                  Check("gh auth", "ok", "GITHUB_TOKEN is set")]
+        # The resume case names a request the journal holds; an unknown one is
+        # the journal's finding and is reported before the doctor.
+        self.carriers["publication"].fail_after_write = True
+        self.assertEqual(self.run_cli(["run", "--authority", "issue:1301"]), 2)
+        (known,) = self.request_ids()
+        for arguments in (["run", "--authority", "issue:1301"],
+                          ["resume", known],
+                          ["prepare", "lmdj-v1.0.61.0"]):
+            with self.subTest(arguments=arguments):
+                output, errors = io.StringIO(), io.StringIO()
+                with patch.object(cli, "release_doctor", return_value=failed), \
+                        patch.object(cli, "build_context", side_effect=AssertionError("context built")), \
+                        contextlib.redirect_stdout(output), contextlib.redirect_stderr(errors):
+                    code = cli.main(["--repo-root", str(self.root), *arguments])
+                self.assertEqual(code, 2)
+                self.assertIn("[fail] emsdk: no emsdk at /x", output.getvalue())
+                self.assertIn("remedy: install emsdk 6.0.5 under /x", output.getvalue())
+                self.assertIn(f"release doctor: refusing {arguments[0]}", errors.getvalue())
+        self.assertEqual(self.request_ids(), [known])
+        # Read-only commands never wait on the doctor.
+        with patch.object(cli, "release_doctor", side_effect=AssertionError("doctor ran")):
+            code, report = self.status()
+        self.assertEqual(code, 0)
+
+    def test_the_signing_keys_are_rechecked_against_the_canonical_policy(self):
+        # The doctor reads the checkout's policy before any fetch; after the
+        # canonical fetch the key roles are checked again with the canonical
+        # fingerprints, which are what the release signs with.
+        from tools.release.doctor import Check
+
+        seen = []
+
+        def canonical(probes, *, product_fingerprint, checksum_fingerprint):
+            seen.append((product_fingerprint, checksum_fingerprint))
+            return [Check("signing key (checksum)", "fail", f"secret key {checksum_fingerprint} is not in x",
+                          "import the checksum private key into x")]
+        output, errors = io.StringIO(), io.StringIO()
+        with patch.object(cli, "release_doctor", return_value=[]), \
+                patch.object(cli, "build_context", return_value=self.context), \
+                patch.object(cli, "check_signing_keys", canonical), \
+                patch.object(cli, "build_orchestration_policy", side_effect=AssertionError("ran past the gate")), \
+                contextlib.redirect_stdout(output), contextlib.redirect_stderr(errors):
+            code = cli.main(["--repo-root", str(self.root), "run", "--authority", "issue:1301"])
+        self.assertEqual(code, 2)
+        policy = self.context.policy
+        self.assertEqual(seen, [(policy.product_fingerprint, policy.checksum_fingerprint)])
+        self.assertIn("[fail] signing key (checksum)", output.getvalue())
+        self.assertIn("canonical policy names a signing key", errors.getvalue())
+        self.assertEqual(self.request_ids(), [])
+
+    def test_doctor_subcommand_prints_every_check_and_its_exit_names_the_outcome(self):
+        from tools.release.doctor import Check
+
+        passing = [Check("emsdk", "ok", "fine"), Check("m1 runner", "skip", "macOS only")]
+        failing = passing + [Check("host load", "fail", "load 9.0 exceeds 8 cpus", "stop heavy work")]
+        for checks, expected in ((passing, 0), (failing, 2)):
+            with self.subTest(expected=expected):
+                output = io.StringIO()
+                with patch.object(cli, "release_doctor", return_value=checks), \
+                        contextlib.redirect_stdout(output), contextlib.redirect_stderr(output):
+                    self.assertEqual(cli.main(["--repo-root", str(self.root), "doctor"]), expected)
+                self.assertIn("[ok] emsdk: fine", output.getvalue())
+                self.assertIn("[skip] m1 runner: macOS only", output.getvalue())
+                if expected:
+                    self.assertIn("remedy: stop heavy work", output.getvalue())
+
+    def test_release_doctor_reports_its_own_unreadable_inputs_as_checks(self):
+        # No policy in this checkout: a failed check with a remedy, not a traceback.
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output), contextlib.redirect_stderr(output):
+            self.assertEqual(cli.main(["--repo-root", str(self.root), "doctor"]), 2)
+        self.assertIn("[fail] release policy: tools/release/policy.json is unreadable here", output.getvalue())
+        self.assertIn("remedy: run from the main checkout", output.getvalue())
+        self.assertNotIn("release verification error", output.getvalue())
+
+    def test_release_doctor_binds_the_policy_keys_and_the_journal_root(self):
+        policy_dir = self.root / "tools/release"
+        shutil.copy(ROOT / "tools/release/policy.json", policy_dir / "policy.json")
+        seen = {}
+
+        def fake_run_doctor(root, **fields):
+            seen.update(fields, root=root)
+            return []
+        with patch.object(cli, "run_doctor", fake_run_doctor), \
+                patch.object(cli, "GitRepository", return_value=self.context.git):
+            self.assertEqual(cli.release_doctor(self.root), [])
+        policy = self.context.policy
+        self.assertEqual(seen["product_fingerprint"], policy.product_fingerprint)
+        self.assertEqual(seen["checksum_fingerprint"], policy.checksum_fingerprint)
+        self.assertEqual(seen["journal_root"], self.journal())
+        self.assertEqual(seen["root"], self.root)
+
     def test_resume_of_an_unknown_request_fails_closed(self):
         output = io.StringIO()
         self.assertEqual(self.run_cli(["resume", "release-" + "0" * 16], capture=output), 2)
         self.assertIn("request is missing", output.getvalue())
+
+    def test_prepare_and_a_resume_at_the_prepared_step_require_the_runner_paused(self):
+        from tools.release.orchestration import STEPS
+        seen = []
+
+        def doctor(root, *, require_paused_runner=False):
+            seen.append(require_paused_runner)
+            return []
+
+        def main(arguments):
+            with patch.object(cli, "build_context", return_value=self.context), \
+                    patch.object(cli, "release_carriers", return_value=tuple(self.carriers.values())), \
+                    patch.object(cli, "release_recheck", return_value=None), \
+                    patch.object(cli, "release_doctor", doctor), \
+                    patch.object(cli, "confirm_canonical_signing_keys", return_value=[]), \
+                    patch.object(cli, "compose_candidate", return_value=None), \
+                    contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+                return cli.main(["--repo-root", str(self.root), *arguments])
+        # A run, and a resume whose next step is before `prepared`, need the runner up.
+        self.carriers["publication"].fail_after_write = True
+        self.assertEqual(main(["run", "--authority", "issue:1301"]), 2)
+        (request_id,) = self.request_ids()
+        self.assertEqual(main(["resume", request_id]), 0)   # next step: publication
+        with patch.object(cli, "_next_step", return_value="prepared"):
+            self.assertEqual(main(["resume", request_id]), 0)
+        with patch.object(cli, "_next_step", return_value="verification"):
+            self.assertEqual(main(["resume", request_id]), 0)
+        with patch.object(cli, "release_doctor", doctor), \
+                patch.object(cli, "build_context", side_effect=CommandError("stop")), \
+                contextlib.redirect_stderr(io.StringIO()):
+            cli.main(["--repo-root", str(self.root), "prepare", "lmdj-v1.0.61.0"])
+        self.assertEqual(seen, [False, False, True, False, True])
+        # `_next_step` reads the journal read-only: the first unverified step.
+        self.assertEqual(cli._next_step(self.root, self.context.git, request_id), None)
+        self.assertEqual(cli._next_step(self.root, self.context.git, "release-" + "0" * 16), None)
+
+    def test_an_unknown_resume_is_reported_before_the_host_doctor(self):
+        # The journal's finding is not hidden behind a failing host check.
+        from tools.release.doctor import Check
+
+        self.assertEqual(self.run_cli(["run", "--authority", "issue:1301"]), 0)
+        policy_dir = self.root / "tools/release"
+        shutil.copy(ROOT / "tools/release/policy.json", policy_dir / "policy.json")
+        failed = [Check("host load", "fail", "load 9.0 exceeds 8 cpus", "stop heavy work")]
+        output = io.StringIO()
+        with patch.object(cli, "release_doctor", return_value=failed), \
+                patch.object(cli, "GitRepository", return_value=self.context.git), \
+                contextlib.redirect_stdout(output), contextlib.redirect_stderr(output):
+            code = cli.main(["--repo-root", str(self.root), "resume", "release-" + "0" * 16])
+        self.assertEqual(code, 2)
+        self.assertIn("request is missing", output.getvalue())
+        self.assertNotIn("host load", output.getvalue())
+        # The finding is the request even while another driver holds the lock.
+        output = io.StringIO()
+        with RequestJournal(self.journal()), \
+                patch.object(cli, "release_doctor", return_value=failed), \
+                patch.object(cli, "GitRepository", return_value=self.context.git), \
+                contextlib.redirect_stdout(output), contextlib.redirect_stderr(output):
+            code = cli.main(["--repo-root", str(self.root), "resume", "release-" + "0" * 16])
+        self.assertEqual(code, 2)
+        self.assertIn("request is missing", output.getvalue())
+        self.assertNotIn("another writer", output.getvalue())
 
 
 class RealCompositionTest(unittest.TestCase):
@@ -903,6 +1076,8 @@ class RealCompositionTest(unittest.TestCase):
         journal = self.gitdir / "lmdj-release-requests"
         output = io.StringIO()
         with patch.object(cli, "build_context", return_value=self.context), \
+                patch.object(cli, "release_doctor", return_value=[]), \
+                patch.object(cli, "confirm_canonical_signing_keys", return_value=[]), \
                 patch.object(cli, "compose_candidate", return_value=None), \
                 patch("tools.release.entry_composition.release_token",
                       return_value="fixture-only-no-credential"), \

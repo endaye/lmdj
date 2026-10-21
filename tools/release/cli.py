@@ -16,6 +16,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from tools.release.commands import CommandError, CommandRunner  # noqa: E402
+from tools.release.doctor import check_signing_keys, doctor_passed, format_doctor, run_doctor  # noqa: E402
 from tools.release.audit import (  # noqa: E402
     AuditContext,
     audit,
@@ -29,7 +30,7 @@ from tools.release.hydrate import (  # noqa: E402
     hydrate_release_intent_targets,
 )
 from tools.release.github_api import GitHubApiError, GitHubClient  # noqa: E402
-from tools.release.model import CANONICAL_BRANCH, CANONICAL_REPOSITORY, ReleaseModelError, canonical_json, canonical_sha256  # noqa: E402
+from tools.release.model import CANONICAL_BRANCH, CANONICAL_REPOSITORY, ReleaseModelError, canonical_json, canonical_sha256, load_policy  # noqa: E402
 from tools.release.publication import PublicationError, collect_publication  # noqa: E402
 from tools.release.publication_evidence import collect_publication_patch  # noqa: E402
 from tools.release.changelog import ChangelogError  # noqa: E402
@@ -165,6 +166,7 @@ def parse_arguments(argv: list[str]) -> argparse.Namespace:
     )
     reported = commands.add_parser("status")
     reported.add_argument("request_id", nargs="?")
+    commands.add_parser("doctor", help="read-only host preflight; run/resume/prepare refuse while it fails")
     audited = commands.add_parser("audit")
     mode = audited.add_mutually_exclusive_group(required=True)
     mode.add_argument("--local", action="store_true")
@@ -252,6 +254,76 @@ def release_carriers(context: PrepareContext, policy, request) -> tuple:
     return compose_carriers(context, policy, request)
 
 
+# Commands that start or continue the long local path and must find the host
+# ready: the pinned emsdk, both signing keys, GitHub auth, a free journal, no
+# second driver, disk, load, fseventsd/Spotlight and the M1 runner (#2422
+# items 5 and 7). Read-only commands (status, audit, hydrate, ...) never wait
+# on the doctor.
+_DOCTORED_COMMANDS = ("run", "resume", "prepare")
+
+
+def _next_step(root: Path, git, request_id: str):
+    """The first unverified step of a journaled request (read-only), or None."""
+    directory = release_journal_root(root, git)
+    if not directory.is_dir():
+        return None
+    try:
+        with RequestJournal(directory, writable=False) as journal:
+            alias = journal.read_alias(request_id)
+            state = journal.read(alias["original_id"] if alias is not None else request_id)
+    except JournalError:
+        return None
+    if state is None:
+        return None
+    for record in state["transitions"]:
+        if record["status"] != "verified":
+            return record["step"]
+    return STEPS[len(state["transitions"])] if len(state["transitions"]) < len(STEPS) else None
+
+
+def release_doctor(root: Path, *, require_paused_runner: bool = False):
+    """The read-only host preflight bound to this repository's policy and journal.
+
+    Its own inputs are reported the same way as every other check: a checkout
+    without a readable policy or Git directory is a failed check with a
+    remedy, not a traceback. `require_paused_runner` is set for the commands
+    that drive `prepare` next.
+    """
+    from tools.release.doctor import Check
+
+    try:
+        policy = load_policy(root / "tools/release/policy.json")
+    except (OSError, ReleaseModelError) as error:
+        return [Check("release policy", "fail",
+                      f"tools/release/policy.json is unreadable here: {error}",
+                      "run from the main checkout of endaye/lmdj (scripts/release.sh "
+                      "resolves its own root) and restore tools/release/policy.json from main")]
+    try:
+        journal = release_journal_root(root, GitRepository(root))
+    except (OSError, CommandError, GitRepositoryError) as error:
+        return [Check("repository", "fail",
+                      f"{root} is not a Git checkout the release tool can read: {error}",
+                      "run from the main checkout of endaye/lmdj, not a copy or an export")]
+    return run_doctor(
+        root, product_fingerprint=policy.product_fingerprint,
+        checksum_fingerprint=policy.checksum_fingerprint, journal_root=journal,
+        require_paused_runner=require_paused_runner)
+
+
+def confirm_canonical_signing_keys(context: PrepareContext):
+    """The key-role checks again, against the freshly fetched canonical policy.
+
+    The doctor runs before any fetch and reads the checkout's policy, which
+    could be stale or edited; the context's policy is the canonical one the
+    release will sign with, so its fingerprints are what the host must hold.
+    """
+    from tools.release.doctor import HostProbes
+
+    return check_signing_keys(
+        HostProbes(), product_fingerprint=context.policy.product_fingerprint,
+        checksum_fingerprint=context.policy.checksum_fingerprint)
+
+
 def release_recheck(context: PrepareContext, policy, request):
     """The verified-transition recheck for this scope, from the trusted composition.
 
@@ -309,6 +381,22 @@ def clear_reprove(root: Path, git, request_id: str) -> None:
         _reprove_marker(root, git, request_id).unlink()
     except FileNotFoundError:
         pass
+
+
+def _require_known_request(root: Path, git, request_id: str) -> None:
+    """Raise the journal's own refusal for a request it does not hold.
+
+    A read-only journal context, as every other read path uses: it never
+    joins the writer lock or creates the journal, so a running driver stays
+    undisturbed and the finding is the request, not the lock.
+    """
+    directory = release_journal_root(root, git)
+    missing = JournalError("why: request is missing; remedy: use the original request ID")
+    if not directory.is_dir():
+        raise missing
+    with RequestJournal(directory, writable=False) as journal:
+        if journal.read_alias(request_id) is None and journal.read(request_id) is None:
+            raise missing
 
 
 def _resume_request(root: Path, git, request_id: str):
@@ -776,11 +864,41 @@ def main(argv: list[str] | None = None) -> int:
         if options.command == "status":
             print(format_request_status(root, GitRepository(root), options.request_id), end="")
             return 0
+        if options.command == "doctor":
+            checks = release_doctor(root)
+            print(format_doctor(checks), end="")
+            return 0 if doctor_passed(checks) else 2
+        if options.command == "resume" and _resume_request(root, GitRepository(root), options.request_id) is None:
+            # An unknown request is the journal's finding, not the host's:
+            # report it before the doctor so the cause is not hidden behind a
+            # failed host check. The journal reports its own unreadable state.
+            _require_known_request(root, GitRepository(root), options.request_id)
+        if options.command in _DOCTORED_COMMANDS:
+            # prepare runs next for the prepare command itself and for a
+            # resume whose next step is `prepared`; a run or a resume waiting
+            # on the candidate batch needs the runner up.
+            driving_prepare = options.command == "prepare" or (
+                options.command == "resume"
+                and _next_step(root, GitRepository(root), options.request_id) == "prepared")
+            checks = release_doctor(root, require_paused_runner=driving_prepare)
+            if not doctor_passed(checks):
+                print(format_doctor(checks), end="")
+                print(f"release doctor: refusing {options.command}; apply the remedies above, "
+                      "then rerun (scripts/release.sh doctor re-checks without starting anything)",
+                      file=sys.stderr)
+                return 2
         reprove = bool(getattr(options, "reprove", False))
         if options.command == "resume" and not reprove:
             # A request once resumed or started with --reprove keeps it.
             reprove = reprove_requested(root, GitRepository(root), options.request_id)
         context = build_context(root, reprove=reprove)
+        if options.command in _DOCTORED_COMMANDS:
+            checks = confirm_canonical_signing_keys(context)
+            if not doctor_passed(checks):
+                print(format_doctor(checks), end="")
+                print(f"release doctor: refusing {options.command}; the canonical policy names "
+                      "a signing key this host cannot use", file=sys.stderr)
+                return 2
         if options.command in ("run", "resume"):
             policy = build_orchestration_policy(root, context)
             request = (
