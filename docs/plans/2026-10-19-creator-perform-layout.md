@@ -442,3 +442,43 @@ not completed browser proof or shipping. Official Native CLI build and both repr
 (exit 0 / 26.441s). Production configure/build/package and current complete
 browser selections remain pending.
 Only after actual terminal success may a PR report those checks as passed.
+
+
+### Existing PR history and first production round
+
+The owner now prioritizes merging these existing PRs. Update existing #2388
+without rewriting its published history: the extracted current-main source
+checkpoint is `26ac11c3c5b9d0dde808db03dc5ca8e2ea1b1f8f`. Its ordinary two-parent
+merge retains published `dd8a8114531b6ac1c2ceea2ace01ae8be038635b` as an ancestor.
+The `ours` ancestry strategy is applied only after the complete original
+17-file Task was extracted and its three conflicts manually reconciled above;
+the pre-merge tree was verified byte-identical to the tested checkpoint. This
+retains history without restoring already-delivered or withdrawn ancestor
+changes. The main-target net diff remains exactly the declared 17 files.
+Original source branch/worktree and its unmerged ancestors remain retained.
+
+Official clean-source configure/build/package passed on the checkpoint, with
+8 assets / complete10-file inventory, every length/SHA verified, 512MiB heap,
+compiled/packaged Wasm equality and no conformance globals. Source and package
+were retained. The full five-spec Chromium run completed: 50 PASS / 1 FAIL;
+the original complete Perform/touch-fit/meter cases, native PCM, capture
+failures/retry/reopen/Replay, all18 group/viewport observations and six PNGs
+passed and were read back. Current takeover/recovery cases passed as well.
+
+The failure is the current short-landscape667x375 case at `waitForBootProject`:
+`booting` did not become `ready` within the original125000ms. No layout
+assertion was reached. Assets returned200; the trace has no provider/worker
+root-cause evidence. Its initial DOM already has the workspace wrapper; a
+private before-mount hypothesis was disproved and is not used as evidence.
+This is unresolved startup evidence, not a proven pre-existing defect or a
+complete-suite pass. Preserve the whole failed run and repeat the unchanged
+complete selection in a separate output slot; do not widen deadlines, add
+retries, skip or weaken assertions. WebKit boundary checks remain unrun at
+this failed checkpoint. Output observation changed from built-in speakers to
+Bluetooth during the run; it is retained as observation, not physical/audio
+acceptance or a causal explanation for the pre-audio boot stall.
+
+The source tests and Portal results above still bind identical product/docs
+bytes; this merge adds only this plan record. A fresh official package and
+full browser verification bind the final merge head before push. Current-head
+independent review remains required. No merge to main has occurred here.
