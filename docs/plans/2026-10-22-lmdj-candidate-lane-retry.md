@@ -42,7 +42,11 @@ retry_of = {"request": "<candidate request id>",
                                           "jobs": {"<job>": "timed_out" | "cancelled"}}}}
 ```
 
-Admission rules, all fail-closed in the reducer and replayed exactly:
+Admission rules, fail-closed in the reducer and replayed exactly (the
+reducer is pure and reference-opaque: it cross-checks outcomes, suite set,
+target, policy and once-per-candidate against journal truth; the complete
+failing-job set of a `failed` suite is produced by the runtime from the
+retained verdict and the jobs API, and re-proven by the release consumer):
 
 - the original is a candidate request for the same target and policy with a
   durable result;

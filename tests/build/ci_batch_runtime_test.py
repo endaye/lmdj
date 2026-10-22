@@ -763,6 +763,28 @@ class RuntimeTests(unittest.TestCase):
         self.assertEqual(settled["state"]["results"]["retry-one"]["outcomes"], {"core_release_stress": "passed"})
         self.assertEqual(settled["state"]["processed"], self.sha)
 
+    def test_environmental_proof_requires_the_complete_failing_job_set(self):
+        stress = runtime.PREFIX + runtime.JOB_NAMES["core-stress"]
+        asan = runtime.PREFIX + runtime.JOB_NAMES["core-asan"]
+        conclusions = {stress: "timed_out", asan: "cancelled"}
+        def verdict(jobs, failures):
+            return {"suites": [{"id": "core_asan", "selected": True, "jobs": jobs, "failures": failures}]}
+        outcomes = {"core_asan": "failed"}
+        proof = runtime.environmental_proof(verdict({"core-asan": "failure", "core-stress": "failure"},
+                                                    ["core-asan", "core-stress"]), outcomes, conclusions)
+        self.assertEqual(proof, {"core_asan": {"outcome": "failed", "jobs": {"core-asan": "cancelled", "core-stress": "timed_out"}}})
+        with self.assertRaisesRegex(batch.BatchError, "incomplete failing job set"):
+            runtime.environmental_proof(verdict({"core-asan": "failure", "core-stress": "failure"}, ["core-asan"]),
+                                        outcomes, conclusions)
+        with self.assertRaisesRegex(batch.BatchError, "incomplete failing job set"):
+            runtime.environmental_proof(verdict({"core-asan": "failure"}, []), outcomes, conclusions)
+        with self.assertRaisesRegex(batch.BatchError, "test failure never qualifies"):
+            runtime.environmental_proof(verdict({"core-asan": "failure"}, ["core-asan"]), outcomes, {asan: "failure"})
+        self.assertEqual(runtime.environmental_proof(verdict({"core-asan": "cancelled"}, []), {"core_asan": "cancelled"}, {}),
+                         {"core_asan": {"outcome": "cancelled", "jobs": {}}})
+        with self.assertRaisesRegex(batch.BatchError, "nothing to retry"):
+            runtime.environmental_proof(verdict({"core-asan": "success"}, []), {"core_asan": "passed"}, {})
+
     def test_retry_refuses_a_lane_that_failed_on_a_test(self):
         self.failed_candidate(failed_job="core-stress")
         self.api.add_run(25)

@@ -116,6 +116,39 @@ def decode_reference(reference):
     return strict_json(raw)
 
 
+def environmental_proof(document, outcomes, conclusions):
+    """The frozen retry proof for one settled candidate: its non-passed suites
+    and, for a `failed` suite, the complete set of its failing jobs with their
+    authenticated API conclusions.
+
+    `document` is the candidate's retained verdict, `outcomes` the durable
+    result's scheduler outcomes and `conclusions` the API job name to
+    conclusion map of the candidate executor run. A `failed` suite's
+    `failures` list must name every job the verdict recorded as `failure`
+    (the two are produced together, so a gap means a verdict this code does
+    not understand), and every one of them must have ended environmentally.
+    """
+    environmental = {}
+    for suite in document["suites"]:
+        outcome = outcomes.get(suite["id"])
+        if not suite.get("selected") or outcome is None or outcome == "passed":
+            continue
+        proof = {}
+        if outcome == "failed":
+            failing = sorted(job for job, conclusion in suite.get("jobs", {}).items() if conclusion == "failure")
+            require(bool(failing) and sorted(suite.get("failures", [])) == failing,
+                    f"candidate verdict names an incomplete failing job set for {suite['id']}")
+            for job in failing:
+                name = PREFIX + JOB_NAMES.get(job, RETIRED_JOB_NAMES.get(job, ""))
+                conclusion = conclusions.get(name)
+                require(conclusion in batch.ENVIRONMENTAL_CONCLUSIONS,
+                        f"a test failure never qualifies for a retry ({suite['id']}/{job} ended {conclusion})")
+                proof[job] = conclusion
+        environmental[suite["id"]] = {"outcome": outcome, "jobs": proof}
+    require(bool(environmental), "the candidate passed every suite; nothing to retry")
+    return environmental
+
+
 class Runtime:
     # Fixed by trusted code, never dispatch/config input. Other journal users
     # can reuse authentication without accepting this scheduler's producers.
@@ -444,22 +477,8 @@ ambiguous inventory is potentially an executor and must hold bootstrap back.
             require(type(job.get("run_id")) is int and job["run_id"] == result["run"]["run_id"]
                     and job.get("run_attempt") == 1 and job.get("status") == "completed", "candidate executor jobs are not terminal")
             conclusions[job.get("name")] = job.get("conclusion")
-        environmental, reasons = {}, []
-        for suite in document["suites"]:
-            outcome = result["outcomes"].get(suite["id"])
-            if not suite.get("selected") or outcome is None or outcome == "passed":
-                continue
-            proof = {}
-            if outcome == "failed":
-                for job in suite.get("failures", []):
-                    name = PREFIX + JOB_NAMES.get(job, RETIRED_JOB_NAMES.get(job, ""))
-                    conclusion = conclusions.get(name)
-                    require(conclusion in batch.ENVIRONMENTAL_CONCLUSIONS,
-                            f"a test failure never qualifies for a retry ({suite['id']}/{job} ended {conclusion})")
-                    proof[job] = conclusion
-            environmental[suite["id"]] = {"outcome": outcome, "jobs": proof}
-            reasons.append(f"retry of {original['id']}: {suite['id']} {outcome}")
-        require(bool(environmental), "the candidate passed every suite; nothing to retry")
+        environmental = environmental_proof(document, result["outcomes"], conclusions)
+        reasons = [f"retry of {original['id']}: {suite} {proof['outcome']}" for suite, proof in sorted(environmental.items())]
         return batch.make_request(policy, request_id=explicit["id"], kind="retry", base_sha=None,
             target_sha=explicit["target"], control_sha=self.control,
             selection=test_scope._selection(policy, sorted(environmental), reasons), origin_run=self.current,
