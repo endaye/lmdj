@@ -1705,6 +1705,65 @@ struct RetainedRecordingSwitch {
   audio::PatternPublicationLease lease;
 };
 
+// One engagement-owned read. The worker borrows neither Runtime nor Engine;
+// its Facade callable owns private Store/history state over the real platform.
+class PostClosePreparation final {
+ public:
+  struct Prepared {
+    audio::PreparedPatternView pattern;
+    audio::PreparedPatternView tempo_material;
+  };
+  using Read = foundation::Result<Prepared>;
+  const facade::RuntimeSnapshotRequest request;
+
+  PostClosePreparation(facade::RuntimeSnapshotRequest selected,
+                       facade::RuntimeSnapshotPreparer prepare)
+      : request(std::move(selected)) {
+    worker_ = std::thread([state = state_, request = request,
+                           prepare = std::move(prepare)]() mutable {
+      try {
+        auto snapshot = prepare(request);
+        if (!snapshot.has_value()) state->result.emplace(Read::failure(snapshot.error()));
+        else {
+          auto pattern = audio::PreparedPatternView::from_snapshot(*snapshot.value());
+          if (!pattern.has_value()) state->result.emplace(Read::failure(pattern.error()));
+          else {
+            auto material = pattern.value().with_tempo(pattern.value().bpm());
+            if (!material.has_value()) state->result.emplace(Read::failure(material.error()));
+            else state->result.emplace(Read::success(
+                {std::move(pattern.value()), std::move(material.value())}));
+          }
+        }
+      } catch (...) { /* The serialized boundary reports a generic failure. */ }
+      prepare = {}; // Retire the reader/platform custody before return is visible.
+      state->returned.store(true, std::memory_order_release);
+    });
+  }
+  ~PostClosePreparation() {
+    // Direct destruction is not a shutdown witness. All unfinished inputs
+    // are heap-owned; normal lifecycle barriers retain publish_pending until
+    // the actual worker result is collected and publication settles.
+    if (worker_.joinable()) worker_.detach();
+  }
+  bool returned() const noexcept {
+    return state_->returned.load(std::memory_order_acquire);
+  }
+  Read* completed() {
+    if (!state_->returned.load(std::memory_order_acquire)) return nullptr;
+    if (worker_.joinable()) worker_.join(); // No I/O or reader remains.
+    if (!state_->result) state_->result.emplace(Read::failure(
+        Error{ErrorCode::internal_error, "Post-close Pattern preparation failed"}));
+    return &*state_->result;
+  }
+ private:
+  struct State {
+    std::atomic<bool> returned{false};
+    std::optional<Read> result;
+  };
+  std::shared_ptr<State> state_ = std::make_shared<State>();
+  std::thread worker_;
+};
+
 struct TransportEngagement {
   explicit TransportEngagement(audio::RealtimeEngine& engine)
       : port(engine), scheduled_port(engine) {}
@@ -1730,6 +1789,7 @@ struct TransportEngagement {
   // Set when a recording close has settled durably but the committed Pattern
   // publication is still outstanding; publication is a separate completion.
   bool publish_pending = false;
+  std::unique_ptr<PostClosePreparation> close_preparation;
   bool count_in_ticket_consumed = true;
   bool count_in_cancel_pending = false;
 };
@@ -2907,6 +2967,15 @@ struct ControlRuntime::Impl {
     if (!released.has_value()) return foundation::Result<audio::PatternPublication>::failure(released.error());
     auto copy = pattern.with_tempo(pattern.bpm());
     if (!copy.has_value()) return foundation::Result<audio::PatternPublication>::failure(copy.error());
+    return publish_prepared_pattern_with_material(std::move(pattern),
+        std::move(copy.value()), activation_frame, replacement_authority, immediate);
+  }
+
+  foundation::Result<audio::PatternPublication> publish_prepared_pattern_with_material(
+      audio::PreparedPatternView&& pattern, audio::PreparedPatternView&& material,
+      std::optional<std::uint64_t> activation_frame = std::nullopt,
+      std::optional<audio::PatternReplacementAuthority> replacement_authority = std::nullopt,
+      bool immediate = false) {
     const auto cell = reserve_tempo_material();
     if (!cell.has_value()) return foundation::Result<audio::PatternPublication>::failure(cell.error());
 #if defined(LMDJ_WEB_RUNTIME_TESTING) && LMDJ_WEB_RUNTIME_TESTING
@@ -2929,7 +2998,7 @@ struct ControlRuntime::Impl {
           "runtime Pattern publication is unavailable",
       });
     }
-    remember_tempo_material(std::move(copy.value()), publication, cell.value());
+    remember_tempo_material(std::move(material), publication, cell.value());
     return foundation::Result<audio::PatternPublication>::success(publication);
   }
 
@@ -3645,13 +3714,26 @@ struct ControlRuntime::Impl {
     service_pattern_inputs();
     auto& engagement = *transport;
     if (engagement.publish_pending) {
-      const auto inspected = application.query({
-          {"operation", "project.inspect"},
-          {"project_path", retained_project_path->generic_string()},
-      });
-      if (inspected.value("ok", false)) {
-        project_revision =
-            inspected.at("project_revision").get<std::uint64_t>();
+      if (state == State::failed) {
+        // A terminal failure must not adopt derived material or let the
+        // controller's retained error strand a completed reader. Collection
+        // pays only this worker's custody; Native and caller ACKs stay owned.
+        if (engagement.close_preparation && !engagement.close_preparation->completed())
+          return foundation::Result<void>::success();
+        engagement.close_preparation.reset();
+        engagement.publish_pending = false;
+        return foundation::Result<void>::success();
+      }
+      // Shutdown and an actual ordinary Stop still owe their original Native
+      // ACK while the detached read is in flight. Leaving that receipt owned
+      // would reserve the Engine against this close publication forever.
+      const auto status = engagement.controller->inspect();
+      const auto receipt = engine.inspect_pattern_transport_receipt(
+          engagement.generation, status.transport_epoch);
+      if (engagement.shutdown_requested || (receipt && !receipt->playing)) {
+        const auto stepped = engagement.controller->continue_operation();
+        observe_recording_switches();
+        if (!stepped.has_value()) return stepped;
       }
       // A count-in/input inspection can finish close without an ordinary
       // selection poll. F has settled every switch: use the actual terminal
@@ -3659,19 +3741,50 @@ struct ControlRuntime::Impl {
       const auto current = engine.current_pattern_id();
       if (!current) return foundation::Result<void>::failure(
           Error{ErrorCode::io_error, "Terminal Pattern is not observed"});
+      if (engagement.close_preparation &&
+          engagement.close_preparation->request.pattern_id != *current) {
+        if (!engagement.close_preparation->completed()) return foundation::Result<void>::success();
+        engagement.close_preparation.reset(); // Never adopt a delayed old target.
+      }
+      if (!engagement.close_preparation) {
+        engagement.close_preparation = std::make_unique<PostClosePreparation>(
+            facade::RuntimeSnapshotRequest{*retained_project_path, *current, limits},
+            application.make_runtime_snapshot_preparer());
+      }
+      auto* prepared = engagement.close_preparation->completed();
+      if (!prepared) return foundation::Result<void>::success();
+      if (!prepared->has_value()) {
+        const auto error = prepared->error();
+        engagement.close_preparation.reset();
+        return foundation::Result<void>::failure(error);
+      }
+      auto& result = prepared->value();
+      if (result.pattern.project_id().value() != *project_id ||
+          (project_revision && result.pattern.project_revision() < *project_revision)) {
+        engagement.close_preparation.reset();
+        return foundation::Result<void>::failure(
+            Error{ErrorCode::revision_conflict, "Post-close Pattern source changed"});
+      }
+      project_revision = result.pattern.project_revision();
       retarget_transport_selection(*current);
-      auto pattern = prepare_project_pattern(*current);
-      if (!pattern.has_value()) return foundation::Result<void>::failure(pattern.error());
+      const auto released = release_tempo_for_external();
+      if (!released.has_value()) return released;
       // A stopped transport must not retain a Bar-delayed close view that
       // blocks the next Play. Record-off while playing keeps its old policy.
-      auto published = publish_prepared_pattern(std::move(pattern.value()), {}, {},
+      auto published = publish_prepared_pattern_with_material(
+          std::move(result.pattern), std::move(result.tempo_material), {}, {},
           !engagement.controller->inspect().playing);
       if (!published.has_value()) {
+        // Native may consume a rejected view while releasing its candidate
+        // slot. Keep the close pending and prepare a fresh derived view on
+        // the worker, as the original synchronous retry did.
+        engagement.close_preparation.reset();
         // Keep the completion outstanding so the next step retries the same
         // publication; the journal settlement it follows is already durable.
         return foundation::Result<void>::failure(published.error());
       }
       engagement.publish_pending = false;
+      engagement.close_preparation.reset();
       return foundation::Result<void>::success();
     }
     const auto was_recording = engagement.controller->inspect().recording;
@@ -8607,6 +8720,18 @@ bool detail::ControlRuntimePatternIoAccess::stopped(
   } catch (...) {
     return false;
   }
+}
+
+bool detail::ControlRuntimePatternIoAccess::close_publication_pending(
+    const ControlRuntime& runtime) noexcept {
+  return runtime.impl_->transport && runtime.impl_->transport->publish_pending;
+}
+
+bool detail::ControlRuntimePatternIoAccess::close_preparation_returned(
+    const ControlRuntime& runtime) noexcept {
+  return !runtime.impl_->transport ||
+      !runtime.impl_->transport->close_preparation ||
+      runtime.impl_->transport->close_preparation->returned();
 }
 
 detail::ControlRuntimeSnapshotTruth

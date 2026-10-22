@@ -304,6 +304,11 @@ class ProjectStore {
   // this never recovers interrupted writes or scavenges unpublished files.
   foundation::Result<domain::ProjectState> inspect_committed(
       const std::filesystem::path& bundle) const;
+  // The verified form retains load's complete Asset integrity checks, while
+  // still performing no recovery or staging cleanup under the owner lease.
+  // The existing selector form above continues to defer Asset verification.
+  foundation::Result<domain::ProjectState> inspect_committed(
+      const std::filesystem::path& bundle, bool verify_asset_bytes) const;
   foundation::Result<domain::AppliedCommand> execute(
       const std::filesystem::path& bundle,
       const domain::Command& command);

@@ -12,6 +12,7 @@
 #include <filesystem>
 #include <fstream>
 #include <functional>
+#include <future>
 #include <iostream>
 #include <map>
 #include <memory>
@@ -8548,7 +8549,8 @@ Json settle_pattern_transport(
     // fixture bound, observing actual worker completion before each leg.
     wait_until([&] {
       static_cast<void>(pattern_transport_inspect(runtime, session_id));
-      return lmdj::web_runtime::detail::ControlRuntimePatternIoAccess::idle(runtime);
+      return lmdj::web_runtime::detail::ControlRuntimePatternIoAccess::idle(runtime) &&
+          lmdj::web_runtime::detail::ControlRuntimePatternIoAccess::close_preparation_returned(runtime);
     });
     audio.render_one();
     auto status = pattern_transport_inspect(runtime, session_id);
@@ -9807,7 +9809,8 @@ void test_pattern_events_edit_deferral_waits_out_a_recording() {
       // actual retained worker work before this same original callback leg.
       wait_until([&] {
         runtime->service_pattern_transport();
-        return lmdj::web_runtime::detail::ControlRuntimePatternIoAccess::idle(*runtime);
+        return lmdj::web_runtime::detail::ControlRuntimePatternIoAccess::idle(*runtime) &&
+            lmdj::web_runtime::detail::ControlRuntimePatternIoAccess::close_preparation_returned(*runtime);
       });
       static_cast<void>(render_grid_frames(engine, 128));
       runtime->service_pattern_transport();
@@ -10209,7 +10212,11 @@ void test_pattern_transport_records_live_input_and_rejects_legacy_writes() {
   LMDJ_CHECK(settled.at("recording") == false);
   LMDJ_CHECK(settled.at("playing") == true);
   LMDJ_CHECK(settled.at("publication_pending") == true);
-  const auto published = pattern_transport_inspect(*runtime, kSequenceSessionId);
+  Json published;
+  wait_until([&] {
+    published = pattern_transport_inspect(*runtime, kSequenceSessionId);
+    return published.at("publication_pending") == false;
+  });
   LMDJ_CHECK(published.at("publication_pending") == false);
 
   // A retained completed command replays; the same identity with a changed
@@ -10884,7 +10891,8 @@ Json settled_transport_status(
     // bound before the next leg can establish its actual audio receipt.
     wait_until([&] {
       static_cast<void>(pattern_transport_inspect(runtime, kSequenceSessionId));
-      return lmdj::web_runtime::detail::ControlRuntimePatternIoAccess::idle(runtime);
+      return lmdj::web_runtime::detail::ControlRuntimePatternIoAccess::idle(runtime) &&
+          lmdj::web_runtime::detail::ControlRuntimePatternIoAccess::close_preparation_returned(runtime);
     });
     engine.render(left.data(), right.data(), 128);
     const auto status =
@@ -10893,7 +10901,8 @@ Json settled_transport_status(
       return status;
     }
   }
-  throw std::runtime_error("Pattern transport did not settle");
+  throw std::runtime_error("Pattern transport did not settle: " +
+      pattern_transport_inspect(runtime, kSequenceSessionId).dump());
 }
 
 // Advance only audio at a one-shot Host cutpoint. No Host inspection or
@@ -13601,6 +13610,27 @@ class HeldLegacyCandidateStorage final
     return observation_.entered && !released_ && !observation_.delegated &&
         !observation_.expired;
   }
+  struct ReadObservation {
+    std::filesystem::path path;
+    std::thread::id worker;
+    bool entered{}, returned{}, expired{};
+  };
+  void arm_project_read(std::size_t ordinal) {
+    std::lock_guard lock(mutex_);
+    read_observation_ = {};
+    read_ordinal_ = ordinal;
+    reads_seen_ = 0;
+    read_released_ = false;
+  }
+  ReadObservation inspect_read() const {
+    std::lock_guard lock(mutex_);
+    return read_observation_;
+  }
+  void release_read() noexcept {
+    std::lock_guard lock(mutex_);
+    read_released_ = true;
+    changed_.notify_all();
+  }
   lmdj::foundation::Result<void> append_durable(
       const std::filesystem::path& path, std::uint64_t prefix,
       std::span<const std::byte> bytes) override {
@@ -13649,7 +13679,25 @@ class HeldLegacyCandidateStorage final
   lmdj::foundation::Result<void> ensure_directory(const std::filesystem::path& p) override { return inner_->ensure_directory(p); }
   lmdj::foundation::Result<bool> exists(const std::filesystem::path& p) const override { return inner_->exists(p); }
   lmdj::foundation::Result<std::uint64_t> byte_length(const std::filesystem::path& p) const override { return inner_->byte_length(p); }
-  lmdj::foundation::Result<std::vector<std::byte>> read_complete(const std::filesystem::path& p) const override { return inner_->read_complete(p); }
+  lmdj::foundation::Result<std::vector<std::byte>> read_complete(const std::filesystem::path& p) const override {
+    bool selected = false;
+    {
+      std::unique_lock lock(mutex_);
+      if (read_ordinal_ != 0 && p == bundle_ / "manifest.json" && ++reads_seen_ == read_ordinal_) {
+        selected = true;
+        read_observation_ = {p, std::this_thread::get_id(), true};
+        changed_.notify_all();
+        if (!changed_.wait_for(lock, std::chrono::seconds{2}, [&] { return read_released_; }))
+          read_observation_.expired = true;
+      }
+    }
+    auto result = inner_->read_complete(p); // Always delegate the real read.
+    if (selected) {
+      std::lock_guard lock(mutex_);
+      read_observation_.returned = true;
+    }
+    return result;
+  }
   lmdj::foundation::Result<void> create_immutable(const std::filesystem::path& p, std::span<const std::byte> b) override { return inner_->create_immutable(p, b); }
   lmdj::foundation::Result<void> replace_complete(const std::filesystem::path& p, std::span<const std::byte> b) override { return inner_->replace_complete(p, b); }
   lmdj::foundation::Result<void> remove(const std::filesystem::path& p) override { return inner_->remove(p); }
@@ -13664,13 +13712,16 @@ class HeldLegacyCandidateStorage final
   const std::shared_ptr<lmdj::project_io::ProjectStoragePlatform> inner_{
       lmdj::project_io::make_default_project_storage_platform()};
   mutable std::mutex mutex_;
-  std::condition_variable changed_;
+  mutable std::condition_variable changed_;
   std::chrono::steady_clock::time_point deadline_;
   Observation observation_;
   std::string kind_;
   std::string fail_kind_;
   bool armed_{}, released_{};
   bool lose_reply_{};
+  mutable ReadObservation read_observation_;
+  mutable std::size_t read_ordinal_{}, reads_seen_{};
+  bool read_released_{};
 };
 
 void test_bridge_retains_original_legacy_rpc_until_exact_candidate_is_durable(
@@ -14170,7 +14221,7 @@ struct RecordingSwitchHostFixture {
   std::uint32_t command{10600};
   std::uint64_t serial{}, epoch{1};
 
-  RecordingSwitchHostFixture() {
+  explicit RecordingSwitchHostFixture(bool single_pattern = false, bool physical_audio = false) {
     auto config = make_application_config(temp.path());
     config.storage_platform = storage;
     auto made = ControlRuntime::create(temp.path(), std::move(config), kWebLimits);
@@ -14191,7 +14242,7 @@ struct RecordingSwitchHostFixture {
     check_success(runtime->dispatch("sample.update_pad", {{"command_id", uuid(command++)},
         {"expected_revision", project_revision_of(*runtime)}, {"slot", slot(0, 0)},
         {"playback", playback}}, {}));
-    for (const auto pattern : {kSwitchPatternB, kSwitchPatternC, kNextPatternId}) {
+    if (!single_pattern) for (const auto pattern : {kSwitchPatternB, kSwitchPatternC, kNextPatternId}) {
       check_success(runtime->dispatch("pattern.create", {{"command_id", uuid(command++)},
           {"expected_revision", project_revision_of(*runtime)}, {"pattern_id", pattern}, {"bars", 1}}, {}));
     }
@@ -14201,6 +14252,8 @@ struct RecordingSwitchHostFixture {
     check_success(runtime->dispatch("snapshot.reload", {{"pattern_id", kPatternId}}, {}));
     coordinator.begin_acknowledgement = runtime->engine().bank_telemetry().accepted_publications;
     LMDJ_CHECK(ControlRuntimeAudioAccess::install(*runtime, coordinator.seam()).has_value());
+    if (physical_audio) LMDJ_CHECK(lmdj::web_runtime::detail::ControlRuntimePhysicalAudioAccess::install(
+        *runtime, coordinator.physical_seam()).has_value());
     check_success(runtime->dispatch("audio.activate", Json::object(), {}));
     coordinator.engine = &runtime->engine();
     coordinator.observe_engine_generation = true;
@@ -14208,7 +14261,7 @@ struct RecordingSwitchHostFixture {
         "pattern.transport.count-in.capabilities", {{"negotiate", false}}, {}));
     initial_truth = truth();
   }
-  ~RecordingSwitchHostFixture() { storage->release(); } // Before worker/runtime destruction.
+  ~RecordingSwitchHostFixture() { if (storage) storage->release(); } // Before worker/runtime destruction.
   RealtimeEngine& engine() { return runtime->engine(); }
   Json truth() { return check_locked_success_result(runtime->dispatch("project.inspect", Json::object(), {})).at("project"); }
   void check_truth(const Json& expected) {
@@ -14483,8 +14536,9 @@ void test_recording_switch_host_keeps_original_count_in_receipts_and_prompt_f() 
     f.runtime->service_pattern_transport();
     finished = check_locked_success_result(f.runtime->dispatch(
         "pattern.transport.count-in.inspect", companion_count_in_inspection(ticket), {}));
+    const auto ordinary = pattern_transport_inspect(*f.runtime, kSequenceSessionId);
     return lmdj::web_runtime::detail::ControlRuntimePatternIoAccess::idle(*f.runtime) &&
-        pattern_transport_inspect(*f.runtime, kSequenceSessionId).at("recording") == false;
+        ordinary.at("recording") == false && ordinary.at("publication_pending") == false;
   });
   // Normal caller evidence and the input consumer are independent owners.
   // Consuming the real e1/e2 must not spend the original release ticket.
@@ -14739,10 +14793,190 @@ void test_recording_switch_host_count_in_poll_republishes_actual_current_without
   f.stop_and_reopen(f.initial_truth);
 }
 
+enum class PostCloseLifecycle { none, stop, suspend, destroy, timeout };
+
+void test_record_off_publication_keeps_short_inspect_serviceable(
+    std::size_t read_ordinal, PostCloseLifecycle lifecycle = PostCloseLifecycle::none) {
+  using lmdj::web_runtime::detail::ControlRuntimePatternIoAccess;
+  LMDJ_CHECK(read_ordinal == 1 || read_ordinal == 2);
+  RecordingSwitchHostFixture f{true, lifecycle == PostCloseLifecycle::timeout};
+  f.start();
+  std::unique_ptr<OneShotAudioDriver> terminal_driver;
+  if (lifecycle == PostCloseLifecycle::timeout) {
+    terminal_driver = std::make_unique<OneShotAudioDriver>(f.engine());
+    terminal_driver->bind(f.coordinator);
+    terminal_driver->render_one();
+    LMDJ_CHECK(terminal_driver->completed_callbacks() != 0);
+  }
+  const auto origin = f.engine().current_pattern_origin_frame().value();
+  f.until(origin + 6'000);
+  const auto press = f.input();
+  render_switch_frames_exact(f.engine(), 1);
+  const auto pressed = f.settle_input(press);
+  f.until(origin + 12'000);
+  const auto release = f.input(true, pressed.at("admission").at("sequence"));
+  render_switch_frames_exact(f.engine(), 1);
+  f.settle_input(release);
+  check_success(f.request("record"));
+  wait_until([&] {
+    if (ControlRuntimePatternIoAccess::close_publication_pending(*f.runtime)) return true;
+    render_switch_frames_exact(f.engine(), 128);
+    f.runtime->service_pattern_transport();
+    return ControlRuntimePatternIoAccess::close_publication_pending(*f.runtime);
+  });
+  LMDJ_CHECK(!lmdj::project_io::SequenceJournal{}.read_active(f.bundle).has_value());
+  // The close and actual F are real. Only the following selected project
+  // read is held; no Snapshot, Native observation or Journal result is faked.
+  f.storage->arm_project_read(read_ordinal);
+  std::promise<Json> completed;
+  auto response = completed.get_future();
+  const auto start = std::chrono::steady_clock::now();
+  const auto original_deadline = start + std::chrono::milliseconds{1000};
+  std::jthread control([&] {
+    try {
+      completed.set_value(f.runtime->dispatch("pattern.transport.inspect",
+          {{"session_id", kSequenceSessionId}}, {},
+          ControlRuntime::AbsoluteRequestDeadline{original_deadline}));
+    } catch (...) { completed.set_exception(std::current_exception()); }
+  });
+  const auto control_id = control.get_id();
+  struct ReleaseRead {
+    std::shared_ptr<HeldLegacyCandidateStorage> storage;
+    ~ReleaseRead() { if (storage) storage->release_read(); }
+  } release_read{f.storage}; // Destructs before the control thread joins.
+  const auto expected_truth = [&] {
+    auto expected = f.initial_truth;
+    expected["revision"] = expected.at("revision").get<std::uint64_t>() + 1;
+    expected["patterns"][kPatternId]["events"] = Json::array({recorded_switch_note(240, 240)});
+    return expected;
+  };
+  const auto before_retirement = f.engine().pattern_telemetry().accepted_publications;
+  const bool in_budget = response.wait_until(original_deadline) == std::future_status::ready;
+  if (in_budget) {
+    control.join();
+    wait_until([&] { return f.storage->inspect_read().entered; });
+    // Admission returning early is insufficient: another real short request
+    // must finish while the selected real read remains held on its worker.
+    const auto short_deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds{1000};
+    const auto held_reply = f.runtime->dispatch("pattern.transport.inspect",
+        {{"session_id", kSequenceSessionId}}, {},
+        ControlRuntime::AbsoluteRequestDeadline{short_deadline});
+    LMDJ_CHECK(std::chrono::steady_clock::now() < short_deadline);
+    check_success(held_reply);
+    LMDJ_CHECK(!f.storage->inspect_read().returned);
+    if (lifecycle == PostCloseLifecycle::stop) {
+      check_success(f.request("play_stop"));
+      render_switch_frames_exact(f.engine(), 1);
+      const auto stopped = pattern_transport_inspect(*f.runtime, kSequenceSessionId);
+      LMDJ_CHECK(stopped.at("playing") == false && stopped.at("publication_pending") == true);
+      LMDJ_CHECK(!f.storage->inspect_read().returned);
+    }
+    if (lifecycle == PostCloseLifecycle::suspend) {
+      const auto suspend_deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds{1000};
+      const auto pending = check_error(f.runtime->dispatch("audio.suspend", Json::object(), {}), "IO_ERROR");
+      LMDJ_CHECK(std::chrono::steady_clock::now() < suspend_deadline);
+      LMDJ_CHECK(pending.at("details") == Json::object()); // Original privacy envelope.
+      LMDJ_CHECK(f.runtime->pattern_transport_pending());
+      LMDJ_CHECK(!f.runtime->pattern_transport_shutdown_complete());
+      LMDJ_CHECK(!ControlRuntimePatternIoAccess::close_preparation_returned(*f.runtime));
+    }
+    if (lifecycle == PostCloseLifecycle::timeout) {
+      check_error(f.runtime->dispatch("host.status", Json::object(), {},
+          ControlRuntime::AbsoluteRequestDeadline{std::chrono::steady_clock::now() - std::chrono::milliseconds{1}}),
+          "HOST_TIMEOUT");
+      LMDJ_CHECK(f.runtime->failed());
+      LMDJ_CHECK(!f.runtime->pattern_transport_shutdown_complete());
+      LMDJ_CHECK(!ControlRuntimePatternIoAccess::close_preparation_returned(*f.runtime));
+      LMDJ_CHECK(!FakeCoordinator::callback_thread_joined(&f.coordinator));
+      terminal_driver->stop(); // Actual callback last use, not a timeout or telemetry assertion.
+      LMDJ_CHECK(FakeCoordinator::callback_thread_joined(&f.coordinator));
+      f.runtime->service_pattern_transport();
+      LMDJ_CHECK(f.engine().telemetry().state == lmdj::audio::RealtimeState::stopped);
+      LMDJ_CHECK(!f.runtime->pattern_transport_shutdown_complete()); // The real reader is still held.
+    }
+    if (lifecycle == PostCloseLifecycle::destroy) {
+      std::weak_ptr<HeldLegacyCandidateStorage> custody = f.storage;
+      const auto destruction_deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds{1000};
+      f.runtime.reset();
+      LMDJ_CHECK(std::chrono::steady_clock::now() < destruction_deadline);
+      release_read.storage.reset();
+      f.storage.reset();
+      LMDJ_CHECK(!custody.expired()); // Only the blocked real reader retains its platform.
+      {
+        const auto reader_platform = custody.lock();
+        LMDJ_CHECK(reader_platform && !reader_platform->inspect_read().returned);
+        reader_platform->release_read();
+      }
+      wait_until([&] { return custody.expired(); });
+      f.reopen(expected_truth());
+      return;
+    }
+  }
+  const auto observed = f.storage->inspect_read();
+  f.storage->release_read();
+  if (control.joinable()) control.join();
+  const auto reply = response.get();
+  std::cout << "post-close probe ordinal=" << read_ordinal << " read_entered=" << observed.entered
+      << " on_control=" << (observed.worker == control_id)
+      << " in_original_short_budget=" << in_budget << '\n';
+  if (!in_budget) throw std::runtime_error(
+      "why: post-Record-off publication blocked the short inspect beyond1000ms; "
+      "remedy: keep real preparation/IO off the serialized short-request lane");
+  LMDJ_CHECK(observed.entered && observed.worker != control_id &&
+      observed.worker != std::this_thread::get_id());
+  LMDJ_CHECK(!observed.expired);
+  check_success(reply);
+  if (lifecycle == PostCloseLifecycle::timeout) {
+    wait_until([&] {
+      f.runtime->service_pattern_transport();
+      return f.runtime->pattern_transport_shutdown_complete();
+    });
+    LMDJ_CHECK(f.runtime->failed()); // Resource retirement never clears the original failure.
+    LMDJ_CHECK(f.engine().pattern_telemetry().accepted_publications == before_retirement);
+    f.reopen(expected_truth());
+    return;
+  }
+  settled_transport_status(*f.runtime, f.engine(), [](const auto& status) {
+    return status.at("recording") == false && status.at("publication_pending") == false;
+  });
+  const auto expected = expected_truth();
+  f.check_truth(expected);
+  if (lifecycle == PostCloseLifecycle::suspend) {
+    wait_until([&] {
+      f.runtime->service_pattern_transport();
+      return ControlRuntimePatternIoAccess::stopped(*f.runtime);
+    });
+    check_success(dispatch_retained_for_test(*f.runtime, "audio.suspend", Json::object(), {}));
+    LMDJ_CHECK(f.runtime->pattern_transport_shutdown_complete());
+    f.reopen(expected);
+  } else if (lifecycle == PostCloseLifecycle::stop) f.reopen(expected);
+  else f.stop_and_reopen(expected);
+}
+
 }  // namespace
 
-int main() {
+int main(int argc, char** argv) {
   try {
+    if ((argc == 3 || argc == 4) && std::string_view(argv[1]) == "--post-close-read") {
+      auto lifecycle = PostCloseLifecycle::none;
+      if (argc == 4) {
+        const std::string_view selected = argv[3];
+        if (selected == "stop") lifecycle = PostCloseLifecycle::stop;
+        else if (selected == "suspend") lifecycle = PostCloseLifecycle::suspend;
+        else if (selected == "destroy") lifecycle = PostCloseLifecycle::destroy;
+        else if (selected == "timeout") lifecycle = PostCloseLifecycle::timeout;
+        else throw std::invalid_argument("unknown post-close lifecycle");
+      }
+      test_record_off_publication_keeps_short_inspect_serviceable(
+          static_cast<std::size_t>(std::stoul(argv[2])), lifecycle);
+      return 0;
+    }
+    test_record_off_publication_keeps_short_inspect_serviceable(1);
+    test_record_off_publication_keeps_short_inspect_serviceable(2);
+    test_record_off_publication_keeps_short_inspect_serviceable(1, PostCloseLifecycle::stop);
+    test_record_off_publication_keeps_short_inspect_serviceable(1, PostCloseLifecycle::suspend);
+    test_record_off_publication_keeps_short_inspect_serviceable(1, PostCloseLifecycle::destroy);
+    test_record_off_publication_keeps_short_inspect_serviceable(1, PostCloseLifecycle::timeout);
     test_recording_switch_host_returns_to_acknowledged_material_and_reopens();
     test_recording_switch_host_keeps_both_native_facts_behind_real_io();
     test_recording_switch_host_keeps_both_native_facts_behind_real_io(true);

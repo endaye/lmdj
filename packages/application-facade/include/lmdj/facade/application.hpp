@@ -3,6 +3,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
+#include <functional>
 #include <memory>
 #include <optional>
 #include <span>
@@ -205,6 +206,10 @@ struct RuntimeSnapshotRequest {
   foundation::PatternId pattern_id;
   std::optional<audio::RuntimePreparationLimits> limits = std::nullopt;
 };
+
+using RuntimeSnapshotPreparer = std::function<
+    foundation::Result<std::shared_ptr<const cooker::RuntimeSnapshot>>(
+        const RuntimeSnapshotRequest&)>;
 
 // Computer-side derived export; codec limits do not bound source WAV cooking.
 // Never persists the selected Pad closure or publishes a runtime generation.
@@ -580,6 +585,14 @@ class Application {
   nlohmann::json query(const nlohmann::json& request) const;
   foundation::Result<std::shared_ptr<const cooker::RuntimeSnapshot>>
   prepare_runtime_snapshot(const RuntimeSnapshotRequest& request);
+  // Construction performs no I/O. Transfer this callable and an immutable
+  // request to a worker: each invocation owns private Store/history state over
+  // this exact platform, and acquires/releases its leases on that caller.
+  // It reads committed Truth without recovery/scavenging, verifies the same
+  // complete Artifacts/cooker quotas, and refuses a revision changed mid-read.
+  // It borrows no Application or Runtime state and may outlive Application.
+  // Never invoke preparation on audio or a short serialized control turn.
+  RuntimeSnapshotPreparer make_runtime_snapshot_preparer() const;
   // Serialized with the bound Engine and all transport-control calls, never
   // audio. The Engine must outlive its active binding. An unreleased
   // binding requires Host-established render quiescence before Application

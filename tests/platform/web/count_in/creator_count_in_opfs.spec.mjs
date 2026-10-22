@@ -140,7 +140,8 @@ async function finishAndReopen(page, setup, start, event, {alreadyCancelled = fa
   await expect.poll(async () => {
     closed = await inspectCountIn(page, start.admitted.ticket);
     ordinary = (await inspectOrdinary(page, setup.sessionId)).legacy;
-    return closed.cancelReceipt?.result === "applied" && ordinary.phase === "idle" && !ordinary.recording;
+    return closed.cancelReceipt?.result === "applied" && ordinary.phase === "idle" &&
+      !ordinary.recording && !ordinary.publicationPending;
   }, {timeout: 5_000, intervals: [10]}).toBe(true);
   expect(closed.error).toBeNull();
   expect(closed.cancelReceipt).toMatchObject({transportEpoch: "2", originFrame: start.armed.countIn.startFrame,

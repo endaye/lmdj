@@ -8566,6 +8566,11 @@ ProjectStore::scan_performance_recording(
 
 foundation::Result<domain::ProjectState> ProjectStore::inspect_committed(
     const std::filesystem::path& bundle) const {
+  return inspect_committed(bundle, false);
+}
+
+foundation::Result<domain::ProjectState> ProjectStore::inspect_committed(
+    const std::filesystem::path& bundle, bool verify_asset_bytes) const {
   auto history_guard = history_->acquire();
   using Result = foundation::Result<domain::ProjectState>;
   if (bundle.extension() != ".lmdj")
@@ -8576,7 +8581,7 @@ foundation::Result<domain::ProjectState> ProjectStore::inspect_committed(
   if (!lease.has_value()) return Result::failure(lease.error());
   tree = validate_managed_bundle_tree(*platform_, bundle);
   if (!tree.has_value()) return Result::failure(tree.error());
-  auto loaded = load_project(*platform_, bundle, false);
+  auto loaded = load_project(*platform_, bundle, verify_asset_bytes);
   if (!loaded.has_value()) return Result::failure(loaded.error());
   return Result::success(std::move(loaded.value()->state));
 }

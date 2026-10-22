@@ -1,6 +1,6 @@
 <!doctype html>
-<html lang="zh-Hans"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Application Facade Module</title><style>html,body{margin:0}body{background:#f7fafb}@media(prefers-color-scheme:dark){body{background:#071011}}body[data-theme=light]{background:#f7fafb}body[data-theme=dark]{background:#071011}main{min-width:760px}svg{display:block;width:100%;height:auto}</style></head><body><main><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1560 820" role="img" aria-labelledby="title description" data-source-sha256="ecdf33707a79cd5b002ce24322161a2e2f6403262d50058a3e0d75c7c6c88fe3">
-  <title id="title">Application Facade Module</title><desc id="description">唯一 Core 入口；两张切换票据按真实 S 连接 serialized control 与单一 I/O owner</desc>
+<html lang="zh-Hans"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Application Facade Module</title><style>html,body{margin:0}body{background:#f7fafb}@media(prefers-color-scheme:dark){body{background:#071011}}body[data-theme=light]{background:#f7fafb}body[data-theme=dark]{background:#071011}main{min-width:760px}svg{display:block;width:100%;height:auto}</style></head><body><main><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1560 820" role="img" aria-labelledby="title description" data-source-sha256="78babb5c7894293c6ae4c7b7bb4a993b77d311d65d44d901f4544e6a49a584d6">
+  <title id="title">Application Facade Module</title><desc id="description">唯一 Core 入口；真实 S 连接 control 与 Journal owner，Snapshot 独立准备</desc>
   <defs><marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z"/></marker></defs>
   <style>
     :root{--bg:#f7fafb;--panel:#fff;--text:#102427;--muted:#4b6569;--line:#2b7778;--border:#b8cdcf;--boundary:#eaf4f4;--accent:#00a9a5;--mask:#f7fafb}
@@ -10,7 +10,7 @@
     svg{background:var(--bg);font-family:Inter,"PingFang SC",system-ui,sans-serif}.page-title{font-size:32px;font-weight:750;fill:var(--text)}.page-summary{font-size:16px;fill:var(--muted)}
     .boundary rect{fill:var(--boundary);stroke:var(--border);stroke-dasharray:7 6}.boundary text{fill:var(--muted);font-size:15px;font-weight:700}.edge-mask{fill:none;stroke:var(--mask);stroke-width:10}.edge{fill:none;stroke:var(--line);stroke-width:2.5}.connection text{fill:var(--muted);font-size:14px;text-anchor:middle}.node-mask{fill:var(--mask)}.node{fill:var(--panel);stroke:var(--border);stroke-width:2}.kind-host .node,.kind-provider .node{stroke:var(--accent)}.node-title{fill:var(--text);font-size:19px;font-weight:750}.node-detail{fill:var(--muted);font-size:14px}.card rect{fill:var(--panel);stroke:var(--border)}.card-title{fill:var(--text);font-size:17px;font-weight:750}.card-body{color:var(--muted);font-size:15px;line-height:1.45}.marker{fill:var(--line)}
   </style>
-  <rect width="1560" height="820" fill="var(--bg)"/><text class="page-title" x="40" y="44">Application Facade Module</text><text class="page-summary" x="40" y="68">唯一 Core 入口；两张切换票据按真实 S 连接 serialized control 与单一 I/O owner</text>
+  <rect width="1560" height="820" fill="var(--bg)"/><text class="page-title" x="40" y="44">Application Facade Module</text><text class="page-summary" x="40" y="68">唯一 Core 入口；真实 S 连接 control 与 Journal owner，Snapshot 独立准备</text>
 
   <g class="connection"><path class="edge-mask" d="M 260 188 H 470 V 298 H 680"/><path class="edge" d="M 260 188 H 470 V 298 H 680" marker-end="url(#arrow)"/><text x="470" y="234">Facade API</text></g>
 <g class="connection"><path class="edge-mask" d="M 260 428 H 300 V 428 H 340"/><path class="edge" d="M 260 428 H 300 V 428 H 340" marker-end="url(#arrow)"/><text x="300" y="419">Platform API</text></g>
@@ -47,7 +47,7 @@
       <rect class="node-mask" x="676" y="246" width="258" height="104" rx="18"/>
       <rect class="node" x="680" y="250" width="250" height="96" rx="14"/>
       <text class="node-title" x="696" y="282">Application Facade</text>
-      <text class="node-detail" x="696" y="308">shared history · registry</text>
+      <text class="node-detail" x="696" y="308">shared history · detached reader</text>
     </g>
     <g class="component kind-core">
       <rect class="node-mask" x="1006" y="246" width="228" height="104" rx="18"/>
@@ -88,7 +88,7 @@
     <g class="component kind-core">
       <rect class="node-mask" x="1006" y="96" width="258" height="104" rx="18"/>
       <rect class="node" x="1010" y="100" width="250" height="96" rx="14"/>
-      <text class="node-title" x="1026" y="132">Single I/O Owner</text>
+      <text class="node-title" x="1026" y="132">Journal I/O Owner</text>
       <text class="node-detail" x="1026" y="158">durable S · source flush · clock</text>
     </g>
     <g class="component kind-core">
@@ -97,7 +97,7 @@
       <text class="node-title" x="1326" y="132">Exact Work Cell</text>
       <text class="node-detail" x="1326" y="158">64 KiB · exact work identity</text>
     </g>
-  <g class="card"><rect x="40" y="638" width="356" height="132" rx="14"/><text class="card-title" x="58" y="670">Facade / I/O owner</text><foreignObject x="58" y="684" width="320" height="70"><div xmlns="http://www.w3.org/1999/xhtml" class="card-body">Facade 保留两张切换票据；Host 持真实 lease，逐张复制 S；旧段 ACK 后收录目标输入。worker 独占 Store/Journal；Creator 待接线。</div></foreignObject></g>
+  <g class="card"><rect x="40" y="638" width="356" height="132" rx="14"/><text class="card-title" x="58" y="670">Facade / I/O owner</text><foreignObject x="58" y="684" width="320" height="70"><div xmlns="http://www.w3.org/1999/xhtml" class="card-body">Facade 保留切换票据；Journal worker 独占耐久 owner。close 后独立 reader 准备 Snapshot，Control 只收取结果并发布。</div></foreignObject></g>
 <g class="card"><rect x="414" y="638" width="356" height="132" rx="14"/><text class="card-title" x="432" y="670">独立录音 release</text><foreignObject x="432" y="684" width="320" height="70"><div xmlns="http://www.w3.org/1999/xhtml" class="card-body">Native 与 durable 分开。S 只结算旧段元数据；真实按键 release 票据仍需实际 Native 消费者。</div></foreignObject></g>
 <g class="card"><rect x="788" y="638" width="356" height="132" rx="14"/><text class="card-title" x="806" y="670">Performance authority</text><foreignObject x="806" y="684" width="320" height="70"><div xmlns="http://www.w3.org/1999/xhtml" class="card-body">Core epoch 绑定 verified Project；header 保存 live state。reserve → durable → publish → complete；unknown 冻结，replay 先还原 header。</div></foreignObject></g>
 <g class="card"><rect x="1162" y="638" width="356" height="132" rx="14"/><text class="card-title" x="1180" y="670">shutdown 与验收</text><foreignObject x="1180" y="684" width="320" height="70"><div xmlns="http://www.w3.org/1999/xhtml" class="card-body">先 I/O owner disposition，后 Host reset pin/consume 与 Native quiescence。失败保留 error；Creator 与候选/设备待验收。</div></foreignObject></g>

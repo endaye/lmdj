@@ -944,3 +944,17 @@ requires no Runtime projection. Undo/Redo restore it under the history label
 或输入专用 epoch。实际 worker owner 释放、输入/物理 hold、原响应消费和独立
 writer/reopen 继续各自验收。私有 bookkeeping 不改变公共布局、wire 或持久化
 Contract。
+
+
+## 独立 Runtime Snapshot 准备
+
+`Application::make_runtime_snapshot_preparer()` 创建不执行 I/O 的可转移 callable。
+调用方把它和不可变 `RuntimeSnapshotRequest` 交给工作线程；它只保留原配置的 storage
+platform，每次调用使用私有 Store/history，不借用 Application、Engine 或录音会话。
+因此 callable 可以晚于 Application 退役。实际调用会在自己的 realm 内取得并释放
+Project lease，读取 committed Truth，不执行恢复或 staging 清理。
+
+准备保留完整 Asset 摘要／长度验证（包括未分配 Asset）、既有 Cooker 与全部 quota
+规则；结束前复查 Project identity/revision，变化则拒绝这个派生结果。返回的 immutable
+Snapshot 自带真实 Project/Pattern/revision。它不是持久化 Truth，也不发布 Engine 状态。
+长读取、解码和准备不能在 audio 或短请求的 serialized control turn 中调用。

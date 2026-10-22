@@ -203,6 +203,10 @@ class ControlRuntimePatternIoAccess final {
   // The actual executor publishes stopped only after its worker-owned I/O
   // owner is destroyed. Idle and a terminal Host flag cannot replace it.
   static bool stopped(const ControlRuntime& runtime) noexcept;
+  // Observes the real durable-close/publication boundary without advancing
+  // another control turn or manufacturing a completion for conformance.
+  static bool close_publication_pending(const ControlRuntime& runtime) noexcept;
+  static bool close_preparation_returned(const ControlRuntime& runtime) noexcept;
 };
 
 inline constexpr std::size_t kBridgeMaximumEnvelopeBytes = 65'536;
