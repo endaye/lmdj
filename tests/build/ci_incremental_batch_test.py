@@ -291,6 +291,109 @@ class SchedulerTest(unittest.TestCase):
         self.assertEqual(self.state["processed"], E, "why: historical candidate moved cursor; remedy: isolate explicit observations")
         self.assertEqual(self.state["debts"], before, "why: historical candidate cleared newer debt; remedy: keep scopes separate")
 
+    STRESS, ASAN = "core_release_stress", "core_asan"
+
+    def settled_candidate(self, outcomes, name="candidate"):
+        """A candidate for B whose durable result records ``outcomes`` (others passed)."""
+        candidate = self.request(B, kind="candidate", name=name)
+        self.apply("enqueue", candidate)
+        self.admit(candidate, executor_run={"run_id": 999, "attempt": 1})
+        executor = self.state["active"]["executor_run"]
+        self.apply("claim", {"request_id": candidate["id"], "run": executor})
+        self.apply("result", {"request_id": candidate["id"], "run": executor, "target": B,
+                              "policy": candidate["policy"], "terminal": True,
+                              "reference": "durable-result:" + name,
+                              "outcomes": {suite: outcomes.get(suite, "passed")
+                                           for suite in candidate["selection"]["suites"]}})
+        self.apply("advance", {"request_id": candidate["id"]})
+        return candidate
+
+    def retry(self, original, environmental, *, name="retry-1", suites=None, target=B, control=A):
+        selection = test_scope._selection(self.policy, sorted(environmental) if suites is None else suites,
+                                          ["retry of " + original])
+        return batch.make_request(self.policy, request_id=name, kind="retry", base_sha=None, target_sha=target,
+                                  control_sha=control, selection=selection, origin_run={"run_id": 11, "attempt": 1},
+                                  retry_of={"request": original, "environmental": environmental})
+
+    def test_retry_request_pairs_kind_with_its_proof(self):
+        self.bootstrap()
+        environmental = {self.STRESS: {"outcome": "cancelled", "jobs": {}}}
+        with self.assertRaisesRegex(batch.BatchError, "retry"):
+            batch.make_request(self.policy, request_id="r", kind="retry", base_sha=None, target_sha=B, control_sha=A,
+                               selection=test_scope._selection(self.policy, [self.STRESS], []),
+                               origin_run={"run_id": 11, "attempt": 1})
+        with self.assertRaisesRegex(batch.BatchError, "retry"):
+            batch.make_request(self.policy, request_id="r", kind="candidate", base_sha=None, target_sha=B, control_sha=A,
+                               selection=self.full, origin_run={"run_id": 11, "attempt": 1},
+                               retry_of={"request": "candidate", "environmental": environmental})
+        # A retry re-runs lanes; it is not a change, so no dependency closure.
+        request = self.retry("candidate", {"core_ubuntu": {"outcome": "cancelled", "jobs": {}}})
+        self.assertEqual(request["selection"]["suites"], ["core_ubuntu"])
+
+    def test_retry_needs_a_durable_result_of_a_candidate_for_the_same_target(self):
+        self.bootstrap()
+        candidate = self.request(B, kind="candidate", name="candidate")
+        self.apply("enqueue", candidate)
+        proof = {self.STRESS: {"outcome": "cancelled", "jobs": {}}}
+        with self.assertRaisesRegex(batch.BatchError, "no durable result"):
+            self.apply("enqueue", self.retry("candidate", proof))
+        with self.assertRaisesRegex(batch.BatchError, "names no candidate"):
+            self.apply("enqueue", self.retry("unknown", proof))
+        self.admit(candidate, executor_run={"run_id": 999, "attempt": 1})
+        self.finish(candidate, "cancelled")
+        with self.assertRaisesRegex(batch.BatchError, "same target"):
+            self.apply("enqueue", self.retry("candidate", {s: {"outcome": "cancelled", "jobs": {}}
+                                                         for s in candidate["selection"]["suites"]}, target=C))
+        node = self.request(B, kind="node", name="node")
+        self.apply("enqueue", node)
+        with self.assertRaisesRegex(batch.BatchError, "names no candidate"):
+            self.apply("enqueue", self.retry("node", proof, name="retry-node"))
+
+    def test_retry_covers_exactly_the_suites_the_candidate_did_not_pass(self):
+        self.bootstrap()
+        self.settled_candidate({self.STRESS: "cancelled", self.ASAN: "failed"})
+        stress = {self.STRESS: {"outcome": "cancelled", "jobs": {}}}
+        asan = {self.ASAN: {"outcome": "failed", "jobs": {"core-asan": "timed_out"}}}
+        with self.assertRaisesRegex(batch.BatchError, "exactly the suites"):
+            self.apply("enqueue", self.retry("candidate", stress))
+        passed = {"core_coverage": {"outcome": "cancelled", "jobs": {}}}
+        with self.assertRaisesRegex(batch.BatchError, "exactly the suites|differs from the candidate result"):
+            self.apply("enqueue", self.retry("candidate", {**stress, **asan, **passed}))
+        self.apply("enqueue", self.retry("candidate", {**stress, **asan}))
+        self.assertEqual(self.state["queue"], ["retry-1"])
+
+    def test_retry_proof_must_match_the_result_and_name_environmental_jobs_only(self):
+        self.bootstrap()
+        self.settled_candidate({self.ASAN: "failed"})
+        with self.assertRaisesRegex(batch.BatchError, "differs from the candidate result"):
+            self.apply("enqueue", self.retry("candidate", {self.ASAN: {"outcome": "cancelled", "jobs": {}}}))
+        with self.assertRaisesRegex(batch.BatchError, "environmental"):
+            self.retry("candidate", {self.ASAN: {"outcome": "failed", "jobs": {}}})
+        with self.assertRaisesRegex(batch.BatchError, "test failure never qualifies"):
+            self.retry("candidate", {self.ASAN: {"outcome": "failed", "jobs": {"core-asan": "failure"}}})
+        with self.assertRaisesRegex(batch.BatchError, "no job proof"):
+            self.retry("candidate", {self.ASAN: {"outcome": "cancelled", "jobs": {"core-asan": "cancelled"}}})
+        self.apply("enqueue", self.retry("candidate", {self.ASAN: {"outcome": "failed", "jobs": {"core-asan": "cancelled"}}}))
+        self.assertEqual(self.state["queue"], ["retry-1"])
+
+    def test_retry_is_once_per_candidate_moves_no_cursor_and_records_no_debt(self):
+        self.bootstrap()
+        self.observe(E)
+        interval = self.request(E, self.focused)
+        self.admit(interval)
+        self.finish(interval, "infrastructure")   # a paused-or-not debt that a retry must not touch
+        before = deepcopy(self.state["debts"])
+        self.settled_candidate({self.STRESS: "cancelled"})
+        retry = self.retry("candidate", {self.STRESS: {"outcome": "cancelled", "jobs": {}}})
+        self.apply("enqueue", retry)
+        self.admit(retry, executor_run={"run_id": 11, "attempt": 1})
+        self.finish(retry)
+        self.assertEqual(self.state["results"]["retry-1"]["outcomes"], {self.STRESS: "passed"})
+        self.assertEqual(self.state["processed"], E, "why: retry moved the automatic cursor; remedy: isolate explicit work")
+        self.assertEqual(self.state["debts"], before, "why: retry changed debt; remedy: isolate explicit work")
+        with self.assertRaisesRegex(batch.BatchError, "at most once"):
+            self.apply("enqueue", self.retry("candidate", {self.STRESS: {"outcome": "cancelled", "jobs": {}}}, name="retry-2"))
+
     def test_block_does_not_change_cursor(self):
         self.bootstrap()
         self.apply("block", {"why": "backend unavailable", "remedy": "restore checkpoint"})

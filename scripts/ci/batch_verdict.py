@@ -38,7 +38,7 @@ def _identity(policy, identity):
     require(isinstance(identity, dict) and set(identity) == IDENTITY_KEYS, "identity schema is not closed")
     require(isinstance(identity["request_id"], str) and bool(identity["request_id"]), "missing request ID")
     require(isinstance(identity["request_kind"], str)
-            and identity["request_kind"] in {"auto", "bootstrap", "node", "candidate"}, "unknown request kind")
+            and identity["request_kind"] in {"auto", "bootstrap", "node", "candidate", "retry"}, "unknown request kind")
     for key in ("target_sha", "control_sha"):
         require(isinstance(identity[key], str) and re.fullmatch(r"[0-9a-f]{40}", identity[key]),
                 f"{key} is not an exact revision")
