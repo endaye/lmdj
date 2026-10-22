@@ -207,7 +207,12 @@ uses `self-test-report.yml` on ref `main`, `batch_operation=reconcile`, and
 Leave `journal_config` empty to use the repository's authenticated fixed scheduler.
 Use `kind=node` for an explicit diagnostic rather than candidate selection.
 Both kinds request all 15 suites and share the durable execution budget;
-neither moves automatic processing progress or authorizes a release.
+neither moves automatic processing progress or authorizes a release. A
+candidate or retry batch runs on the pinned release hosts (the M1 for the
+macOS gates and Release stress, netcup for the Web lanes): the selectors
+never hand it to the M4 Pro or en-home overflow, so an admission flip on
+those workstations cannot change where release evidence comes from (#2422
+item 11).
 Redelivering the same ID and target reconciles the original request; a genuinely
 new test needs a new ID. Do not use lane selection, a queue ticket, or a SHA as
 the dispatch ref. When a candidate did not pass only because the platform

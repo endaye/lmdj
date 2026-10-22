@@ -537,6 +537,8 @@ jobs:
         env:
           REPOSITORY: ${{ github.repository }}
           WEB_OVERFLOW_RUNNER_NAME: win11-wsl-lmdj-linux
+          # The admitted request's kind, from the frozen execution manifest.
+          BATCH_REQUEST_KIND: ${{ fromJSON(needs.change-scope.outputs.manifest).identity.request_kind }}
           WEB_RUNNER_READ_TOKEN: ${{ secrets.SELF_HOSTED_RUNNER_READ_TOKEN }}
         run: |
           set -euo pipefail
@@ -550,6 +552,15 @@ jobs:
             echo "Using the netcup Web role: $1"
           }
 
+          # A candidate or retry batch is release evidence: its Web lanes run
+          # on netcup, the host their budgets were measured on, however idle
+          # the en-home overflow is. Admission flips cannot touch a release
+          # (#2422 item 11).
+          case "$BATCH_REQUEST_KIND" in
+            candidate|retry)
+              select_netcup "release batch ($BATCH_REQUEST_KIND) is pinned to netcup"
+              exit 0;;
+          esac
           if [[ -z "$WEB_RUNNER_READ_TOKEN" ]]; then
             select_netcup 'runner status token is unavailable'
             exit 0
@@ -889,6 +900,8 @@ jobs:
           # Mac Release stress may use; the M4 Pro is overflow for the gates.
           PRIMARY_RUNNER_NAME: endaye-mbp-m1
           OVERFLOW_RUNNER_NAME: endaye-mbp-m4-pro
+          # The admitted request's kind, from the frozen execution manifest.
+          BATCH_REQUEST_KIND: ${{ fromJSON(needs.change-scope.outputs.manifest).identity.request_kind }}
           RUNNER_READ_TOKEN: ${{ secrets.SELF_HOSTED_RUNNER_READ_TOKEN }}
         run: |
           set -euo pipefail
@@ -987,6 +1000,20 @@ jobs:
           # availability condition worth paying 10.3x the Linux rate for. The
           # overflow Mac is preferred only while idle: it is not always on,
           # and an idle runner starts the job seconds after this selection.
+          # A candidate or retry batch is release evidence: its gates run on
+          # the M1, the host their budgets were measured on, queueing when it
+          # is busy; the M4 Pro overflow is never taken, so admission flips
+          # cannot touch a release (#2422 item 11). Availability is unchanged:
+          # an absent M1 still falls back to hosted macOS.
+          case "$BATCH_REQUEST_KIND" in
+            candidate|retry)
+              if [[ "$primary_state" != "absent" ]]; then
+                select_self_hosted lmdj-mac-m1 "release batch ($BATCH_REQUEST_KIND) is pinned to the primary Mac"
+              else
+                select_hosted "release batch ($BATCH_REQUEST_KIND): primary Mac is offline, missing, or mislabeled"
+              fi
+              exit 0;;
+          esac
           if [[ "$overflow_state" == "idle" ]]; then
             select_self_hosted lmdj-mac-m4 'idle admitted overflow Mac'
           elif [[ "$primary_state" != "absent" ]]; then

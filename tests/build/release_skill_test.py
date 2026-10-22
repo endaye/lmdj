@@ -236,6 +236,7 @@ class ReleaseSkillTest(unittest.TestCase):
             "Redelivering the same ID and target reconciles the original request",
             '"kind":"retry"',
             '"retry_of":"<the candidate\'s request id>"',
+            "pinned release hosts",
             "never list suites",
             "retried at most once",
         ):

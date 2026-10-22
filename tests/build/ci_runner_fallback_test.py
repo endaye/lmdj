@@ -422,7 +422,7 @@ class CiRunnerFallbackTest(unittest.TestCase):
         self.assertIn("timing-sensitive", creator)
         self.assertIn("bounded test budgets", creator)
 
-    def select_mac(self, *runners: dict) -> dict[str, str]:
+    def select_mac(self, *runners: dict, kind: str = "auto") -> dict[str, str]:
         """Run the real selector script against a stubbed Runner API reply."""
         selector = self.workflow_job("select-macos-runner")
         script = re.search(r"        run: \|\n(?P<body>.*)\Z", selector, flags=re.DOTALL)
@@ -444,6 +444,7 @@ class CiRunnerFallbackTest(unittest.TestCase):
             environment.update(
                 PATH=f"{temporary}{os.pathsep}{environment['PATH']}",
                 REPOSITORY="endaye/lmdj",
+                BATCH_REQUEST_KIND=kind,
                 RUNNER_READ_TOKEN="token",
                 GITHUB_OUTPUT=str(output),
                 RUNNER_REPLY=json.dumps(
@@ -526,7 +527,7 @@ class CiRunnerFallbackTest(unittest.TestCase):
         self.assertEqual(selected["self-hosted"], "false")
 
     def select_web(self, *runners: dict, token: str = "token", api_ok: bool = True,
-                   reply: str | None = None) -> dict[str, str]:
+                   reply: str | None = None, kind: str = "auto") -> dict[str, str]:
         """Run the real Web selector against a stubbed Runner API reply."""
         selector = self.workflow_job("select-web-runner")
         script = re.search(r"        run: \|\n(?P<body>.*)\Z", selector, flags=re.DOTALL)
@@ -552,6 +553,7 @@ class CiRunnerFallbackTest(unittest.TestCase):
             environment.update(
                 PATH=f"{temporary}{os.pathsep}{environment['PATH']}",
                 REPOSITORY="endaye/lmdj",
+                BATCH_REQUEST_KIND=kind,
                 WEB_OVERFLOW_RUNNER_NAME=name.group(1),
                 WEB_RUNNER_READ_TOKEN=token,
                 GITHUB_OUTPUT=str(output),
@@ -611,6 +613,54 @@ class CiRunnerFallbackTest(unittest.TestCase):
             with self.subTest(case=case):
                 self.assertEqual(selected["runner"], NETCUP_WEB_LABELS)
                 self.assertEqual(selected["queue"], "lmdj-native-heavy-linux")
+
+    def test_release_batches_are_pinned_to_the_primary_hosts(self) -> None:
+        """A candidate or retry batch never takes an overflow host (#2422 item 11).
+
+        Overflow admission flips by the minute with the owner's host
+        conditions; a release batch's evidence must come from the hosts its
+        budgets were measured on. Kind `candidate` or `retry` therefore pins
+        the gates to the M1 (queueing when busy) and the Web lanes to
+        netcup, however idle the M4 Pro or en-home are. Automatic and node
+        batches keep the overflow routing.
+        """
+        m1 = self.mac("endaye-mbp-m1", "online", True, M1_ADMITTED)
+        m4 = self.mac("endaye-mbp-m4-pro", "online", False, M4_ADMITTED)
+        enhome = self.mac("win11-wsl-lmdj-linux", "online", False, ENHOME_ADMITTED)
+        for kind in ("candidate", "retry"):
+            with self.subTest(kind=kind, selector="macos"):
+                selected = self.select_mac(m1, m4, kind=kind)
+                self.assertEqual(selected["runner"], '["self-hosted","macOS","ARM64","lmdj-mac-m1"]')
+                self.assertEqual(selected["queue"], "lmdj-native-heavy-macos-m1")
+                self.assertIn("release", selected["reason"])
+            with self.subTest(kind=kind, selector="web"):
+                selected = self.select_web(enhome, kind=kind)
+                self.assertEqual(selected["runner"], NETCUP_WEB_LABELS)
+                self.assertEqual(selected["queue"], "lmdj-native-heavy-linux")
+                self.assertIn("release", selected["reason"])
+        for kind in ("auto", "node", "bootstrap"):
+            with self.subTest(kind=kind):
+                self.assertEqual(self.select_mac(m1, m4, kind=kind)["queue"], "lmdj-native-heavy-macos-m4")
+                self.assertEqual(self.select_web(enhome, kind=kind)["queue"], "lmdj-native-heavy-enhome")
+
+    def test_release_batches_keep_the_availability_fallbacks(self) -> None:
+        """Pinning changes preference, not availability: an offline M1 still
+        selects hosted macOS for a candidate, and a busy M1 queues."""
+        selected = self.select_mac(self.mac("endaye-mbp-m1", "offline", False, M1_ADMITTED),
+                                   self.mac("endaye-mbp-m4-pro", "online", False, M4_ADMITTED), kind="candidate")
+        self.assertEqual(selected["runner"], '["macos-latest"]')
+        self.assertEqual(selected["queue"], "lmdj-native-heavy-macos-m1")
+        selected = self.select_mac(self.mac("endaye-mbp-m1", "online", True, M1_ADMITTED), kind="candidate")
+        self.assertEqual(selected["queue"], "lmdj-native-heavy-macos-m1")
+
+    def test_selectors_read_the_request_kind_from_the_frozen_manifest(self) -> None:
+        """The kind comes from the admitted execution manifest, never from an
+        input a dispatcher could set."""
+        for job in ("select-macos-runner", "select-web-runner"):
+            with self.subTest(job=job):
+                self.assertIn(
+                    "BATCH_REQUEST_KIND: ${{ fromJSON(needs.change-scope.outputs.manifest).identity.request_kind }}",
+                    self.workflow_job(job))
 
     def test_macos_selector_still_falls_back_when_no_trusted_runner_is_online(self) -> None:
         """The surviving fallback is macOS-only and deliberately so.
