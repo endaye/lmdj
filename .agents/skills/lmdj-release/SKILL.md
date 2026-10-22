@@ -40,7 +40,12 @@ Only a verified releasable intent admits new preparation/tag/Draft/publication.
 For an already published identity, audit and verify it without republishing or
 rewriting history; continue only any separately verified, covered deployment or
 promotion still due. An allocated identity needs candidate evidence and a
-reviewed releasable intent first. Refuse abandoned or superseded-unreleased
+reviewed releasable intent first. While main's tip is the allocation cut or the
+squash witness and no candidate batch has a result for that tip, the
+incremental controller holds automatic admission so the candidate batch is
+not queued behind a main batch; dispatch the candidate (its target is the
+witness merge, never the cut SHA) promptly, because any ordinary merge ends
+the hold (#2422 item 9). Refuse abandoned or superseded-unreleased
 identities. Stop on unknown, conflict, unverifiable or external-error; report
 the last verified state, evidence and remedy. Never turn a failed gate into a
 new approval prompt that would bypass it.

@@ -79,6 +79,10 @@ class Inputs:
         self.selection = test_scope._selection(POLICY, ["creator"], ["host changes"])
         self.intervals = []
         self.advance_on_refresh = None
+        self.release_commits = {}
+
+    def release_commit(self, sha):
+        return self.release_commits.get(sha)
 
     def refresh(self):
         if self.advance_on_refresh:
@@ -347,6 +351,50 @@ class ControllerTests(unittest.TestCase):
         del self.inputs.policies[A]
         with self.assertRaisesRegex(batch.BatchError, "historical policy"):
             self.make(2).reconcile()
+
+    def test_automatic_admission_yields_while_main_tip_is_a_release_cut(self):
+        # A cut (C) lands on main: the full automatic batch it would select
+        # must not run ahead of the candidate batch for the same work.
+        self.baseline()
+        self.inputs.main = C
+        self.inputs.release_commits[C] = "allocation"
+        held = self.make(2).reconcile()
+        self.assertEqual(held["action"], "waiting")
+        self.assertIn("release allocation commit", held["reason"])
+        self.assertIsNone(held["state"]["active"])
+        self.assertNotIn((B, C), self.inputs.intervals)   # no interval was selected for the cut
+        # The witness merge (D) holds the same way.
+        self.inputs.main = D
+        self.inputs.release_commits[D] = "witness"
+        self.assertEqual(self.make(2).reconcile()["action"], "waiting")
+        # The explicit candidate for the witness is admitted at once.
+        candidate = batch.make_request(POLICY, request_id="candidate-1", kind="candidate", base_sha=None,
+            target_sha=D, control_sha=A, selection=test_scope._selection(POLICY, POLICY.suite_ids, []),
+            origin_run={"run_id": 2, "attempt": 1})
+        action = self.make(2).reconcile(explicit=candidate)
+        self.assertEqual((action["action"], action["request"]["target"]), ("execute", D))
+        self.settle(action, 2)
+        # Its finished result lifts the hold: the retained cursor (B) now runs
+        # the whole interval, cut and witness included, as an automatic batch.
+        automatic = self.make(3).reconcile()
+        self.assertEqual(automatic["action"], "execute")
+        self.assertEqual((automatic["request"]["base"], automatic["request"]["target"]), (B, D))
+
+    def test_a_newer_main_push_ends_the_release_hold(self):
+        self.baseline()
+        self.inputs.main = C
+        self.inputs.release_commits[C] = "allocation"
+        self.assertEqual(self.make(2).reconcile()["action"], "waiting")
+        self.inputs.main = D   # an ordinary merge after the cut
+        automatic = self.make(2).reconcile()
+        self.assertEqual(automatic["action"], "execute")
+        self.assertEqual((automatic["request"]["base"], automatic["request"]["target"]), (B, D))
+
+    def test_release_hold_never_touches_bootstrap_or_explicit_work(self):
+        self.inputs.main = B
+        self.inputs.release_commits[B] = "allocation"
+        start = self.make().reconcile()
+        self.assertEqual(start["request"]["kind"], "bootstrap")
 
     def test_explicit_candidate_is_fair_and_keeps_auto_cursor(self):
         self.baseline()
@@ -619,6 +667,35 @@ class RealGitTests(unittest.TestCase):
         self.assertLessEqual(len(checkpoint.encode()), github.LIMIT,
                              "why: the pending admit checkpoint exceeds the journal object limit; remedy: bound the explanation")
         github.decode(checkpoint)
+
+    def write_and_commit(self, files):
+        for relative, text in files.items():
+            target = self.root / relative
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(text)
+        return self.commit()
+
+    def test_real_git_classifies_allocation_and_witness_commits(self):
+        provenance = "apps/architecture-portal/versioned_provenance/"
+        allocation = self.write_and_commit({"products/lmdj/version.json": "2",
+                                            "apps/architecture-portal/versioned_metadata/version-2.json": "{}",
+                                            "products/lmdj/assembly.json": "{}"})
+        witness = self.write_and_commit({provenance + "version-2-squash-witness.json": "{}"})
+        correction = self.write_and_commit({provenance + "version-2-squash-witness.json": "{\"fixed\": 1}"})
+        other_provenance = self.write_and_commit({provenance + "README.md": "notes"})
+        # Paths are read exactly (NUL-separated), not from Git's quoted text form.
+        odd_name = self.write_and_commit({provenance + "version-2\tb-squash-witness.json": "{}"})
+        ordinary = self.write_and_commit({"products/lmdj/version.json": "3", "packages/x.txt": "x"})
+        self.tip = ordinary
+        self.inputs.refresh()
+        self.assertEqual(self.inputs.release_commit(allocation), "allocation")
+        self.assertEqual(self.inputs.release_commit(witness), "witness")
+        self.assertIsNone(self.inputs.release_commit(correction))        # an edited record is not a witness
+        self.assertIsNone(self.inputs.release_commit(other_provenance))  # nor an unrelated provenance file
+        self.assertEqual(self.inputs.release_commit(odd_name), "witness")
+        self.assertIsNone(self.inputs.release_commit(ordinary))
+        self.assertIsNone(self.inputs.release_commit(self.base))
+        self.assertIsNone(controller.classify_release_commit([]))
 
     def test_tag_object_is_not_main_commit(self):
         self.git("tag", "-am", "tag", "candidate")

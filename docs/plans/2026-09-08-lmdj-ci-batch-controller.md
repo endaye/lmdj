@@ -65,6 +65,36 @@ reset retry budgets. No-change automatic calls do not retry debt without resume.
 No-change ticks append no observations. After completion the controller rereads
 actual main once before admission, coalescing all intervening changes.
 
+## Release cut yields to the candidate batch
+
+A release allocation cut bumps `products/lmdj/version.json` and freezes the
+Portal snapshot under `apps/architecture-portal/versioned_metadata/` in one
+squash; the witness merge adds only a record under
+`apps/architecture-portal/versioned_provenance/`. Both land as main pushes, and
+`products/lmdj/` is a full-rule path, so the cut alone admitted a full
+automatic batch that the release's own candidate batch then waited behind
+(candidate 120 waited about 40 minutes during 2.0.122.0; #2404, #2422
+item 9).
+
+`GitInputs.release_commit(sha)` classifies one verified main commit from its
+`git diff-tree --name-status` listing: `allocation` when the version file and
+a snapshot path change together, `witness` when every change adds a
+`version-*-squash-witness.json` record (an edited record or any other
+provenance file is neither), else `None`. `Controller._release_hold(latest)`
+returns a waiting reason when the tip is such a commit and no candidate
+request for that exact target has a durable result. The check runs only on
+the automatic branch of `reconcile`, after the explicit fair queue and never
+for bootstrap; a queued candidate is admitted ahead of it, and any newer main
+push ends it because the tip is no longer a release commit. The hold orders
+dispatch and is not evidence: any durable candidate result for the tip lifts
+it, green or not, because nothing is waiting any more. The candidate batch
+targets the witness merge, so the cut tip is held only until the witness
+lands and the witness tip until that candidate finishes. The hold appends no
+observation and moves no cursor: the retained automatic cursor still covers
+the interval as an automatic batch afterwards, so no interval coverage is
+lost. It issues no remote mutation; an abandoned cut keeps the hold only until
+the next ordinary merge, and explicit node work is never held.
+
 ## Git and historical policies
 
 `GitInputs(repository, control_sha, read_main, advice=None)` uses read-only Git
@@ -112,7 +142,9 @@ unknown executor, pending versus missing evidence, old unclaimed terminal run,
 historical policy migration, explicit fairness/cursor isolation, bounded debt
 pause/resume redelivery, none progress retaining product failures, and durable
 result reuse after reporter failure. Real Git fixtures cover reverted contract,
-docs-none, missing mapper full, absent policy and unpeeled tag rejection.
+docs-none, missing mapper full, absent policy, unpeeled tag rejection and
+release commit classification; fake-input journeys cover the release hold,
+its end on a newer push, and its absence for bootstrap and explicit work.
 
 These tests do not prove GitHub lock ownership, API consistency, artifact
 visibility, terminal-job authentication, accepted permissions, Issue persistence,
