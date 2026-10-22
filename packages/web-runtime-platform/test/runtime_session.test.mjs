@@ -8806,11 +8806,11 @@ function inputWireStatus(payload, sequence, complete = true, disposition = null)
     durable_settled: complete, retained: false, complete, expired: false, error: null};
 }
 function inputProfileFixture({settled = () => true, onRequest = () => {}, sequenceFor = (p) => p.input_serial,
-  now, publishRuntime = false, browserWindow = {}, runtimeTerminator, extraSend = () => null} = {}) {
+  now, timers, publishRuntime = false, browserWindow = {}, runtimeTerminator, extraSend = () => null} = {}) {
   const entries = new Map();
   const sent = [];
   let handle = 10;
-  const f = fixture({patternTransport: true, publishRuntime, browserWindow, now, runtimeTerminator,
+  const f = fixture({patternTransport: true, publishRuntime, browserWindow, now, timers, runtimeTerminator,
     registerAudioNode: () => ++handle, startAudioWorkletWithCountIn: async () => ({ok: true, outputs: 2}),
     send: async (envelope, options) => {
       sent.push(envelope);
@@ -8943,6 +8943,85 @@ test("original Pad deadline expiry keeps reconciliation and held release alive w
   assert.equal(f.sent.filter((e) => e.operation === "pattern.transport.input.request").length, 2);
   await f.session.close();
 });
+
+for (const completionAt of [null, 999.99, 1000]) {
+  test(`Pattern input observer rechecks an early wake before ${completionAt === null ? "expiry" : `completion at ${completionAt}ms`}`, async () => {
+    let clock = 0, settled = false, captureObserver = false;
+    const scheduled = new Map();
+    const timers = {
+      setTimeout(callback, delay) {
+        if (captureObserver && delay > 0 && delay !== 5) {
+          const handle = {};
+          scheduled.set(handle, {callback, delay, at: clock + delay});
+          return handle;
+        }
+        return globalThis.setTimeout(callback, delay);
+      },
+      clearTimeout(handle) {
+        if (!scheduled.delete(handle)) globalThis.clearTimeout(handle);
+      },
+    };
+    const f = inputProfileFixture({now: () => clock, timers, settled: () => settled,
+      onRequest: () => { if (captureObserver) clock = 250.25; }});
+    await activateInputProfile(f);
+    captureObserver = true;
+    let outcome = null;
+    const press = f.session.trigger(0, 100, "pointer").then(
+      value => { outcome = {value}; }, error => { outcome = {error}; });
+    const flush = async () => { for (let i = 0; i < 32; ++i) await Promise.resolve(); };
+    try {
+      await untilInputRequests(f, 1);
+      await flush();
+      assert.equal(scheduled.size, 1);
+      const [handle, timer] = [...scheduled][0];
+      assert.equal(timer.at, 1000, "admission spends the original 250.25ms instead of renewing it");
+      scheduled.delete(handle);
+      clock = 999.97;
+      timer.callback(); // A browser timer wake is not proof its monotonic deadline elapsed.
+      await flush();
+      assert.equal(outcome, null, "an early wake must not reject the original accepted observer");
+      assert.equal(scheduled.size, 1);
+      const [retryHandle, retry] = [...scheduled][0];
+      assert.equal(retry.at, 1000, "an early wake only spends the remaining original budget");
+      if (completionAt !== null) {
+        clock = completionAt;
+        settled = true;
+        await press;
+        if (completionAt < 1000)
+          assert.deepEqual(outcome, {value: {sequence: 1, slot: 0, velocity: 100, source: "pointer"}});
+        else {
+          assert.equal(outcome?.error?.code, "HOST_TIMEOUT", "a delayed timer never admits completion past the original deadline");
+          assert.deepEqual(outcome.error.details, {pending: true});
+        }
+        assert.equal(scheduled.size, 0, "actual completion cancels the re-armed observer timer");
+      } else {
+        scheduled.delete(retryHandle);
+        clock = 1000;
+        retry.callback();
+        await flush();
+        assert.equal(outcome?.error?.code, "HOST_TIMEOUT");
+        assert.deepEqual(outcome.error.details, {pending: true});
+        assert.equal(f.sent.filter(e => e.operation === "pattern.transport.input.inspect" && e.payload.consume).length, 0);
+        assert.equal(f.entries.size, 1, "expiry retains the accepted physical owner without replay");
+      }
+    } finally {
+      captureObserver = false;
+      settled = true;
+      await press;
+      try {
+        assert.equal(await f.session.release(0, "pointer"), true);
+        // The expired observer is not its background consumer. Let the original
+        // SDK poll observe completion before closing that independent owner.
+        for (let i = 0; i < 100 && f.sent.filter(e =>
+          e.operation === "pattern.transport.input.inspect" && e.payload.consume).length < 2; ++i)
+          await drainTasks();
+      } finally { await f.session.close(); }
+    }
+    assert.equal(f.sent.filter(e => e.operation === "pattern.transport.input.request").length, 2);
+    assert.deepEqual(f.sent.filter(e => e.operation === "pattern.transport.input.inspect" && e.payload.consume)
+      .map(e => e.payload.ticket).sort(), ["1", "2"], "the original consumer and correlated Release each settle once");
+  });
+}
 
 test("a Pad queued behind a runtime action spends its budget only from its admission turn", async () => {
   let clock = 0;
