@@ -11,6 +11,7 @@ from __future__ import annotations
 from copy import deepcopy
 import json
 from pathlib import Path
+import re
 import subprocess
 
 import change_scope
@@ -30,16 +31,23 @@ import test_scope
 # as an automatic batch afterwards.
 RELEASE_ALLOCATION_PATH = "products/lmdj/version.json"
 RELEASE_SNAPSHOT_PREFIX = "apps/architecture-portal/versioned_metadata/"
-RELEASE_WITNESS_PREFIX = "apps/architecture-portal/versioned_provenance/"
+RELEASE_WITNESS_PATTERN = re.compile(
+    r"apps/architecture-portal/versioned_provenance/version-[^/]+-squash-witness\.json")
 
 
-def classify_release_commit(paths):
-    """'allocation', 'witness' or None for one commit's changed paths."""
-    paths = list(paths)
-    if not paths:
+def classify_release_commit(changes):
+    """'allocation', 'witness' or None for one commit's (status, path) changes.
+
+    A witness commit only adds squash-witness records; a correction or any
+    other provenance edit is not one. An allocation changes the version file
+    and a Portal snapshot path in the same commit.
+    """
+    changes = list(changes)
+    if not changes:
         return None
-    if all(path.startswith(RELEASE_WITNESS_PREFIX) for path in paths):
+    if all(status == "A" and RELEASE_WITNESS_PATTERN.fullmatch(path) for status, path in changes):
         return "witness"
+    paths = {path for _, path in changes}
     if RELEASE_ALLOCATION_PATH in paths and any(path.startswith(RELEASE_SNAPSHOT_PREFIX) for path in paths):
         return "allocation"
     return None
@@ -93,8 +101,12 @@ is incomplete. Complete paths and trusted policies still define the floor.
         batch.exact_sha(sha)
         batch.require(self.main is not None and self.ancestor(sha, self.main),
                       "release classification needs verified main history")
-        listing = self._git("diff-tree", "--no-commit-id", "--name-only", "-r", "--root", sha)
-        return classify_release_commit(listing.decode().splitlines())
+        listing = self._git("diff-tree", "--no-commit-id", "--name-status", "-r", "--root", sha)
+        changes = []
+        for line in listing.decode().splitlines():
+            fields = line.split("\t")
+            changes.append((fields[0][:1], fields[-1]))
+        return classify_release_commit(changes)
 
     def policy_at(self, control, *, historical=False):
         """Parse the trusted policy recorded at one verified main revision.
@@ -253,8 +265,12 @@ All methods must be invoked inside the SAME externally managed short lock.
 
         The tip is a release allocation or witness commit and no candidate
         batch has finished for it. The queue is consulted before this, so a
-        queued candidate is admitted; a finished candidate lifts the hold; a
-        newer main push (a different tip) ends it on its own.
+        queued candidate is admitted; a newer main push (a different tip) ends
+        the hold on its own. The hold orders dispatch; it is not evidence: any
+        durable candidate result for the tip lifts it, green or not, because
+        nothing is waiting any more and the retained cursor then covers the
+        interval as an automatic batch. The candidate targets the witness
+        merge, so the cut tip is held until the witness lands.
         """
         kind = self.inputs.release_commit(latest)
         if kind is None:

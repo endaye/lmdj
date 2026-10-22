@@ -77,17 +77,23 @@ automatic batch that the release's own candidate batch then waited behind
 item 9).
 
 `GitInputs.release_commit(sha)` classifies one verified main commit from its
-`git diff-tree` path listing as `allocation`, `witness` or neither, and
-`Controller._release_hold(latest)` returns a waiting reason when the tip is
-such a commit and no candidate request for that exact target has a durable
-result. The check runs only on the automatic branch of `reconcile`, after the
-explicit fair queue and never for bootstrap; a queued candidate is admitted
-ahead of it, a finished candidate lifts it, and any newer main push ends it
-because the tip is no longer a release commit. The hold appends no observation
-and moves no cursor: the retained automatic cursor still covers the interval
-as an automatic batch afterwards, so no interval coverage is lost. It issues
-no remote mutation; an abandoned cut keeps the hold only until the next
-ordinary merge, and explicit node work is never held.
+`git diff-tree --name-status` listing: `allocation` when the version file and
+a snapshot path change together, `witness` when every change adds a
+`version-*-squash-witness.json` record (an edited record or any other
+provenance file is neither), else `None`. `Controller._release_hold(latest)`
+returns a waiting reason when the tip is such a commit and no candidate
+request for that exact target has a durable result. The check runs only on
+the automatic branch of `reconcile`, after the explicit fair queue and never
+for bootstrap; a queued candidate is admitted ahead of it, and any newer main
+push ends it because the tip is no longer a release commit. The hold orders
+dispatch and is not evidence: any durable candidate result for the tip lifts
+it, green or not, because nothing is waiting any more. The candidate batch
+targets the witness merge, so the cut tip is held only until the witness
+lands and the witness tip until that candidate finishes. The hold appends no
+observation and moves no cursor: the retained automatic cursor still covers
+the interval as an automatic batch afterwards, so no interval coverage is
+lost. It issues no remote mutation; an abandoned cut keeps the hold only until
+the next ordinary merge, and explicit node work is never held.
 
 ## Git and historical policies
 

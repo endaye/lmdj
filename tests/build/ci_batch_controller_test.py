@@ -362,7 +362,7 @@ class ControllerTests(unittest.TestCase):
         self.assertEqual(held["action"], "waiting")
         self.assertIn("release allocation commit", held["reason"])
         self.assertIsNone(held["state"]["active"])
-        self.assertEqual(self.inputs.intervals, [(None, B)] if (None, B) in self.inputs.intervals else [])
+        self.assertNotIn((B, C), self.inputs.intervals)   # no interval was selected for the cut
         # The witness merge (D) holds the same way.
         self.inputs.main = D
         self.inputs.release_commits[D] = "witness"
@@ -676,15 +676,20 @@ class RealGitTests(unittest.TestCase):
         return self.commit()
 
     def test_real_git_classifies_allocation_and_witness_commits(self):
+        provenance = "apps/architecture-portal/versioned_provenance/"
         allocation = self.write_and_commit({"products/lmdj/version.json": "2",
                                             "apps/architecture-portal/versioned_metadata/version-2.json": "{}",
                                             "products/lmdj/assembly.json": "{}"})
-        witness = self.write_and_commit({"apps/architecture-portal/versioned_provenance/version-2-squash-witness.json": "{}"})
+        witness = self.write_and_commit({provenance + "version-2-squash-witness.json": "{}"})
+        correction = self.write_and_commit({provenance + "version-2-squash-witness.json": "{\"fixed\": 1}"})
+        other_provenance = self.write_and_commit({provenance + "README.md": "notes"})
         ordinary = self.write_and_commit({"products/lmdj/version.json": "3", "packages/x.txt": "x"})
         self.tip = ordinary
         self.inputs.refresh()
         self.assertEqual(self.inputs.release_commit(allocation), "allocation")
         self.assertEqual(self.inputs.release_commit(witness), "witness")
+        self.assertIsNone(self.inputs.release_commit(correction))        # an edited record is not a witness
+        self.assertIsNone(self.inputs.release_commit(other_provenance))  # nor an unrelated provenance file
         self.assertIsNone(self.inputs.release_commit(ordinary))
         self.assertIsNone(self.inputs.release_commit(self.base))
         self.assertIsNone(controller.classify_release_commit([]))
