@@ -511,23 +511,27 @@ ambiguous inventory is potentially an executor and must hold bootstrap back.
                          and isinstance(explicit["retry_of"], str) and bool(explicit["retry_of"])),
                     "invalid explicit execution command")
             policy = self.inputs.policy_at(self.control)
-            if explicit["kind"] == "retry":
-                request = self.retry_request(explicit, policy, journal.load())
-            else:
-                request = batch.make_request(policy, request_id=explicit["id"], kind=explicit["kind"], base_sha=None,
-                    target_sha=explicit["target"], control_sha=self.control,
-                    selection=test_scope._selection(policy, policy.suite_ids, ["explicit full request"]), origin_run=self.current)
             # A new first-attempt workflow can redeliver a queued command.
             # Its original frozen control/origin are journal truth, not replaced
-            # with the retry's run identity. Conflicting command reuse is fatal.
-            for event in journal.load():
+            # with the redelivery's run identity, and a frozen retry proof is
+            # not re-derived from an API that may have aged out. Conflicting
+            # command reuse is fatal.
+            events = journal.load()
+            for event in events:
                 if event.get("type") not in {"enqueue", "admit"}:
                     continue
                 prior = event["data"] if event["type"] == "enqueue" else event["data"]["request"]
                 if prior["id"] == explicit["id"]:
-                    require(prior["kind"] == explicit["kind"] and prior["target"] == explicit["target"],
+                    require(prior["kind"] == explicit["kind"] and prior["target"] == explicit["target"]
+                            and prior.get("retry_of", {}).get("request") == explicit.get("retry_of"),
                             "explicit command identity reused for a different request")
                     request = prior
+            if request is None and explicit["kind"] == "retry":
+                request = self.retry_request(explicit, policy, events)
+            elif request is None:
+                request = batch.make_request(policy, request_id=explicit["id"], kind=explicit["kind"], base_sha=None,
+                    target_sha=explicit["target"], control_sha=self.control,
+                    selection=test_scope._selection(policy, policy.suite_ids, ["explicit full request"]), origin_run=self.current)
         controller = batch_controller.Controller(journal, self.inputs, self.current,
             run_state=self.run_state, result_for=self.result_for, old_runs_terminal=self.old_runs_terminal,
             lock_held=self.lock_held, epoch=self.config["epoch"])

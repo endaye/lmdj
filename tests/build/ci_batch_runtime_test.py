@@ -751,7 +751,9 @@ class RuntimeTests(unittest.TestCase):
         self.assertEqual(action["request"]["selection"]["suites"], ["core_release_stress"])
         self.assertEqual(action["request"]["retry_of"], {"request": "candidate-one", "environmental": {
             "core_release_stress": {"outcome": "failed", "jobs": {"core-stress": "timed_out"}}}})
-        # Redelivery reconciles the original frozen request, not a second one.
+        # Redelivery reconciles the original frozen request, not a second one,
+        # even once the candidate executor's jobs have aged out of the API.
+        self.api.jobs[18] = self.api.jobs[18][:1]
         self.api.add_run(26)
         again = self.make(26).reconcile(execute=True, explicit=retry)
         self.assertEqual(again["state"]["requests"]["retry-one"], action["request"])

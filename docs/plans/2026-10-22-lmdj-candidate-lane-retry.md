@@ -116,8 +116,11 @@ when the primary passed it or the retry passed it; every suite must pass.
 `batch_evidence._verify` verifies each run as today (completed attempt 1 of
 the pinned workflow on main, retained attestations and bundles) and
 re-proves the environmental class of the primary's non-passed suites from
-the primary run's jobs API; the primary executor's `failure` conclusion is
-accepted only through those suites. `verified_recheck._verification`
+the primary run's jobs API and requires each `failed` suite's frozen proof to
+name exactly that suite's failing jobs in the retained verdict (the reducer
+is pure and reference-opaque, so this exact-jobs check belongs to the
+consumer); the primary executor's `failure` conclusion is accepted only
+through those suites. `verified_recheck._verification`
 rechecks every run of the composite. The intent, plan marker v3 and the
 published audit bind the whole composite document, unchanged in code.
 Governance: `docs/governance/version-management.md` §12.1,
