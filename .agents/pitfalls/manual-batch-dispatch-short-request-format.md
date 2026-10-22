@@ -27,6 +27,12 @@ a full dispatch cycle to discover.
 For a manual batch dispatch, send exactly `{"id":"<new-stable-id>",
 "kind":"candidate","target":"<exact-main-SHA>"}` on ref `main`; never reuse an
 ID that already executed, and never paste the controller's long-form record.
+A lane-scoped retry of a settled candidate (#2422 item 8) is the only other
+short form: `{"id":"<new-stable-id>","kind":"retry","target":"<the candidate's
+exact SHA>","retry_of":"<the candidate's request id>"}`. The controller works
+out the lanes and freezes the environmental proof itself; never list suites,
+and never send a retry for a candidate whose lane failed on a test, it is
+refused.
 On a slow operator network, give staging/audit commands generous timeouts —
 a killed release tool can leave an unfinished journal run that needs
 reconciliation before the next operation. No eligible gate exists yet: the

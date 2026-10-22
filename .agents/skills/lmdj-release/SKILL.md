@@ -40,7 +40,12 @@ Only a verified releasable intent admits new preparation/tag/Draft/publication.
 For an already published identity, audit and verify it without republishing or
 rewriting history; continue only any separately verified, covered deployment or
 promotion still due. An allocated identity needs candidate evidence and a
-reviewed releasable intent first. Refuse abandoned or superseded-unreleased
+reviewed releasable intent first. While main's tip is the allocation cut or the
+squash witness and no candidate batch has a result for that tip, the
+incremental controller holds automatic admission so the candidate batch is
+not queued behind a main batch; dispatch the candidate (its target is the
+witness merge, never the cut SHA) promptly, because any ordinary merge ends
+the hold (#2422 item 9). Refuse abandoned or superseded-unreleased
 identities. Stop on unknown, conflict, unverifiable or external-error; report
 the last verified state, evidence and remedy. Never turn a failed gate into a
 new approval prompt that would bypass it.
@@ -182,8 +187,12 @@ operator step.
 Current prospective policy is `complete-test-v2`: the Owner explicitly references
 exactly one passed, complete 15-suite source for the exact candidate in a reviewed
 intent: old `self-test-v1` via `self_test_evidence`, or full incremental evidence
-via `batch_test_evidence`, together with the actual executor run ID. No reference,
-mixed references, focused/none batches or legacy fourteen-lane scope qualify.
+via `batch_test_evidence`, together with the actual executor run ID. The one
+composed form is a candidate that lost lanes to the platform plus its single
+lane-scoped retry (`lmdj.ci-batch-release-reference.v2`): every suite is still
+proven by exactly one attempt-1 run, and the candidate's `failure` conclusion is
+accepted only through its proven environmental lanes. No reference, mixed
+references, focused/none batches or legacy fourteen-lane scope qualify.
 The tool verifies stable source and main ancestry, distinct control/target
 revisions, attempt, current policy and digest; a green summary or AI label
 is not evidence. Batch evidence additionally requires original origin/admission
@@ -201,14 +210,22 @@ Both kinds request all 15 suites and share the durable execution budget;
 neither moves automatic processing progress or authorizes a release.
 Redelivering the same ID and target reconciles the original request; a genuinely
 new test needs a new ID. Do not use lane selection, a queue ticket, or a SHA as
-the dispatch ref. The trusted control revision may be newer than the candidate.
+the dispatch ref. When a candidate did not pass only because the platform
+stopped a lane (a `timed_out` or `cancelled` job, a missing artifact, a lost
+runner), do not cut again: send the retry short form for the same target,
+`{"id":"<new-stable-id>","kind":"retry","target":"<the candidate's exact
+SHA>","retry_of":"<the candidate's request id>"}`. The controller derives the
+lanes from the candidate's durable result and freezes their environmental proof
+from the jobs API; never list suites. A lane that failed on a test is refused,
+and a candidate is retried at most once (#2422 item 8). The trusted control revision may be newer than the candidate.
 Record only validated artifacts' facts; never invent or backfill a reference.
 
 Verdict artifacts currently retain 30 days. Missing/expired evidence is
 `unverifiable`; mismatched, incomplete or non-passing evidence is `conflict`.
-Recovery requires a new explicit request ID on main for the same target and a separately
-reviewed intent update, not Re-run jobs: the producer currently accepts attempt
-1 only. Only actually `published` history may use the recorded attempt without
+Recovery requires a new explicit request ID on main for the same target (a
+`retry` when only environmental lanes failed, a new candidate otherwise) and a
+separately reviewed intent update, not Re-run jobs: the producer currently
+accepts attempt 1 only. Only actually `published` history may use the recorded attempt without
 re-adjudicating ephemeral retention; allocated/abandoned/superseded is not this
 exception. Immutable tag/signature/Release/assets and exact plan-marker proof
 remain required. Batch `lmdj.release-plan-marker.v3` permanently binds the entire

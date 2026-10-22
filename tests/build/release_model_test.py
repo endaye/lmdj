@@ -375,6 +375,36 @@ class ReleaseModelTest(unittest.TestCase):
                 "origin_run": {"run_id": 122, "attempt": 1}}}
         return document
 
+    def composite_ledger(self):
+        document = self.batch_ledger()
+        primary = document["entries"][0]["batch_test_evidence"]
+        retry = {key: value for key, value in primary.items() if key != "schema"}
+        retry["executor_run_id"] = 124
+        retry["request"] = {**primary["request"], "id": "frozen-retry", "kind": "retry",
+            "selection": {"kind": "focused", "suites": ["core_release_stress"], "reasons": ["retry of frozen-candidate"]},
+            "origin_run": {"run_id": 123, "attempt": 1},
+            "retry_of": {"request": "frozen-candidate", "environmental": {
+                "core_release_stress": {"outcome": "failed", "jobs": {"core-stress": "timed_out"}}}}}
+        document["entries"][0]["batch_test_evidence"] = {**primary, "schema": "lmdj.ci-batch-release-reference.v2",
+                                                         "retries": [retry]}
+        return document
+
+    def test_composite_reference_binds_one_retry_of_the_same_candidate_and_target(self):
+        intent = load_ledger_document(self.composite_ledger(), self.future_policy()).entries[0]
+        self.assertEqual(intent.batch_test_evidence["retries"][0]["request"]["retry_of"]["request"], "frozen-candidate")
+        for mutate, phrase in (
+            (lambda r: r.__setitem__("retries", []), "exactly one retry"),
+            (lambda r: r["retries"][0]["request"].__setitem__("target", "e" * 40), "target and policy"),
+            (lambda r: r["retries"][0]["request"]["retry_of"].__setitem__("request", "other"), "name the candidate"),
+            (lambda r: r["retries"][0]["request"]["retry_of"]["environmental"]["core_release_stress"]["jobs"].__setitem__("core-stress", "failure"), "environmental proof"),
+            (lambda r: r["retries"][0].__delitem__("executor_run_id"), "schema is not closed"),
+            (lambda r: r.__delitem__("retries"), "schema is not closed"),
+        ):
+            document = self.composite_ledger()
+            mutate(document["entries"][0]["batch_test_evidence"])
+            with self.subTest(phrase=phrase), self.assertRaisesRegex(ReleaseModelError, phrase):
+                load_ledger_document(document, self.future_policy())
+
     def test_current_policy_enables_two_strict_fifteen_suite_sources(self):
         self.assertEqual(self.policy.prospective_ci_protocol, "complete-test-v2")
         self.assertEqual(dict(self.policy.batch_evidence_source), {
