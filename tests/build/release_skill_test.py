@@ -214,6 +214,8 @@ class ReleaseSkillTest(unittest.TestCase):
             "control/target",
             "30 days",
             "not Re-run jobs",
+            "`lmdj.ci-batch-release-reference.v2`",
+            "lane-scoped retry",
             "digest",
             "A full dispatch is evidence, not authorization",
             "`unverifiable`",
@@ -232,6 +234,10 @@ class ReleaseSkillTest(unittest.TestCase):
             "Both kinds request all 15 suites",
             "neither moves automatic processing progress or authorizes a release",
             "Redelivering the same ID and target reconciles the original request",
+            '"kind":"retry"',
+            '"retry_of":"<the candidate\'s request id>"',
+            "never list suites",
+            "retried at most once",
         ):
             with self.subTest(expected=expected):
                 self.assertIn(expected, source, f"why: missing candidate boundary {expected!r}; {remedy}")
@@ -268,6 +274,8 @@ class ReleaseSkillTest(unittest.TestCase):
             "`batch_test_evidence`",
             "`lmdj.release-plan-marker.v3`",
             "`Disposition.PUBLISHED`",
+            "`lmdj.ci-batch-release-reference.v2`",
+            '"kind":"retry"',
         ):
             with self.subTest(document="version-management", expected=expected):
                 self.assertIn(expected, version_policy)

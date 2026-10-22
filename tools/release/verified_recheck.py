@@ -50,7 +50,7 @@ from .orchestration_driver import Observation
 _SHA = re.compile(r"[0-9a-f]{40}\Z")
 _DIGEST = re.compile(r"[0-9a-f]{64}\Z")
 _BUILD = re.compile(r"(?:0|[1-9][0-9]*)(?:\.(?:0|[1-9][0-9]*)){2}\.0\Z")
-_BATCH_REFERENCE = re.compile(r"batch-result:([1-9][0-9]*):([0-9a-f]{40})\Z")
+_BATCH_REFERENCE = re.compile(r"batch-result:([1-9][0-9]*):([0-9a-f]{40})(?:;retry:([1-9][0-9]*))?\Z")
 _RUN_URL = re.compile(r"https://github\.com/endaye/lmdj/actions/runs/([1-9][0-9]*)\Z")
 _MAX_BYTES = 1024 * 1024
 _BATCH_WORKFLOW = ".github/workflows/self-test-report.yml"
@@ -243,15 +243,16 @@ class VerifiedRecheck:
             _fail(f"run {run_id} is not readable")
         return document
 
-    def _completed_first_attempt(self, run, run_id, *, path, workflow_id):
+    def _completed_first_attempt(self, run, run_id, *, path, workflow_id, conclusion="success"):
         if run.get("id") != run_id:
             return f"run {run_id} answers for another run"
         if run.get("path") != path or run.get("workflow_id") != workflow_id:
             return f"run {run_id} is not a run of the pinned {path}"
         if run.get("run_attempt") != 1:
             return f"run {run_id} was re-run; attempt 1 is the verified evidence"
-        if run.get("status") != "completed" or run.get("conclusion") != "success":
-            return f"run {run_id} is no longer a completed, passed run"
+        if run.get("status") != "completed" or run.get("conclusion") != conclusion:
+            return (f"run {run_id} is no longer a completed, passed run" if conclusion == "success"
+                    else f"run {run_id} is no longer the completed, failed candidate run")
         head = run.get("head_sha")
         if run.get("head_branch") != "main" or type(head) is not str \
                 or _SHA.fullmatch(head) is None or not self.git.is_main_ancestor(head):
@@ -340,6 +341,7 @@ class VerifiedRecheck:
         if matched is None:
             return _conflict("verification: the recorded reference is not a batch result")
         run_id, witness = int(matched.group(1)), matched.group(2)
+        retry_run_id = int(matched.group(3)) if matched.group(3) else None
         document = self._candidate_state()
         identity = self._merge(document.get("witness_merge")) if document is not None else None
         if identity is None:
@@ -348,11 +350,21 @@ class VerifiedRecheck:
             return _conflict("verification: the candidate witness merge differs from the verified target")
         if not self.git.is_main_ancestor(witness):
             return _conflict("verification: the verified target is not reachable canonical history")
+        # A composite reference's candidate run concluded failure through its
+        # proven environmental lanes; its retry run passed them. Both must
+        # still be the same completed first attempts.
         run = self._run(self.github.get_batch_evidence, run_id)
         drift = self._completed_first_attempt(run, run_id, path=_BATCH_WORKFLOW,
-                                              workflow_id=self.batch_workflow_id)
+                                              workflow_id=self.batch_workflow_id,
+                                              conclusion="failure" if retry_run_id else "success")
         if drift is not None:
             return _conflict("verification: " + drift)
+        if retry_run_id is not None:
+            retry_run = self._run(self.github.get_batch_evidence, retry_run_id)
+            drift = self._completed_first_attempt(retry_run, retry_run_id, path=_BATCH_WORKFLOW,
+                                                  workflow_id=self.batch_workflow_id)
+            if drift is not None:
+                return _conflict("verification: retry " + drift)
         # The reviewed intent freezes the same batch reference the verification
         # step verified; once its record exists, the two must still agree.
         intent = read_private_document(self.operations / "intent-sequence/pr", "pr-state.json")

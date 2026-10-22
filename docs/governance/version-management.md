@@ -649,7 +649,12 @@ protected main 历史，且 control 不早于可信 producer 部署。必须精�
 `journal_config` 留空以使用可信源码中的固定调度器，并独立 review intent 更新。
 同 ID 同目标的重送只恢复原请求；真正重新测试使用新 ID。显式诊断使用 `kind=node`，
 同样固定全 15-suite，不推进自动 processed SHA，也不被后续 main 替换。
-不能把 SHA 用作 dispatch ref，也不能 Re-run jobs（producer 当前只支持 attempt 1）。已 `published`
+候选批次只因平台停掉了车道而未通过时（job `timed_out`/`cancelled`、artifact 缺失、
+runner 丢失；断言失败永不合格），不必重新 cut：对同一 target 发送
+`{"id":"<new-stable-request-id>","kind":"retry","target":"<同一 exact SHA>","retry_of":"<候选 request id>"}`，
+controller 自行从候选的持久结果与已认证 jobs API 推导要重跑的车道并冻结环境性证明，
+每个候选只允许一次重跑（#2422 第 8 项，Owner 于 2026-10-22 确认）。
+不能把 SHA 用作 dispatch ref，也不能 Re-run jobs（producer 当前只支持 attempt 1；重跑是新的 attempt-1 run）。已 `published`
 的旧协议 intent 继续原只读审计，新协议 intent 的持久 reference 纳入 release plan digest，
 并由 `lmdj.release-plan-marker.v2` 显式保留完整 CI 身份；fresh remote audit 对比 marker
 与 intent，旧 v1 marker 不能证明新添的自测引用。Published 读取当时的 recorded attempt，
@@ -668,6 +673,14 @@ workflow_dispatch/push/workflow_run/schedule 闭集，不能从排队 request ki
 不是独立重放最新 Issue Journal。再完整读取 verdict/execution/needs 三文件、真实 API jobs，
 独立重算 exact target、current/frozen/executor policy 一致的全 15-suite passed verdict。
 focused、none、债务、旧 policy、缺 artifact 或跨 SHA/attempt 拼接一律不授予候选资格。
+唯一的组合形式是 `lmdj.ci-batch-release-reference.v2`：v1 的候选记录加恰好一个
+`retries` 记录（kind=`retry` 的 frozen request 含 `retry_of`、其 executor 的 control/event/
+digests 与 `executor_run_id`）。consumer 对两个 run 各自完成上述全部证明，再组合：
+候选 verdict 未通过的 suite 集合恰等于重跑 selection 与证明的键；每个这样的 suite
+在候选中是 debt outcome，或 `failed` 且其 `failures` 恰为证明所列 job、每个 job 的候选
+run API 结论为 `timed_out`/`cancelled`；重跑 verdict 全部通过；候选 executor run 的
+结论因此为 `failure`，plan `ci.conclusion` 与 v3 marker 记录该实际结论。每个 suite 的通过
+证据仍恰来自一个 attempt-1 run；任何一环不符即 `conflict`。
 
 新 batch reference 全部写入 plan `ci` 及永久 `lmdj.release-plan-marker.v3`（带冻结 changelog 时为 v4）；v1/v2 marker
 不证明 batch 引用，旧 self-test v2 与 legacy v1 历史不迁移。仅 `Disposition.PUBLISHED`
