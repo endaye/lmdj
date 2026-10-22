@@ -109,7 +109,7 @@ Release behaviour is unchanged by PR 1: `verification._candidate_results`
 selects candidate-kind results only, so a retry result is invisible to the
 release driver until PR 2.
 
-## PR 2 — composed release evidence (next Task)
+## PR 2 — composed release evidence
 
 `tools/release/batch_reference.py` gains schema
 `lmdj.ci-batch-release-reference.v2`: the v1 fields of the primary candidate
@@ -128,9 +128,32 @@ through those suites. `verified_recheck._verification`
 rechecks every run of the composite. The intent, plan marker v3 and the
 published audit bind the whole composite document, unchanged in code.
 Governance: `docs/governance/version-management.md` §12.1,
-`docs/design/2026-08-13-lmdj-standard-release-pipeline-design.md` §8 and the
+`docs/design/2026-08-13-lmdj-standard-release-pipeline-design.md` §3 and the
 lmdj-release skill record the rule and the operator command; a pitfall is
 recorded if the first real use finds a trap.
+
+Declared files: `tools/release/batch_reference.py`, `tools/release/batch_evidence.py`,
+`tools/release/verification.py`, `tools/release/verified_recheck.py`,
+`tools/release/carriers.py`, `tools/release/audit.py`, `scripts/ci/batch_verdict.py`
+(a retry selection is canonical but not closed over the dependency graph; the
+closure rule exists for changes, and a retry is not one), the governance,
+design and skill documents above, this plan, and the tests
+`release_batch_evidence_test`, `release_verification_carrier_test`,
+`release_verified_recheck_test`, `release_model_test`,
+`release_entry_enrollment_test`, `release_batch_binding_test`,
+`release_skill_test`, `ci_batch_verdict_test`.
+
+Lowest-tier tests and the defect each catches: the consumer accepts a
+candidate composed with its environmental retry and refuses a lane that
+failed on a test, a proof that does not name exactly the failing jobs, a
+retry covering other suites, a retry that did not pass, a composite over a
+passed candidate and a plain reference over a failed one; the carrier
+composes a failed candidate with its passed retry into the v2 document and
+the `;retry:<run>` reference string, and refuses a retry that does not cover
+the failed suites; the recheck verifies both runs and treats drift of either
+as conflict; the ledger model binds one retry of the same candidate and
+target; prepare records the candidate executor's actual conclusion and the
+marker and audit bind the composite.
 
 ## Version Management
 
@@ -140,6 +163,7 @@ changes the release reference document schema that the intent ledger and
 plan marker embed; the batch reference is not a registered `contracts/`
 Contract, and v1 documents stay readable, so PR 2 records
 `Version impact: none` with that reason unless its review finds otherwise.
+PR 2 confirmed: `Version impact: none`.
 
 ## Documentation Impact
 
