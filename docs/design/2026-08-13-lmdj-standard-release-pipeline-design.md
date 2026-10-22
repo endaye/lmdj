@@ -34,7 +34,9 @@ plan 的 `ci` 同时记录 target 与此 reference；新的 `lmdj.release-plan-m
 Published 读取 recorded attempt，后续 rerun 不覆盖历史；prospective 仍检查 latest。稳定 workflow
 ID / path / repository、可信 producer 下界、同 attempt 的成功 verdict job、全部 suites / jobs、
 适用 policy、canonical digest 与 30 天有效 artifact 缺一不可。过期须在 ref main 上以同 target
-新 dispatch 并 review 更新 intent，当前不接受 Re-run jobs。旧协议已 published 审计保持只读，
+新 dispatch 并 review 更新 intent，当前不接受 Re-run jobs；候选只因平台停掉车道而未通过时，
+同 target 的一次 `kind=retry` 请求只重跑那些车道，其结果与候选结果组合为
+`lmdj.ci-batch-release-reference.v2`（版本治理 §12.1；#2422 第 8 项）。旧协议已 published 审计保持只读，
 新协议 published reference 仍与不可变签名 / tag / Release / assets / plan marker 联合验证，
 不依赖短期 artifact 永久留存。旧入口的删除须另获授权完成真实 producer / consumer 演练，
 不能恢复旧 14-lane prospective fallback。日测不阻 merge、不等于日发版；发布继续逐边界人工

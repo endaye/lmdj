@@ -895,7 +895,10 @@ def _release_problem(
         keys.add("ci")
         expected_ci = {
             "run_id": intent.merged_main_run_id, "event": batch_reference["executor_event"],
-            "head_sha": batch_reference["executor_control_revision"], "conclusion": "success",
+            "head_sha": batch_reference["executor_control_revision"],
+            # A composite reference's candidate run concluded failure through
+            # its proven environmental lanes; the retry run passed them.
+            "conclusion": "failure" if "retries" in batch_reference else "success",
             "target_revision": intent.target_revision, "batch_test_evidence": batch_reference,
         }
         if not isinstance(marker, dict) or canonical_json(marker.get("ci")) != canonical_json(expected_ci):

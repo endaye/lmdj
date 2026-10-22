@@ -416,7 +416,7 @@ def enroll_draft(*, root, candidate_root, repository_id, ledger, create_draft,
     return RecoveredStep("draft", recover, drives=True)
 
 
-_BATCH_EVIDENCE = re.compile(r"batch-result:([1-9][0-9]*):([0-9a-f]{40})\Z")
+_BATCH_EVIDENCE = re.compile(r"batch-result:([1-9][0-9]*):([0-9a-f]{40})(?:;retry:([1-9][0-9]*))?\Z")
 
 
 def read_verified_batch(state, *, batch_reference_for):

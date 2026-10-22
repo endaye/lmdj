@@ -158,6 +158,80 @@ class ComposedReferenceTest(unittest.TestCase):
         self.assertEqual(self.observe().status, "conflict")
         self.assertIsNone(self.consumer.reference)
 
+    RETRY_ORIGIN, RETRY_EXECUTOR = 4444, 5555
+
+    def retry_request(self, suites=("suite-a",), original="batch-request"):
+        return {"id": "retry-request", "kind": "retry", "base": None, "target": WITNESS,
+                "control": "a" * 40, "policy": "2" * 64,
+                "selection": {"kind": "focused", "suites": sorted(suites), "reasons": ["retry"]},
+                "origin_run": {"run_id": self.RETRY_ORIGIN, "attempt": 1},
+                "retry_of": {"request": original, "environmental": {
+                    suite: {"outcome": "cancelled", "jobs": {}} for suite in suites}}}
+
+    def retry_admit(self, request=None):
+        return {"id": "admit-2", "epoch": "one", "generation": 3, "type": "admit",
+                "data": {"request": request or self.retry_request(),
+                         "executor_run": {"run_id": self.RETRY_EXECUTOR, "attempt": 1}}}
+
+    def retry_result(self, *, status="passed", outcomes=None, generation=4, request_id="retry-request"):
+        from scripts.ci.batch_runtime import encode_reference
+        verdict = {"identity": {"target_sha": WITNESS, "request_id": request_id,
+                                "run_id": self.RETRY_EXECUTOR, "run_attempt": 1, "request_kind": "retry"},
+                   "evidence_digest": "6" * 64, "status": status}
+        return {"id": f"result-{generation}", "epoch": "one", "generation": generation, "type": "result",
+                "data": {"request_id": request_id, "run": {"run_id": self.RETRY_EXECUTOR, "attempt": 1},
+                         "target": WITNESS, "policy": "2" * 64,
+                         "outcomes": {"suite-a": "passed"} if outcomes is None else outcomes,
+                         "reference": encode_reference(verdict), "terminal": True}}
+
+    def test_a_failed_candidate_composes_with_its_passed_retry(self):
+        failed = self.result(status="failed")
+        failed["data"]["outcomes"] = {"suite-a": "cancelled"}
+        self.journal.append(self.admit())
+        self.journal.append(failed)
+        self.journal.append(self.retry_admit())
+        self.journal.append(self.retry_result())
+        observed = self.observe()
+        self.assertEqual(observed.status, "verified", observed.diagnostic)
+        self.assertEqual(observed.evidence["reference"],
+                         f"batch-result:{self.EXECUTOR}:{WITNESS};retry:{self.RETRY_EXECUTOR}")
+        reference = self.consumer.reference
+        self.assertEqual(reference["schema"], "lmdj.ci-batch-release-reference.v2")
+        self.assertEqual(reference["request"], self.request)
+        self.assertEqual(len(reference["retries"]), 1)
+        retry = reference["retries"][0]
+        self.assertEqual((retry["request"]["id"], retry["executor_run_id"], retry["evidence_digest"]),
+                         ("retry-request", self.RETRY_EXECUTOR, "6" * 64))
+        # The consumer still verifies at the candidate's executor; the retry run is inside the document.
+        self.assertEqual(self.consumer.verified, (self.EXECUTOR, WITNESS))
+
+    def test_a_retry_that_does_not_cover_the_failed_suites_or_did_not_pass_is_a_conflict(self):
+        failed = self.result(status="failed")
+        failed["data"]["outcomes"] = {"suite-a": "cancelled"}
+        for retry in (self.retry_result(status="failed", outcomes={"suite-a": "failed"}),
+                      self.retry_result(outcomes={"suite-b": "passed"})):
+            with self.subTest(outcomes=retry["data"]["outcomes"]):
+                self.transport.comments.clear()
+                self.transport.body = {"checkpoint": {"head": None, "pending": None}, "provenance": "trusted-run"}
+                self.journal._verified = None
+                self.journal.append(self.admit())
+                self.journal.append(failed)
+                self.journal.append(self.retry_admit())
+                self.journal.append(retry)
+                self.assertEqual(self.observe().status, "conflict")
+                self.assertIsNone(self.consumer.reference)
+
+    def test_two_retry_results_for_one_candidate_are_a_conflict(self):
+        from tools.release.verification import retry_result, VerificationError
+        events = [self.admit(), self.retry_admit(), self.retry_result(),
+                  self.retry_admit({**self.retry_request(), "id": "retry-two"}),
+                  self.retry_result(generation=5, request_id="retry-two")]
+        with self.assertRaises(VerificationError):
+            retry_result(events, WITNESS, "batch-request")
+        # A retry of another candidate never composes with this one.
+        self.assertIsNone(retry_result([self.admit(), self.retry_admit(self.retry_request(original="other")),
+                                        self.retry_result()], WITNESS, "batch-request"))
+
     def test_an_unreadable_run_or_attestation_is_unknown_not_conflict(self):
         self.journal.append(self.admit())
         self.journal.append(self.result())

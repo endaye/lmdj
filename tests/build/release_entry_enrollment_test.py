@@ -375,6 +375,18 @@ class VerifiedBatchRecoveryTest(unittest.TestCase):
         self.assertEqual(recovered["witness_revision"], WITNESS)
         self.assertEqual(recovered["batch_reference"], batch_document())
 
+    def test_a_composite_reference_string_recovers_the_candidate_executor_run(self):
+        # The retry run is inside the document; the intent's batch run id stays
+        # the candidate's executor, which is what every consumer re-proves.
+        recovered = self.read(state_document=verified_state(
+            reference=f"batch-result:{EXECUTOR_RUN}:{WITNESS};retry:{EXECUTOR_RUN + 7}"))
+        self.assertEqual(recovered["batch_run_id"], EXECUTOR_RUN)
+        for reference in (f"batch-result:{EXECUTOR_RUN}:{WITNESS};retry:0",
+                          f"batch-result:{EXECUTOR_RUN}:{WITNESS};retry:",
+                          f"batch-result:{EXECUTOR_RUN}:{WITNESS};retry:1;retry:2"):
+            with self.subTest(reference=reference), self.assertRaises(JournalError):
+                self.read(state_document=verified_state(reference=reference))
+
     def test_an_encoded_journal_reference_is_decoded(self):
         import scripts.ci.batch_runtime as runtime
 

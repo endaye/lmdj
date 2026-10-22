@@ -152,8 +152,17 @@ still appear in the report. Missing selected rows become uncovered obligations.
     _identity(policy, identity)
     common_events = [] if common_events is None else _common_events(identity, selection, common_events)
     try:
-        normalized = test_scope.union_selections(policy, [selection])
-        require(selection == normalized, "frozen selection omits transitive consumers")
+        if identity["request_kind"] == "retry":
+            # A retry re-runs the lanes its candidate did not pass; it is not a
+            # change, so its selection is canonical but not closed over the
+            # dependency graph (a closure would re-run suites that passed).
+            require(isinstance(selection, dict) and set(selection) == {"kind", "suites", "reasons"},
+                    "selection schema is not closed")
+            normalized = test_scope._selection(policy, selection["suites"], selection["reasons"])
+            require(selection == normalized, "retry selection is not canonical")
+        else:
+            normalized = test_scope.union_selections(policy, [selection])
+            require(selection == normalized, "frozen selection omits transitive consumers")
         selection = normalized
     except test_scope.ScopeError as error:
         raise VerdictError(str(error)) from error

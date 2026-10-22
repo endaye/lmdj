@@ -12,7 +12,7 @@ absence; an unreadable journal is unknown, never a negative proof.
 """
 
 from .batch_evidence import BatchEvidenceConsumer, BatchEvidenceError
-from .batch_reference import SCHEMA, parse_reference
+from .batch_reference import SCHEMA, SCHEMA_V2, parse_reference
 from .model import canonical_sha256
 from .orchestration_driver import Observation
 
@@ -92,6 +92,42 @@ def _candidate_results(events, witness, *, terminal_only):
     return selected
 
 
+def _request_of(events, request_id):
+    """The frozen request a journal enqueue/admit event recorded for an id."""
+    for event in events:
+        if not isinstance(event, dict) or event.get("type") not in {"enqueue", "admit"}:
+            continue
+        data = event.get("data")
+        request = data if event["type"] == "enqueue" else (data.get("request") if isinstance(data, dict) else None)
+        if isinstance(request, dict) and request.get("id") == request_id:
+            return request
+    return None
+
+
+def retry_result(events, witness, original_id):
+    """The unique terminal retry result composing with the candidate result, or None.
+
+    A retry request names its candidate in `retry_of`; the reducer admits at
+    most one per candidate, so two terminal retry results for one candidate
+    are a hard conflict exactly like two candidate results for one target.
+    """
+    selected = []
+    for event in events:
+        if not (isinstance(event, dict) and event.get("type") == "result"
+                and isinstance(event.get("data"), dict) and event["data"].get("target") == witness
+                and event["data"].get("terminal") is True):
+            continue
+        if _result_kind(event["data"]) != "retry":
+            continue
+        request = _request_of(events, event["data"].get("request_id"))
+        retry_of = request.get("retry_of") if isinstance(request, dict) else None
+        if isinstance(retry_of, dict) and retry_of.get("request") == original_id:
+            selected.append(event["data"])
+    if len(selected) > 1:
+        _fail("multiple retry results claim the same candidate")
+    return selected[0] if selected else None
+
+
 def terminal_result(events, witness):
     """The unique terminal candidate batch result for the witness, or None."""
     results = _candidate_results(events, witness, terminal_only=True)
@@ -122,6 +158,30 @@ def release_reference(events, result, witness, consumer):
         return parse_reference(document)
     if not isinstance(document, dict):
         _fail("batch result reference is not a document")
+    status = document.get("status")
+    if status == "passed":
+        record, _ = _record(events, result, witness, consumer, document)
+        return parse_reference({"schema": SCHEMA, **record})
+    if status != "failed":
+        _fail("batch verdict is not passed")
+    # A candidate that did not pass composes with its one lane-scoped retry
+    # (#2422 item 8); without a terminal passed retry it stays not passed.
+    retry = retry_result(events, witness, result.get("request_id"))
+    if retry is None:
+        _fail("batch verdict is not passed")
+    retry_document = decode_reference(retry.get("reference"))
+    if not isinstance(retry_document, dict) or retry_document.get("status") != "passed":
+        _fail("retry verdict is not passed")
+    record, _ = _record(events, result, witness, consumer, document)
+    retry_record, retry_executor = _record(events, retry, witness, consumer, retry_document)
+    return parse_reference({"schema": SCHEMA_V2, **record,
+                            "retries": [{**retry_record, "executor_run_id": retry_executor["run_id"]}]})
+
+
+def _record(events, result, witness, consumer, document):
+    """One result's reference record from retained journal and run facts."""
+    from scripts.ci.self_test import digest_of
+
     request_id = result.get("request_id")
     admits = [event["data"] for event in events
               if isinstance(event, dict) and event.get("type") == "admit"
@@ -140,8 +200,6 @@ def release_reference(events, result, witness, consumer):
             or identity.get("request_id") != request_id
             or identity.get("run_id") != executor["run_id"] or identity.get("run_attempt") != 1):
         _fail("batch verdict does not bind the admitted request and executor")
-    if document.get("status") != "passed":
-        _fail("batch verdict is not passed")
     origin = request.get("origin_run")
     origin_id = origin.get("run_id") if isinstance(origin, dict) else None
     if type(origin_id) is not int or origin_id <= 0:
@@ -160,8 +218,7 @@ def release_reference(events, result, witness, consumer):
         raise
     except OSError as error:
         raise EvidenceUnavailable("batch run or controller attestation could not be read") from error
-    return parse_reference({
-        "schema": SCHEMA,
+    return {
         "request": request,
         "executor_control_revision": executor_run.get("head_sha"),
         "executor_event": executor_run.get("event"),
@@ -169,7 +226,7 @@ def release_reference(events, result, witness, consumer):
         "origin_record_digest": digest_of(origin_record),
         "admission_record_digest": digest_of(admission_record),
         "evidence_digest": document.get("evidence_digest"),
-    })
+    }, executor
 
 
 class BatchVerification:
@@ -206,7 +263,14 @@ class BatchVerification:
         if not isinstance(outcomes, dict) or not outcomes:
             _fail("batch result does not enumerate suite outcomes")
         if any(value != "passed" for value in outcomes.values()):
-            _fail("batch result is not fully passed")
+            # Not passed on its own: admissible only composed with its one
+            # terminal retry that passed exactly the suites it did not.
+            retry = retry_result(events, witness, result.get("request_id"))
+            retry_outcomes = retry.get("outcomes") if isinstance(retry, dict) else None
+            if (not isinstance(retry_outcomes, dict) or not retry_outcomes
+                    or set(retry_outcomes) != {suite for suite, value in outcomes.items() if value != "passed"}
+                    or any(value != "passed" for value in retry_outcomes.values())):
+                _fail("batch result is not fully passed")
         reference = result.get("reference")
         if not isinstance(reference, str) or not reference:
             _fail("batch result has no durable reference")
@@ -268,7 +332,7 @@ class BatchVerification:
             return Observation("conflict" if error.code == "conflict" else "unknown")
         except Exception:
             return Observation("unknown")
-        return Observation("verified", {
-            "sha256": canonical_sha256(document),
-            "reference": f"batch-result:{executor_id}:{witness}",
-        })
+        reference = f"batch-result:{executor_id}:{witness}"
+        for retry in document.get("retries", []):
+            reference += f";retry:{retry['executor_run_id']}"
+        return Observation("verified", {"sha256": canonical_sha256(document), "reference": reference})

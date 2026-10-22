@@ -17,7 +17,7 @@ import zipfile
 
 from .self_test_protocol import protocol as self_test  # one trusted CI module identity
 from .github_api import CI_SCOPE_LANES
-from .batch_reference import (SCHEMA, MAX_DOCUMENT, EXECUTOR_EVENTS, BatchEvidenceError,
+from .batch_reference import (SCHEMA, SCHEMA_V2, MAX_DOCUMENT, EXECUTOR_EVENTS, BatchEvidenceError,
                               require, positive, sha, parse_reference)
 import batch_evidence_validation as shared
 import incremental_batch as batch
@@ -201,6 +201,7 @@ git_root is an existing complete checkout; reads never fetch or execute source.
     def _verify(self, reference, *, run_id, target_revision, published=False):
         ref = parse_reference(reference)
         request = ref["request"]
+        retries = ref.get("retries", [])
         require(sha(target_revision) and request["target"] == target_revision, "candidate target differs from frozen request")
         require(self.git("rev-parse", "--is-shallow-repository").strip() == b"false", "shallow Git cannot prove source history", "unverifiable")
         main = self.get("/branches/main")
@@ -210,17 +211,43 @@ git_root is an existing complete checkout; reads never fetch or execute source.
         self.ancestor(self.main)
         self.ancestor(self.producer_revision)
         self.ancestor(target_revision)
-        if request["base"] is not None:
-            self.ancestor(request["base"])
-            self.git("merge-base", "--is-ancestor", request["base"], target_revision)
         workflow = self.get("/actions/workflows/self-test-report.yml")
         require(isinstance(workflow, dict) and type(workflow.get("id")) is int and workflow["id"] == self.workflow_id
                 and workflow.get("path") == WORKFLOW, "stable workflow source is not independently authenticated")
-        origin, _ = self.run(request["origin_run"]["run_id"], request["control"], published=published)
-        executor, jobs = self.run(run_id, ref["executor_control_revision"], expected_event=ref["executor_event"], published=published)
-        require(executor.get("conclusion") == "success", "executor run is not successful full-candidate evidence")
+        # Per-verification state: all contributing artifacts must remain live
+        # through the final verdict, not merely their individual downloads.
+        retention = []
+        # A composite reference's primary run is a candidate that did not pass:
+        # its executor concluded failure, and only the retried lanes may be the
+        # reason. A plain reference's primary must have passed everything.
+        checked, executor, jobs = self._verify_record(ref, request, run_id, passed=not retries,
+                                                      published=published, retention=retention)
+        for retry in retries:
+            retry_checked, _, _ = self._verify_record(retry, retry["request"], retry["executor_run_id"], passed=True,
+                                                      published=published, retention=retention)
+            if not published:
+                self._compose(checked, jobs, retry["request"], retry_checked)
         if published:
             return None, deepcopy(executor)
+        now = self.now
+        require(len(retention) == 3 * (1 + len(retries)) and all(expires > now for expires in retention),
+                "original controller or verdict artifact expired before complete verification", "unverifiable")
+        return deepcopy(checked), deepcopy(executor)
+
+    def _verify_record(self, record, request, run_id, *, passed, published, retention):
+        """One run's complete proof: its origin and admission attestations, its
+        executor run and jobs, its three-file verdict bundle recomputed from
+        raw needs, with the status the reference claims for it."""
+        if request["base"] is not None:
+            self.ancestor(request["base"])
+            self.git("merge-base", "--is-ancestor", request["base"], request["target"])
+        origin, _ = self.run(request["origin_run"]["run_id"], request["control"], published=published)
+        executor, jobs = self.run(run_id, record["executor_control_revision"], expected_event=record["executor_event"], published=published)
+        require(executor.get("conclusion") == ("success" if passed else "failure"),
+                "executor run is not successful full-candidate evidence" if passed
+                else "a composite reference's candidate run did not conclude failure")
+        if published:
+            return None, deepcopy(executor), []
         for path in shared.EXECUTION_SOURCES:
             for revision in (request["control"], executor["head_sha"]):
                 require(self.git("cat-file", "-t", f"{revision}:{path}").strip() == b"blob", "execution source is not a Git blob")
@@ -233,39 +260,65 @@ git_root is an existing complete checkout; reads never fetch or execute source.
         batch._request(policy, request)
         # Complete current inventory is also pinned against canonical scope lanes.
         require(set(policy.suite_ids) == CI_SCOPE_LANES | {"core_tsan_stress", "core_release_stress"}, "policy is not the complete fifteen-suite inventory")
-        require(request["selection"]["kind"] == "full" and set(request["selection"]["suites"]) == set(policy.suite_ids), "focused or none selection cannot certify a candidate")
-        # Per-verification state: all contributing artifacts must remain live
-        # through the final verdict, not merely their individual downloads.
-        retention = []
-        first = self.snapshot(origin, ref["origin_record_digest"],retention=retention)
+        if request["kind"] == "retry":
+            require(set(request["selection"]["suites"]) <= set(policy.suite_ids), "retry selects an unknown suite")
+        else:
+            require(request["selection"]["kind"] == "full" and set(request["selection"]["suites"]) == set(policy.suite_ids), "focused or none selection cannot certify a candidate")
+        first = self.snapshot(origin, record["origin_record_digest"],retention=retention)
         require(first["action"] in {"execute", "waiting"} and equal(first["state"].get("requests", {}).get(request["id"]), request), "origin attestation does not retain the original request")
         if first["action"] == "waiting":
-            require(request["kind"] in {"candidate", "node"} and isinstance(first["state"]["queue"], list)
+            require(request["kind"] in {"candidate", "node", "retry"} and isinstance(first["state"]["queue"], list)
                     and first["state"]["queue"].count(request["id"]) == 1, "origin waiting attestation has no uniquely queued explicit request")
         else:
             require(equal(first["request"], request) and equal(first["state"]["active"], {
                 "request_id": request["id"], "executor_run": request["origin_run"], "claim": request["origin_run"]}),
                 "origin execution attestation has no matching admission claim")
-        admitted = self.snapshot(executor, ref["admission_record_digest"],retention=retention)
+        admitted = self.snapshot(executor, record["admission_record_digest"],retention=retention)
         require(first["state"]["epoch"] == admitted["state"]["epoch"], "origin and admission attestation epochs differ")
         require(admitted["action"] == "execute" and equal(admitted["request"], request)
                 and equal(admitted["state"].get("requests", {}).get(request["id"]), request)
                 and equal(admitted["state"].get("active"), {"request_id": request["id"], "executor_run": {"run_id": run_id, "attempt": 1}, "claim": {"run_id": run_id, "attempt": 1}}),
                 "controller record is not this executor's durable-claim admission attestation")
         producers = [j for j in jobs if j.get("name") == shared.PRODUCER_JOB]
-        require(len(producers) == 1 and producers[0].get("conclusion") == "success" and shared.producer_uploaded(producers[0]), "full verdict lacks successful authenticated judge and upload")
+        require(len(producers) == 1 and producers[0].get("conclusion") == ("success" if passed else "failure")
+                and shared.producer_uploaded(producers[0]), "full verdict lacks successful authenticated judge and upload")
         visibility = [s for s in producers[0]["steps"] if isinstance(s, dict) and s.get("name") == "Keep failed selected work visible"]
         require(len(visibility) == 1 and visibility[0].get("status") == "completed"
-                and visibility[0].get("conclusion") == "skipped", "full candidate producer visibility step is not terminal skipped")
-        bundle = self.artifact(executor, f"batch-verdict-{target_revision}-{run_id}-1", ("verdict.json", "execution.json", "needs.json"),retention=retention)
+                and visibility[0].get("conclusion") == ("skipped" if passed else "failure"),
+                "full candidate producer visibility step is not terminal skipped")
+        bundle = self.artifact(executor, f"batch-verdict-{request['target']}-{run_id}-1", ("verdict.json", "execution.json", "needs.json"),retention=retention)
         checked, _ = shared.validate_bundle(bundle, request, executor, policy)
         execution = bundle["execution.json"]
         require(equal(execution["identity"], checked["identity"]) and equal(execution["selection"], checked["selection"])
                 and all(type(v) is bool for k in ("suites", "lanes") for v in execution[k].values()),
                 "execution projection types differ from independently resolved identity and selection")
+        require(checked["status"] == ("passed" if passed else "failed") and checked["evidence_digest"] == record["evidence_digest"],
+                "full candidate verdict is not the referenced passed evidence" if passed
+                else "a composite reference's candidate verdict is not the referenced failed evidence")
         shared.validate_job_observations(checked, producers[0], jobs)
-        require(checked["status"] == "passed" and checked["evidence_digest"] == ref["evidence_digest"], "full candidate verdict is not the referenced passed evidence")
-        now = self.now
-        require(len(retention) == 3 and all(expires > now for expires in retention),
-                "original controller or verdict artifact expired before complete verification", "unverifiable")
-        return deepcopy(checked), deepcopy(executor)
+        return checked, executor, jobs
+
+    def _compose(self, primary, primary_jobs, retry_request, retry):
+        """The retry covers exactly the suites the candidate did not pass, each
+        proven environmental against the candidate's own verdict and jobs API,
+        and the retry passed every one of them."""
+        not_passed = {row["id"]: row for row in primary["suites"]
+                      if row["selected"] and row["scheduler_outcome"] != "passed"}
+        proof = retry_request["retry_of"]["environmental"]
+        require(bool(not_passed) and set(not_passed) == set(retry_request["selection"]["suites"]) == set(proof),
+                "retry does not cover exactly the suites the candidate did not pass")
+        conclusions = {job.get("name"): job.get("conclusion") for job in primary_jobs}
+        for suite_id, row in not_passed.items():
+            entry = proof[suite_id]
+            require(entry["outcome"] == row["scheduler_outcome"], "retry proof differs from the candidate verdict")
+            if entry["outcome"] == "failed":
+                require(bool(row["failures"]) and sorted(entry["jobs"]) == sorted(row["failures"]),
+                        "retry proof does not name exactly the candidate's failing jobs")
+                for job, conclusion in entry["jobs"].items():
+                    name = shared.PREFIX + shared.JOB_NAMES.get(job, shared.RETIRED_JOB_NAMES.get(job, ""))
+                    require(conclusion in batch.ENVIRONMENTAL_CONCLUSIONS and conclusions.get(name) == conclusion,
+                            "a candidate lane failed on a test; a retry never covers a real failure")
+        retried = {row["id"] for row in retry["suites"] if row["selected"]}
+        require(retried == set(not_passed) and retry["status"] == "passed"
+                and all(row["scheduler_outcome"] == "passed" for row in retry["suites"] if row["selected"]),
+                "retry verdict does not pass every retried suite")

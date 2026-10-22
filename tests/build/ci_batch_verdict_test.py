@@ -58,6 +58,18 @@ class VerdictTest(unittest.TestCase):
         with self.assertRaisesRegex(verdict.VerdictError, "full selection"):
             self.build()
 
+    def test_retry_selection_is_canonical_but_not_closed_over_dependencies(self):
+        # core_asan has dependents; a retry of it alone re-runs only it.
+        self.identity.update(request_kind="retry", base_sha=None)
+        self.selection = test_scope._selection(self.policy, ["core_asan"], ["retry of candidate"])
+        document = self.build([self.row(suite="core_asan", job="core-asan")])
+        self.assertEqual(verdict.scheduler_outcomes(document, self.policy, self.identity, self.selection),
+                         {"core_asan": "passed"})
+        self.identity["request_kind"] = "auto"
+        self.identity["base_sha"] = "a" * 40
+        with self.assertRaisesRegex(verdict.VerdictError, "transitive consumers"):
+            self.build([self.row(suite="core_asan", job="core-asan")])
+
     def test_none_is_not_required_not_passed(self):
         self.selection = test_scope._selection(self.policy, [], ["explanatory documentation"])
         document = self.build([])
