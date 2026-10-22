@@ -101,11 +101,14 @@ is incomplete. Complete paths and trusted policies still define the floor.
         batch.exact_sha(sha)
         batch.require(self.main is not None and self.ancestor(sha, self.main),
                       "release classification needs verified main history")
-        listing = self._git("diff-tree", "--no-commit-id", "--no-renames", "--name-status", "-r", "--root", sha)
-        changes = []
-        for line in listing.decode().splitlines():
-            fields = line.split("\t")
-            changes.append((fields[0][:1], fields[-1]))
+        listing = self._git("diff-tree", "--no-commit-id", "--no-renames", "--name-status",
+                            "-r", "--root", "-z", sha).decode()
+        fields = listing.split("\0")
+        batch.require(fields.pop() == "" and len(fields) % 2 == 0,
+                      "release classification read an unexpected diff-tree listing")
+        changes = list(zip(fields[0::2], fields[1::2]))
+        batch.require(all(status in ("A", "M", "D", "T") for status, _ in changes),
+                      "release classification read an unexpected change status")
         return classify_release_commit(changes)
 
     def policy_at(self, control, *, historical=False):

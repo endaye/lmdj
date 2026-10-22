@@ -683,6 +683,8 @@ class RealGitTests(unittest.TestCase):
         witness = self.write_and_commit({provenance + "version-2-squash-witness.json": "{}"})
         correction = self.write_and_commit({provenance + "version-2-squash-witness.json": "{\"fixed\": 1}"})
         other_provenance = self.write_and_commit({provenance + "README.md": "notes"})
+        # Paths are read exactly (NUL-separated), not from Git's quoted text form.
+        odd_name = self.write_and_commit({provenance + "version-2\tb-squash-witness.json": "{}"})
         ordinary = self.write_and_commit({"products/lmdj/version.json": "3", "packages/x.txt": "x"})
         self.tip = ordinary
         self.inputs.refresh()
@@ -690,6 +692,7 @@ class RealGitTests(unittest.TestCase):
         self.assertEqual(self.inputs.release_commit(witness), "witness")
         self.assertIsNone(self.inputs.release_commit(correction))        # an edited record is not a witness
         self.assertIsNone(self.inputs.release_commit(other_provenance))  # nor an unrelated provenance file
+        self.assertEqual(self.inputs.release_commit(odd_name), "witness")
         self.assertIsNone(self.inputs.release_commit(ordinary))
         self.assertIsNone(self.inputs.release_commit(self.base))
         self.assertIsNone(controller.classify_release_commit([]))
