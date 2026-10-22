@@ -101,7 +101,7 @@ is incomplete. Complete paths and trusted policies still define the floor.
         batch.exact_sha(sha)
         batch.require(self.main is not None and self.ancestor(sha, self.main),
                       "release classification needs verified main history")
-        listing = self._git("diff-tree", "--no-commit-id", "--name-status", "-r", "--root", sha)
+        listing = self._git("diff-tree", "--no-commit-id", "--no-renames", "--name-status", "-r", "--root", sha)
         changes = []
         for line in listing.decode().splitlines():
             fields = line.split("\t")
