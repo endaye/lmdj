@@ -295,3 +295,64 @@ html[data-creator-layout="compact"] .perform-output-meter { grid-template-column
   html[data-creator-layout="compact"] .overview-display.interaction-overview[data-mode="perform"] .perform-overview-facts div { gap: 4px; }
   html[data-creator-layout="compact"] .overview-display.interaction-overview[data-mode="perform"] .perform-overview-progress { top: 79px; bottom: auto; }
 }
+
+/* The existing narrow portrait console has a152px read-only upper region.
+   Keep each fact whole instead of squeezing three columns and four encoder
+   boxes into its258px phone width. The containing console and all input
+   targets retain their existing geometry. Full/rotated layouts stay above. */
+@media (max-width: 707px) and (orientation: portrait) {
+  html[data-creator-layout="compact"] .overview-display.interaction-overview:is([data-mode="project"], [data-mode="system"]) {
+    padding: 6px;
+    grid-template-rows: 32px minmax(0, 1fr) 24px;
+    gap: 0;
+  }
+  html[data-creator-layout="compact"] .overview-display.interaction-overview:is([data-mode="project"], [data-mode="system"]) .overview-primary {
+    flex-direction: column;
+    align-items: stretch;
+    justify-content: start;
+    gap: 1px;
+  }
+  html[data-creator-layout="compact"] .overview-display.interaction-overview:is([data-mode="project"], [data-mode="system"]) .overview-context {
+    font-size: 12px;
+    line-height: 17px;
+  }
+  html[data-creator-layout="compact"] .overview-display.interaction-overview:is([data-mode="project"], [data-mode="system"]) .overview-transport {
+    justify-content: space-between;
+    gap: 8px;
+    font-size: 9px;
+    line-height: 13px;
+  }
+  html[data-creator-layout="compact"] .overview-display.interaction-overview:is([data-mode="project"], [data-mode="system"]) .overview-summary-columns {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 2px;
+  }
+  html[data-creator-layout="compact"] .overview-display.interaction-overview:is([data-mode="project"], [data-mode="system"]) .overview-summary-columns dl {
+    flex-direction: row;
+    flex-wrap: wrap;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 0 8px;
+  }
+  html[data-creator-layout="compact"] .overview-display.interaction-overview:is([data-mode="project"], [data-mode="system"]) .overview-summary-columns .overview-value {
+    margin-bottom: 0;
+    font-size: 12px;
+    line-height: 17px;
+    white-space: nowrap;
+  }
+  html[data-creator-layout="compact"] .overview-display.interaction-overview:is([data-mode="project"], [data-mode="system"]) .encoder-readbacks {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    grid-template-rows: repeat(2, 12px);
+    gap: 0 4px;
+    font-size: 8px;
+    line-height: 10px;
+  }
+  html[data-creator-layout="compact"] .overview-display.interaction-overview:is([data-mode="project"], [data-mode="system"]) .encoder-readbacks > div {
+    padding: 1px 2px;
+    gap: 2px;
+  }
+  html[data-creator-layout="compact"] .overview-display.interaction-overview:is([data-mode="project"], [data-mode="system"]) .encoder-readbacks dt {
+    flex-shrink: 0;
+    overflow: visible;
+    text-overflow: clip;
+  }
+}
