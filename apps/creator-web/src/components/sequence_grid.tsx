@@ -1,4 +1,4 @@
-import {useEffect, useRef, useState} from "react";
+import {memo, useEffect, useRef, useState} from "react";
 
 import {ModalDialog} from "./modal_dialog";
 import "./sequence_grid_tools.css";
@@ -59,10 +59,15 @@ interface SequenceGridProps {
 }
 
 interface GridRect {
+  readonly element: Element | null;
   readonly left: number;
   readonly top: number;
   readonly width: number;
   readonly height: number;
+  readonly rotated: boolean;
+  readonly layoutWidth: number;
+  readonly layoutHeight: number;
+  readonly rowStarts: readonly number[] | null;
 }
 
 type GridGesture =
@@ -89,36 +94,99 @@ type GridGesture =
 // drag (box-select, move or resize).
 const DRAG_THRESHOLD_PX = 4;
 
+// fitStage is the sole transform writer: uniform scale, optionally preceded
+// by rotate(-90deg). Read that actual producer, never infer it from viewport
+// shape (compact portrait remains upright).
+function gridRotated(element: Element | null): boolean {
+  return element?.closest<HTMLElement>(".hardware-workspace")
+    ?.style.transform.includes("rotate(-90deg)") ?? false;
+}
+
 function gridRectOf(element: Element | null): GridRect {
   const rect = element?.getBoundingClientRect();
+  const rotated = gridRotated(element);
+  const rowStarts = element?.classList.contains("sequence-grid-body")
+    ? Array.from(element.querySelectorAll(".sequence-grid-row"), (row) => {
+        const bounds = row.getBoundingClientRect();
+        return rotated ? bounds.left : bounds.top;
+      }) : [];
   return {
+    element,
     left: rect?.left ?? 0,
     top: rect?.top ?? 0,
     width: rect?.width ?? 0,
     height: rect?.height ?? 0,
+    rotated,
+    layoutWidth: (element as HTMLElement | null)?.offsetWidth ||
+      (rotated ? rect?.height : rect?.width) || 0,
+    layoutHeight: (element as HTMLElement | null)?.offsetHeight ||
+      (rotated ? rect?.width : rect?.height) || 0,
+    // Actual row starts include CSS gaps/padding. Hidden or synthetic zero
+    // rectangles have no usable row geometry; retain the uniform fallback.
+    rowStarts: rowStarts.length === SEQUENCE_BANK_PADS && rowStarts.every(
+      (start, index) => index === 0 || start > rowStarts[index - 1]!,
+    ) ? rowStarts : null,
   };
 }
 
-function tickAtClientX(rect: GridRect, clientX: number, lengthTicks: number): number {
-  return rect.width <= 0
-    ? 0
-    : (clientX - rect.left) / rect.width * lengthTicks;
+function gridPoint(rect: GridRect, clientX: number, clientY: number) {
+  return rect.rotated ? {
+    x: rect.height <= 0 ? 0 : (rect.top + rect.height - clientY) / rect.height,
+    y: rect.width <= 0 ? 0.5 : (clientX - rect.left) / rect.width,
+  } : {
+    x: rect.width <= 0 ? 0 : (clientX - rect.left) / rect.width,
+    y: rect.height <= 0 ? 0.5 : (clientY - rect.top) / rect.height,
+  };
 }
 
-function padAtClientY(rect: GridRect, clientY: number): number {
-  if (rect.height <= 0) return 0;
+function tickAtPoint(rect: GridRect, clientX: number, clientY: number, lengthTicks: number) {
+  return gridPoint(rect, clientX, clientY).x * lengthTicks;
+}
+
+function padAtPoint(rect: GridRect, clientX: number, clientY: number): number {
+  if (rect.rowStarts !== null) {
+    const axis = rect.rotated ? clientX : clientY;
+    const next = rect.rowStarts.findIndex((start) => start > axis);
+    return next < 0 ? SEQUENCE_BANK_PADS - 1 : Math.max(0, next - 1);
+  }
+  if (rect.width <= 0 || rect.height <= 0) return 0;
   return Math.max(0, Math.min(
-    Math.floor((clientY - rect.top) / rect.height * SEQUENCE_BANK_PADS),
+    Math.floor(gridPoint(rect, clientX, clientY).y * SEQUENCE_BANK_PADS),
     SEQUENCE_BANK_PADS - 1,
   ));
 }
 
-function velocityAtClientY(rect: GridRect, clientY: number): number {
-  const fraction = rect.height <= 0
-    ? 0.5
-    : Math.max(0, Math.min((clientY - rect.top) / rect.height, 1));
+function velocityAtPoint(rect: GridRect, clientX: number, clientY: number): number {
+  const fraction = Math.max(0, Math.min(gridPoint(rect, clientX, clientY).y, 1));
   return Math.round((1 - fraction) * 126) + 1;
 }
+
+function gridRectUnchanged(rect: GridRect): boolean {
+  const now = rect.element?.getBoundingClientRect();
+  return now !== undefined && gridRotated(rect.element) === rect.rotated &&
+    now.left === rect.left && now.top === rect.top &&
+    now.width === rect.width && now.height === rect.height;
+}
+
+function selectionBoxStyle(gesture: Extract<GridGesture, {kind: "box"}>) {
+  const from = gridPoint(gesture.bodyRect, gesture.originX, gesture.originY);
+  const to = gridPoint(gesture.bodyRect, gesture.currentX, gesture.currentY);
+  return {
+    left: Math.min(from.x, to.x) * gesture.bodyRect.layoutWidth,
+    top: Math.min(from.y, to.y) * gesture.bodyRect.layoutHeight,
+    width: Math.abs(from.x - to.x) * gesture.bodyRect.layoutWidth,
+    height: Math.abs(from.y - to.y) * gesture.bodyRect.layoutHeight,
+  };
+}
+
+// Decorative cells follow the live snap/Pattern, never prototype event data.
+// Keep their potentially large subtree out of each pointer-preview render.
+const GridCells = memo(function GridCells({columns}: {columns: number}) {
+  return columns === 0 ? null : <div className="sequence-grid-cells" aria-hidden="true"
+    style={{gridTemplateColumns: `repeat(${columns}, minmax(0, 1fr))`}}>
+    {Array.from({length: columns}, (_, index) => <span key={index} />)}
+  </div>;
+});
 
 function keyOf(bank: Bank, note: SequenceGridNote): SequenceGridEventKey {
   return {bank, pad: note.pad, onsetTick: note.onsetTick};
@@ -260,16 +328,16 @@ export function SequenceGrid(props: SequenceGridProps) {
     const current = gestureRef.current;
     if (current === null || current.pointerId !== pointerId) return;
     setGesture(null);
-    if (cancelled) return;
+    if (cancelled || !gridRectUnchanged(current.laneRect)) return;
     const currentProps = latestRef.current;
     const currentModel = modelRef.current;
     if (current.kind === "box") {
       const notes = sequenceGridNotesInBox({
         notes: currentModel.rows.flatMap((row) => row.notes),
         fromPad: current.fromPad,
-        toPad: padAtClientY(current.bodyRect, current.currentY),
+        toPad: padAtPoint(current.bodyRect, current.currentX, current.currentY),
         fromTick: current.fromTick,
-        toTick: tickAtClientX(current.laneRect, current.currentX, currentModel.lengthTicks),
+        toTick: tickAtPoint(current.laneRect, current.currentX, current.currentY, currentModel.lengthTicks),
       });
       currentProps.onSelectionChange(notes.map((note) => keyOf(bank, note)));
       return;
@@ -302,11 +370,14 @@ export function SequenceGrid(props: SequenceGridProps) {
     const cancel = (event: PointerEvent) => {
       finishGestureRef.current(event.pointerId, true);
     };
+    const resize = () => setGesture(null);
     window.addEventListener("pointerup", finish);
     window.addEventListener("pointercancel", cancel);
+    window.addEventListener("resize", resize);
     return () => {
       window.removeEventListener("pointerup", finish);
       window.removeEventListener("pointercancel", cancel);
+      window.removeEventListener("resize", resize);
     };
   }, []);
 
@@ -334,7 +405,7 @@ export function SequenceGrid(props: SequenceGridProps) {
       originX: event.clientX,
       originY: event.clientY,
       pad,
-      tick: tickAtClientX(laneRect, event.clientX, model.lengthTicks),
+      tick: tickAtPoint(laneRect, event.clientX, event.clientY, model.lengthTicks),
       laneRect,
       bodyRect: gridRectOf(event.currentTarget.closest(".sequence-grid-body")),
     });
@@ -360,8 +431,8 @@ export function SequenceGrid(props: SequenceGridProps) {
       note,
       zone,
       originTick: note.onsetTick,
-      pressPad: padAtClientY(bodyRect, event.clientY),
-      pressTick: tickAtClientX(laneRect, event.clientX, model.lengthTicks),
+      pressPad: padAtPoint(bodyRect, event.clientX, event.clientY),
+      pressTick: tickAtPoint(laneRect, event.clientX, event.clientY, model.lengthTicks),
       laneRect,
       bodyRect,
     });
@@ -370,6 +441,10 @@ export function SequenceGrid(props: SequenceGridProps) {
   const bodyPointerMove = (event: React.PointerEvent<HTMLElement>) => {
     const current = gestureRef.current;
     if (current === null || current.pointerId !== event.pointerId) return;
+    if (!gridRectUnchanged(current.laneRect)) {
+      setGesture(null);
+      return;
+    }
     const lengthTicks = modelRef.current.lengthTicks;
     if (current.kind === "add" || current.kind === "press") {
       const distance = Math.hypot(
@@ -393,7 +468,7 @@ export function SequenceGrid(props: SequenceGridProps) {
           originX: current.originX,
           originY: current.originY,
           note: current.note,
-          endTick: tickAtClientX(current.laneRect, event.clientX, lengthTicks),
+          endTick: tickAtPoint(current.laneRect, event.clientX, event.clientY, lengthTicks),
           laneRect: current.laneRect,
         });
         return;
@@ -405,7 +480,7 @@ export function SequenceGrid(props: SequenceGridProps) {
           originX: current.originX,
           originY: current.originY,
           note: current.note,
-          velocity: velocityAtClientY(current.laneRect, event.clientY),
+          velocity: velocityAtPoint(current.laneRect, event.clientX, event.clientY),
           laneRect: current.laneRect,
         });
         return;
@@ -429,8 +504,8 @@ export function SequenceGrid(props: SequenceGridProps) {
         originTick: current.originTick,
         pressPad: current.pressPad,
         pressTick: current.pressTick,
-        deltaPads: padAtClientY(current.bodyRect, event.clientY) - current.pressPad,
-        deltaTicks: tickAtClientX(current.laneRect, event.clientX, lengthTicks) -
+        deltaPads: padAtPoint(current.bodyRect, event.clientX, event.clientY) - current.pressPad,
+        deltaTicks: tickAtPoint(current.laneRect, event.clientX, event.clientY, lengthTicks) -
           current.pressTick,
         laneRect: current.laneRect,
         bodyRect: current.bodyRect,
@@ -443,9 +518,9 @@ export function SequenceGrid(props: SequenceGridProps) {
     }
     if (current.kind === "move") {
       const deltaTicks =
-        tickAtClientX(current.laneRect, event.clientX, lengthTicks) - current.pressTick;
+        tickAtPoint(current.laneRect, event.clientX, event.clientY, lengthTicks) - current.pressTick;
       const deltaPads =
-        padAtClientY(current.bodyRect, event.clientY) - current.pressPad;
+        padAtPoint(current.bodyRect, event.clientX, event.clientY) - current.pressPad;
       if (deltaTicks === current.deltaTicks && deltaPads === current.deltaPads) return;
       setGesture({...current, deltaTicks, deltaPads});
       return;
@@ -453,11 +528,11 @@ export function SequenceGrid(props: SequenceGridProps) {
     if (current.kind === "resize") {
       setGesture({
         ...current,
-        endTick: tickAtClientX(current.laneRect, event.clientX, lengthTicks),
+        endTick: tickAtPoint(current.laneRect, event.clientX, event.clientY, lengthTicks),
       });
       return;
     }
-    const velocity = velocityAtClientY(current.laneRect, event.clientY);
+    const velocity = velocityAtPoint(current.laneRect, event.clientX, event.clientY);
     if (velocity !== current.velocity) setGesture({...current, velocity});
   };
 
@@ -517,7 +592,8 @@ export function SequenceGrid(props: SequenceGridProps) {
         <button type="button" className="touch-control" aria-label="Choose bar"
           aria-haspopup="dialog" disabled={gesture !== null}
           onClick={(event) => { panelTrigger.current = event.currentTarget; setPanel("bars"); }}>
-          BAR {firstBar === lastBar ? firstBar : `${firstBar}–${lastBar}`} / {model.bars}
+          BAR {firstBar === lastBar ? String(firstBar).padStart(2, "0")
+            : `${String(firstBar).padStart(2, "0")}–${String(lastBar).padStart(2, "0")}`} / {String(model.bars).padStart(2, "0")}
         </button>
         <button type="button" className="touch-control" aria-label="Next bar"
           disabled={gesture !== null || visibleRange.endTick >= model.lengthTicks}
@@ -525,7 +601,7 @@ export function SequenceGrid(props: SequenceGridProps) {
         <button type="button" className="touch-control" aria-label="Grid tools"
           aria-haspopup="dialog" disabled={gesture !== null}
           onClick={(event) => { panelTrigger.current = event.currentTarget; setPanel("tools"); }}>
-          {snap === "off" ? "FREE" : snap} · {editMode.toUpperCase()}
+          Tools
         </button>
       </div>
       {panel === null ? null : <ModalDialog returnFocus={panelTrigger.current}
@@ -621,6 +697,7 @@ export function SequenceGrid(props: SequenceGridProps) {
                     : `repeating-linear-gradient(to right, transparent 0, transparent calc(${columnPercent}% - 1px), rgb(80 88 79 / 70%) calc(${columnPercent}% - 1px), rgb(80 88 79 / 70%) ${columnPercent}%), repeating-linear-gradient(to right, transparent 0, transparent calc(${barPercent}% - 1px), rgb(173 182 170 / 45%) calc(${barPercent}% - 1px), rgb(173 182 170 / 45%) ${barPercent}%)`,
                 }}
               >
+                <GridCells columns={model.columnCount} />
                 {row.notes.map((note, index) => (
                   <div
                     className={`sequence-grid-note${
@@ -664,16 +741,15 @@ export function SequenceGrid(props: SequenceGridProps) {
             <div
               className="sequence-grid-box"
               data-testid="sequence-grid-box"
-              style={{
-                left: Math.min(gesture.originX, gesture.currentX) - gesture.bodyRect.left,
-                top: Math.min(gesture.originY, gesture.currentY) - gesture.bodyRect.top,
-                width: Math.abs(gesture.currentX - gesture.originX),
-                height: Math.abs(gesture.currentY - gesture.originY),
-              }}
+              style={selectionBoxStyle(gesture)}
             />
           ) : null}
         </div>
       </div>
+      <p className="sequence-grid-help" data-testid="sequence-grid-help">
+        {editMode.toUpperCase()} · {snap === "off" ? "FREE" : `${snap} SNAP`} · {editMode === "vel"
+          ? "Drag a note to edit velocity" : "Tap empty space to add"}
+      </p>
       {selection.length === 0 ? null : (
         <div className="sequence-grid-batch" role="group" aria-label="Note selection">
           <span>{selection.length} selected</span>

@@ -1,0 +1,117 @@
+/* U06c: the EDIT workspace's local presentation. The shared kit retains
+   D0's 44-unit actual hits and 32-unit faces; all sixteen musical lanes are
+   distinct canvas targets. SETUP and the surrounding console keep ownership. */
+.sequence-touch-workspace[data-layer="edit"] {
+  gap: var(--creator-group-gap);
+  min-width: 0;
+}
+
+.sequence-touch-workspace[data-layer="edit"] .sequence-editor-header {
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: var(--creator-group-gap);
+}
+
+.sequence-touch-workspace[data-layer="edit"] .sequence-editor-header .pattern-selector > .touch-control {
+  --control-fill: transparent;
+  justify-items: start;
+  padding-inline: 0;
+  font-family: var(--creator-font-heading);
+  font-size: var(--creator-heading-size);
+  line-height: 20px;
+}
+
+.sequence-touch-workspace[data-layer="edit"] .pattern-selector-count {
+  display: none;
+}
+
+.sequence-touch-workspace[data-layer="edit"] .sequence-edit-tempo {
+  color: var(--creator-muted);
+  font: 400 10px/14px var(--creator-font-mono);
+  white-space: nowrap;
+}
+
+.sequence-touch-workspace[data-layer="edit"] .sequence-layer {
+  grid-column: 1 / -1;
+}
+
+.sequence-touch-workspace[data-layer="edit"] .sequence-layer .touch-control {
+  font-size: var(--creator-action-size);
+}
+
+.sequence-touch-workspace[data-layer="edit"] .sequence-grid-navigation {
+  grid-template-columns: 44px minmax(0, 1fr) 44px 76px;
+}
+
+.sequence-touch-workspace[data-layer="edit"] .sequence-grid-navigation .touch-control {
+  font-size: var(--creator-action-size);
+}
+
+.sequence-touch-workspace[data-layer="edit"] .sequence-grid {
+  --sequence-grid-pad-column: 34px;
+}
+
+.sequence-touch-workspace[data-layer="edit"] .sequence-grid-body {
+  box-sizing: border-box;
+  gap: 1.5px;
+  padding-block: 3px 8.5px;
+  background: var(--creator-base);
+}
+
+.sequence-touch-workspace[data-layer="edit"] .sequence-grid-pad {
+  padding-left: 3px;
+  background: var(--creator-base);
+  font-size: 8px;
+  line-height: 11px;
+}
+
+.sequence-touch-workspace[data-layer="edit"] .sequence-grid-lane {
+  height: 11px;
+}
+
+.sequence-touch-workspace[data-layer="edit"] .sequence-grid-cells {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  gap: 1.5px;
+  padding-bottom: 1px;
+  background: var(--creator-base);
+  pointer-events: none;
+}
+
+.sequence-touch-workspace[data-layer="edit"] .sequence-grid-cells > span {
+  border-radius: 1px;
+  background: var(--creator-screen);
+}
+
+.sequence-touch-workspace[data-layer="edit"] .sequence-grid-note {
+  top: 0;
+  border-radius: 1px;
+  background: transparent;
+}
+
+.sequence-touch-workspace[data-layer="edit"] .sequence-grid-note::before {
+  content: "";
+  position: absolute;
+  inset: 0 1.5px 0 0;
+  border-radius: 1px;
+  background: var(--pad-colour, var(--creator-muted));
+  pointer-events: none;
+}
+
+.sequence-touch-workspace[data-layer="edit"] .sequence-grid-note-preview::before {
+  background: var(--creator-text);
+}
+
+.sequence-touch-workspace[data-layer="edit"] .sequence-grid-note-end {
+  background: transparent;
+}
+
+.sequence-touch-workspace[data-layer="edit"] .sequence-grid-batch {
+  bottom: calc(14px + var(--creator-group-gap) + 4px);
+}
+
+.sequence-touch-workspace[data-layer="edit"] .sequence-grid-help {
+  margin: 0;
+  color: var(--creator-muted);
+  font: 400 10px/14px var(--creator-font-mono);
+}

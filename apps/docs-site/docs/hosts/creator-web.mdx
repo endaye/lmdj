@@ -796,25 +796,33 @@ They do not change the listening MASTER or recording/output level.
 The Sequence touch area follows the 2026-10-04 Sequence hardware UI decision
 (Desktop Final plan T5).
 
-**Header.** `GROOVE / NN` with `current / total` opens a direct Pattern
+**Header.** `GROOVE / NN` opens a direct Pattern
 picker with touch buttons. The physical left/right keys retain sequential
 Pattern navigation. Stopped, both select immediately through the snapshot
-reload; playing and not recording, both queue the transport's Pattern switch
+reload; playing or an already opened recording queues the transport's Pattern switch
 at the engine's selected SEQ SNAP boundary（[#1958](https://github.com/endaye/lmdj/issues/1958)：旧 Pattern 播到边界才换，标题在排队期间显示
 `GROOVE / 01 → 02`，上屏继续命名真正在播的 Pattern，生效后选择跟随新
-Pattern）。Recording and busy transport phases lock selection. EDIT and SETUP
-share the header row. EDIT is the default, and a mode change returns to it.
+Pattern）。Busy transport phases and the existing owner selection lock still
+disable selection; grid note editing keeps its separate recording lock. In EDIT, the
+Pattern heading and read-only Project BPM share the first row; full-width
+EDIT/SETUP tabs sit below. SETUP retains its existing header. EDIT is the
+default, and a mode change returns to it.
 
-**EDIT** keeps all sixteen grid rows at their existing size:
+**EDIT** renders all sixteen musical rows, with Pad colours from Truth:
 
 - previous/next bar buttons and the `BAR` range button reach every bar in
   1/2/4/8-bar Patterns. The range button opens a direct bar picker. A partial
   native scroll displays both intersected bars; choosing a bar aligns its start.
-- Grid tools (showing the current snap and NOTE/VEL) opens EDIT MODE first,
+- The **Tools** button opens Grid tools, with EDIT MODE first,
   with NOTE/VEL side by side, then GRID SNAP with 1/4, 1/8, 1/16 above 1/32
   and Off. The help text distinguishes tapping a note to delete in NOTE from
   dragging to change velocity in VEL. Done or Escape returns focus to the
   opener and retains the choices; the modal scrolls when needed.
+- A footer reads the current NOTE/VEL mode, Snap (FREE when off), and the
+  relevant add/velocity gesture. Bar captions use two-digit indices. The
+  normal buttons retain 44 px hit areas around their 32 px faces. The named
+  touch workspace scrolls vertically when needed to reach every row and the
+  footer; musical lanes retain their distinct, smaller editing geometry.
 - one bar fills the visible lane beside fixed Pad labels. The overview frame
   follows this unobscured lane, excluding the label column. ENC1 and native
   horizontal panning remain available; dragging a scrollbar is unnecessary.
@@ -965,6 +973,13 @@ Ordinary Sequence touch buttons share the common 44 px target, 32 px
 painted face and 6 px face radius. Grid cells, note gestures and continuous
 editors retain their own editing geometry. Choices use the existing touch
 controls instead of introducing browser-native dropdowns or checkboxes.
+
+Grid pointers follow the console's actual scale and optional counterclockwise
+portrait rotation. Time, track, note ends, velocity and the box-selection
+preview use local grid axes, while the drag threshold remains in screen
+pixels. Resize or a changed lane rectangle/rotation cancels an unfinished
+gesture rather than committing from stale geometry. This changes neither the
+recording lock nor the existing edit command, history or playback semantics.
 
 Sixteen rows are the active Bank's sixteen Pads, so the grid follows the Bank
 keys. The horizontal axis is the whole Pattern, one, two, four or eight bars,

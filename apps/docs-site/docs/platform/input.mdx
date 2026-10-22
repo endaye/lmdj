@@ -52,6 +52,7 @@ Creator 左栏按 2026-10-09 决策绑定旋钮，上屏持续显示当前功能
 - 滚轮累计每 50 px 一格，竖向拖动每 8 px 一格，聚焦后的方向键每按一次一格；向上和向右为顺时针。SHIFT + ENC1–3 细调，ENC4 始终每格 1%。导航仍每格一个项目／小节／行，整数 BPM 的最小步长仍为 1。
 - Project 旋钮只改变选择；明确按 OPEN PROJECT 才打开。Sample 的触摸键切换裁剪／声音组，同一 Pad 的工程参数共享一个转动预览：停止 400 ms 后合并为一次保存与撤销记录。离页、换 Pad／工程、打开 System、Esc 或 Undo/Redo 取消未提交的预览；已发出的保存保留实际结果。
 - Sequence ENC1 每格滚动一小节，到边界停止；SETUP 中禁用。ENC2 滚动上屏一行；Bank 键跳到该 Bank 首行。ENC3 立即显示预览 BPM，400 ms 后提交，录音或 transport 命令在途时锁定。Swing 留在 SETUP 的触摸滑块。
+- Sequence EDIT 的网格指针按实际 stage 旋转与缩放换算到本地时间／轨道／尾部／力度轴，框选预览也使用本地坐标；拖动阈值保持屏幕像素。窗口尺寸或 lane 几何变化取消未提交手势。16 条音乐轨道不套用普通按钮的44px尺寸；标题、tabs 与 Bar／Tools 仍保留普通动作命中，纵向触摸滚动使每条轨道可达。BPM 为 Project 只读值，编辑协议、录音锁和历史保持原规则。
 - Sample 编辑对象、Sequence 当前行与 Perform 矩阵高亮共用一个当前 Pad。正常击打可用 Pad 会更新它；Bank 键只换演奏组，不改变该编辑地址。Record Sample 武装期间保持固定目标。Sequence 和 Perform 的 ↑/↓ 按 A01–D16 选择，首尾停止，必要时同步 Bank 与既有上屏可见行；不发声、不改音符选择、工程或历史。Perform 在 SHIFT 或 System 中不提供这次新增的 Pad 方向。
 - Perform ←/→ 切换 PRIMARY／FILTER／MORE，到首尾停止；SHIFT 仍是 Undo/Redo，System 暂不提供 Perform 组方向。触摸组按钮同步旋钮绑定；换组只释放被移除输入的 touch token，保留旋钮手势、HOLD、masks 和录制。Live Mute/Solo 使用相同当前 Pad，并列出真实全 64 槽地址；它不提供新的声音或 Project 命令。
 - Sequence ←/→ 在停止时选择 Pattern；播放且未录音时按设备 SEQ SNAP 的 1 BEAT／1 BAR／SEQ END 预约切换，默认 1 BAR，录音或命令结算中禁用。SETUP 的 SEQ SNAP、网格 Snap 和录音 Quantize 互相独立。SHIFT + ←/→ 始终是撤销/重做。

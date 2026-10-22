@@ -300,6 +300,157 @@ async function redo(page) {
   await shiftAndPress(page, "Redo — SHIFT + →");
 }
 
+for (const viewport of [{width: 768, height: 1024}, {width: 1600, height: 1100}]) {
+  test(`EDIT transformed pointers preserve Truth and reopen at ${viewport.width}x${viewport.height}`, async ({page, browserName}, testInfo) => {
+    test.skip(browserName !== "chromium");
+    test.setTimeout(360_000);
+    const rotated = viewport.height > viewport.width;
+    const report = {viewport, rotated, pageErrors: [], legs: []};
+    page.on("pageerror", error => report.pageErrors.push(error.message));
+    try {
+      await page.setViewportSize(viewport);
+      await installGridProofRecorder(page);
+      await page.goto("/index.html");
+      await importProject(page);
+      const baseline = await inspectTruth(page);
+      await enterSequenceAndPlay(page);
+      const patternId = await selectedSequencePatternId(page);
+      const length = baseline.patterns[patternId].bars * 3840;
+      expect(baseline.patterns[patternId].events).toEqual([]);
+      const fit = await page.locator(".hardware-workspace").evaluate(element => ({
+        transform: element.style.transform,
+        scale: Number(element.style.getPropertyValue("--creator-stage-scale")),
+      }));
+      report.fit = fit;
+      expect(fit.transform.includes("rotate(-90deg)")).toBe(rotated);
+      if (rotated) expect(fit.scale).toBe(1);
+      else expect(fit.scale).toBeGreaterThan(1);
+
+      const editor = page.getByRole("region", {name: "Sequence editor"});
+      report.actions = await editor.locator(".sequence-editor-header button, .sequence-grid-navigation button")
+        .evaluateAll(buttons => buttons.map(button => {
+          const rect = button.getBoundingClientRect();
+          return {name: button.getAttribute("aria-label") ?? button.textContent.trim(),
+            left: rect.left, top: rect.top, right: rect.right, bottom: rect.bottom,
+            width: rect.width, height: rect.height};
+        }));
+      for (const [index, action] of report.actions.entries()) {
+        expect(action.width, action.name).toBeGreaterThanOrEqual(44 - 0.01);
+        expect(action.height, action.name).toBeGreaterThanOrEqual(44 - 0.01);
+        for (const other of report.actions.slice(index + 1)) {
+          const overlap = Math.min(action.right, other.right) - Math.max(action.left, other.left) > 0.1 &&
+            Math.min(action.bottom, other.bottom) - Math.max(action.top, other.top) > 0.1;
+          expect(overlap, `${action.name} / ${other.name}`).toBe(false);
+        }
+      }
+      await expect(editor.locator(".sequence-grid-row")).toHaveCount(16);
+      await expect(editor.getByLabel("Project tempo")).toHaveText(`${baseline.bpm} BPM`);
+      await expect(editor.getByRole("button", {name: "Grid tools"})).toHaveText("Tools");
+      report.headingStyle = await editor.getByRole("button", {name: "Choose Pattern"}).evaluate(element => ({
+        fill: getComputedStyle(element, "::before").backgroundColor,
+        font: getComputedStyle(element).fontFamily,
+        size: getComputedStyle(element).fontSize,
+      }));
+      expect(report.headingStyle.fill).toBe("rgba(0, 0, 0, 0)");
+      expect(report.headingStyle.font).toContain("Space Grotesk");
+      expect(report.headingStyle.size).toBe("14px");
+      await editor.screenshot({path: testInfo.outputPath("edit-top.png")});
+      const event = (pad, onset_tick, duration_tick, velocity) => ({
+        slot: {bank: 0, pad}, onset_tick, duration_tick, velocity,
+      });
+      // Independent closed-form screen mapping, not the product's helper.
+      const point = async (pad, tick, fraction = 0.5) => {
+        const lane = page.locator(`.sequence-grid-row[data-pad='${pad}'] .sequence-grid-lane`);
+        await lane.scrollIntoViewIfNeeded();
+        await resetHorizontalScroll(page, lane);
+        const box = await lane.boundingBox();
+        expect(box).not.toBeNull();
+        return rotated
+          ? {x: box.x + fraction * box.width, y: box.y + box.height * (1 - tick / length)}
+          : {x: box.x + box.width * tick / length, y: box.y + fraction * box.height};
+      };
+      const hit = async (pad, at) => expect(await page.evaluate(({x, y}) =>
+        document.elementFromPoint(x, y)?.closest(".sequence-grid-row")?.getAttribute("data-pad"), at))
+        .toBe(String(pad));
+      const tap = async (pad, tick) => {
+        const at = await point(pad, tick);
+        await hit(pad, at);
+        await page.mouse.click(at.x, at.y);
+      };
+      const drag = async (from, to) => {
+        await page.mouse.move(from.x, from.y);
+        await page.mouse.down();
+        await page.mouse.move(to.x, to.y, {steps: 6});
+        await page.mouse.up();
+      };
+      const check = async (name, expected) => {
+        await awaitTruthEvents(page, patternId, expected);
+        report.legs.push({name, truth: await inspectTruth(page)});
+      };
+      await tap(2, 600);
+      let expected = [event(2, 480, 240, 100)];
+      await check("add", expected);
+      await undo(page); await check("undo-add", []);
+      await redo(page); await check("redo-add", expected);
+      const from = await point(2, 540);
+      const to = await point(5, 1020);
+      await hit(2, from); await hit(5, to);
+      await drag(from, to);
+      expected = [event(5, 960, 240, 100)];
+      await check("move-track-and-time", expected);
+      await undo(page); await check("undo-move", [event(2, 480, 240, 100)]);
+      await redo(page); await check("redo-move", expected);
+      const handle = page.getByTestId("sequence-grid-note-end");
+      await handle.scrollIntoViewIfNeeded();
+      const end = await handle.boundingBox();
+      await drag({x: end.x + end.width / 2, y: end.y + end.height / 2}, await point(5, 1920));
+      expected = [event(5, 960, 960, 100)];
+      await check("resize", expected);
+      await undo(page); await check("undo-resize", [event(5, 960, 240, 100)]);
+      await redo(page); await check("redo-resize", expected);
+      await page.getByRole("button", {name: "Grid tools", exact: true}).click();
+      await page.getByRole("button", {name: "Velocity mode", exact: true}).click();
+      await page.getByRole("button", {name: "Done", exact: true}).click();
+      await drag(await point(5, 1080, 0.9), await point(5, 1080, 0.1));
+      expected = [event(5, 960, 960, 114)];
+      await check("velocity", expected);
+      await undo(page); await check("undo-velocity", [event(5, 960, 960, 100)]);
+      await redo(page); await check("redo-velocity", expected);
+      await page.getByRole("button", {name: "Grid tools", exact: true}).click();
+      await page.getByRole("button", {name: "Note mode", exact: true}).click();
+      await page.getByRole("button", {name: "Done", exact: true}).click();
+      await tap(15, 120);
+      expected = [...expected, event(15, 0, 240, 114)];
+      await check("last-track", expected);
+      const help = editor.getByTestId("sequence-grid-help");
+      await help.scrollIntoViewIfNeeded();
+      expect(await help.evaluate(element => {
+        const rect = element.getBoundingClientRect();
+        const hit = document.elementFromPoint(rect.left + rect.width / 2, rect.top + rect.height / 2);
+        return hit === element || element.contains(hit);
+      }), "the live footer is reachable and uncovered").toBe(true);
+      await editor.screenshot({path: testInfo.outputPath("edit-last-track.png")});
+      await tap(0, 120);
+      expected = [event(0, 0, 240, 114), ...expected];
+      await check("first-track", expected);
+      report.beforeReopen = await inspectTruth(page);
+      await reopenProject(page);
+      report.afterReopen = await inspectTruth(page);
+      expect(report.afterReopen).toEqual(report.beforeReopen);
+      expect(report.pageErrors).toEqual([]);
+    } finally {
+      const path = testInfo.outputPath("transformed-grid-proof.json");
+      await writeFile(path, JSON.stringify(report, null, 2));
+      await testInfo.attach("transformed-grid-proof", {path, contentType: "application/json"});
+      for (const name of ["edit-top.png", "edit-last-track.png"]) {
+        const path = testInfo.outputPath(name);
+        // A failure before a screenshot retains the JSON and normal trace.
+        try {await testInfo.attach(name, {path, contentType: "image/png"});} catch {}
+      }
+    }
+  });
+}
+
 for (const viewport of [{width: 1440, height: 900}, {width: 1024, height: 768},
   {width: 768, height: 600}]) {
   test(`Grid tools groups fit and preserve native keyboard choices at ${viewport.width}x${viewport.height}`, async ({page, browserName}) => {
@@ -374,7 +525,8 @@ for (const viewport of [{width: 1440, height: 900}, {width: 1024, height: 768},
     await page.keyboard.press("Enter");
     await expect(dialog).toHaveCount(0);
     await expect(trigger).toBeFocused();
-    await expect(trigger).toHaveText("FREE · VEL");
+    await expect(trigger).toHaveText("Tools");
+    await expect(page.getByTestId("sequence-grid-help")).toContainText("VEL · FREE");
     await page.keyboard.press("Enter");
     await expect(dialog.getByRole("button", {name: "Velocity mode"}))
       .toHaveAttribute("aria-pressed", "true");
@@ -453,12 +605,14 @@ test("grid gestures edit Truth one command at a time, with Undo/Redo, refusal wh
   await page.getByRole("button", {name: "Velocity mode"}).click();
   await page.getByRole("dialog", {name: "Grid tools", exact: true}).getByRole("button", {name: "Done", exact: true}).click();
   await expect(page.getByRole("button", {name: "Grid tools", exact: true})).toBeFocused();
-  await expect(page.getByRole("button", {name: "Grid tools", exact: true})).toContainText("VEL");
+  await expect(page.getByTestId("sequence-grid-help")).toContainText("VEL");
   {
-    // Rows are 13 px since the EDIT layer fits all sixteen (T5): press near
-    // the row's foot and drag up to its middle, past the 4 px drag threshold.
+    // U06c's row geometry still keeps the physical 4 px drag threshold.
+    // Press inside the note's foot and move to the lane's exact midpoint.
     const box = await laneBox(page, 2);
-    await page.mouse.move(tickX(box, 1200, lengthTicks), box.y + box.height - 2);
+    const fromY = box.y + box.height - 1.25;
+    expect(fromY - (box.y + box.height / 2)).toBeGreaterThan(4);
+    await page.mouse.move(tickX(box, 1200, lengthTicks), fromY);
     await page.mouse.down();
     await page.mouse.move(tickX(box, 1200, lengthTicks),
       box.y + box.height / 2, {steps: 4});
@@ -468,7 +622,7 @@ test("grid gestures edit Truth one command at a time, with Undo/Redo, refusal wh
   await page.getByRole("button", {name: "Note mode"}).click();
   await page.getByRole("dialog", {name: "Grid tools", exact: true}).getByRole("button", {name: "Done", exact: true}).click();
   await expect(page.getByRole("button", {name: "Grid tools", exact: true})).toBeFocused();
-  await expect(page.getByRole("button", {name: "Grid tools", exact: true})).toContainText("NOTE");
+  await expect(page.getByTestId("sequence-grid-help")).toContainText("NOTE");
   await awaitTruthEvents(page, patternId, [event(2, 960, 960, 64)]);
   await undo(page);
   await awaitTruthEvents(page, patternId, [event(2, 960, 960, 100)]);
@@ -742,7 +896,7 @@ test("touch bar navigation keeps views independent and persists last-cell and cr
       await chooseBar(1);
       await expect(page.getByRole("button", {name: "Previous bar", exact: true})).toBeDisabled();
       for (let bar = 1; bar <= bars; bar += 1) {
-        await expect(page.getByRole("button", {name: "Choose bar", exact: true})).toHaveText(`BAR ${bar} / ${bars}`);
+        await expect(page.getByRole("button", {name: "Choose bar", exact: true})).toHaveText(`BAR ${String(bar).padStart(2, "0")} / ${String(bars).padStart(2, "0")}`);
         // Absolute tick oracle excludes the sticky Pad labels independently
         // of the shared touch/overview viewport reporting implementation.
         await expect.poll(async () => Number(await frame.getAttribute("x"))).toBeCloseTo((bar - 1) * 3840, -1);
@@ -752,7 +906,7 @@ test("touch bar navigation keeps views independent and persists last-cell and cr
       await expect(page.getByRole("button", {name: "Next bar", exact: true})).toBeDisabled();
       for (let bar = bars; bar >= 1; bar -= 1) {
         await chooseBar(bar);
-        await expect(page.getByRole("button", {name: "Choose bar", exact: true})).toHaveText(`BAR ${bar} / ${bars}`);
+        await expect(page.getByRole("button", {name: "Choose bar", exact: true})).toHaveText(`BAR ${String(bar).padStart(2, "0")} / ${String(bars).padStart(2, "0")}`);
       }
       expect(await inspectTruth(page)).toEqual(before);
     }
