@@ -409,6 +409,28 @@ class ControllerTests(unittest.TestCase):
         self.assertEqual(automatic["state"]["processed"], B)
         self.assertEqual((automatic["request"]["base"], automatic["request"]["target"]), (B, D))
 
+    def test_explicit_retry_runs_only_its_lanes_and_keeps_auto_cursor(self):
+        self.baseline()
+        candidate = batch.make_request(POLICY, request_id="candidate-1", kind="candidate", base_sha=None,
+            target_sha=A, control_sha=A, selection=test_scope._selection(POLICY, POLICY.suite_ids, []),
+            origin_run={"run_id": 2, "attempt": 1})
+        action = self.make(2).reconcile(explicit=candidate)
+        self.settle(action, 2)
+        self.receipts["candidate-1"]["outcomes"]["core_release_stress"] = "cancelled"
+        self.make(3).reconcile()
+        retry = batch.make_request(POLICY, request_id="retry-1", kind="retry", base_sha=None,
+            target_sha=A, control_sha=A, selection=test_scope._selection(POLICY, ["core_release_stress"], ["retry"]),
+            origin_run={"run_id": 3, "attempt": 1},
+            retry_of={"request": "candidate-1", "environmental": {"core_release_stress": {"outcome": "cancelled", "jobs": {}}}})
+        self.inputs.main = D
+        action = self.make(3).reconcile(explicit=retry)
+        self.assertEqual((action["action"], action["request"]["kind"], action["request"]["selection"]["suites"]),
+                         ("execute", "retry", ["core_release_stress"]))
+        self.settle(action, 3)
+        automatic = self.make(4).reconcile()
+        self.assertEqual(automatic["state"]["results"]["retry-1"]["outcomes"], {"core_release_stress": "passed"})
+        self.assertEqual((automatic["request"]["base"], automatic["request"]["target"]), (B, D))
+
     def test_explicit_redelivery_does_not_rerun_completed_candidate(self):
         self.baseline()
         request = batch.make_request(POLICY, request_id="candidate-1", kind="candidate", base_sha=None,

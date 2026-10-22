@@ -284,7 +284,7 @@ class RuntimeTests(unittest.TestCase):
         return instance.reconcile(execute=True)
 
     def evidence(self, request, *, missing_job=None, failed_job=None, run=17,
-                 shared_dependency_failure=False, emit_common_events=True):
+                 shared_dependency_failure=False, emit_common_events=True, timed_out_job=None):
         executor = {"run_id": run, "attempt": 1}
         self.git("checkout", "-q", "--detach", request["control"])
         prepared = batch_execution.prepare(self.policy, request, executor, repo=self.root,
@@ -305,6 +305,9 @@ class RuntimeTests(unittest.TestCase):
                 del needs[runtime.ALIASES.get(missing_job, missing_job)]
             if failed_job:
                 needs[runtime.ALIASES.get(failed_job, failed_job)] = {"result": "failure"}
+            if timed_out_job:
+                # The platform reports timed_out; the producer's needs sees failure.
+                needs[runtime.ALIASES.get(timed_out_job, timed_out_job)] = {"result": "failure"}
         verdict = batch_execution.from_needs(self.policy, prepared["identity"], request["selection"], needs,
                                             aliases=runtime.ALIASES, dependencies=runtime.dependencies(self.policy),
                                             emit_common_events=emit_common_events, verification=request.get("verification"))
@@ -313,8 +316,9 @@ class RuntimeTests(unittest.TestCase):
         for index, (job, name) in enumerate(runtime.JOB_NAMES.items()):
             entry = needs.get(runtime.ALIASES.get(job, job))
             if entry:
+                conclusion = "timed_out" if job == timed_out_job else entry["result"]
                 self.api.jobs[run].append({"id": 2000 + index, "run_id": run, "run_attempt": 1,
-                    "name": runtime.PREFIX + name, "status": "completed", "conclusion": entry["result"]})
+                    "name": runtime.PREFIX + name, "status": "completed", "conclusion": conclusion})
         failed = verdict["status"] == "failed"
         self.api.jobs[run].append({"id": 3000, "run_id": run, "run_attempt": 1, "name": runtime.PRODUCER_JOB,
             "status": "completed", "conclusion": "failure" if failed else "success", "steps": [
@@ -723,6 +727,57 @@ class RuntimeTests(unittest.TestCase):
         second = self.make(19).reconcile(execute=True, explicit=explicit)
         self.assertEqual(second["state"]["requests"][explicit["id"]], first["state"]["requests"][explicit["id"]])
         self.assertEqual(second["state"]["queue"], [explicit["id"]])
+
+    def failed_candidate(self, *, timed_out_job=None, failed_job=None):
+        """Bootstrap settled, then a candidate for main whose one lane did not pass."""
+        start = self.start()
+        self.evidence(start["request"])
+        self.api.add_run(18)
+        explicit = {"id": "candidate-one", "kind": "candidate", "target": self.sha}
+        action = self.make(18).reconcile(execute=True, explicit=explicit)
+        self.assertEqual(action["action"], "execute")
+        self.evidence(action["request"], run=18, timed_out_job=timed_out_job, failed_job=failed_job)
+        self.api.add_run(19)
+        settled = self.make(19).reconcile(execute=False)
+        self.assertEqual(settled["state"]["results"]["candidate-one"]["outcomes"]["core_release_stress"], "failed")
+        return settled
+
+    def test_retry_freezes_the_environmental_proof_from_the_api_and_runs_only_its_lanes(self):
+        self.failed_candidate(timed_out_job="core-stress")
+        self.api.add_run(25)
+        retry = {"id": "retry-one", "kind": "retry", "target": self.sha, "retry_of": "candidate-one"}
+        action = self.make(25).reconcile(execute=True, explicit=retry)
+        self.assertEqual((action["action"], action["request"]["kind"]), ("execute", "retry"))
+        self.assertEqual(action["request"]["selection"]["suites"], ["core_release_stress"])
+        self.assertEqual(action["request"]["retry_of"], {"request": "candidate-one", "environmental": {
+            "core_release_stress": {"outcome": "failed", "jobs": {"core-stress": "timed_out"}}}})
+        # Redelivery reconciles the original frozen request, not a second one.
+        self.api.add_run(26)
+        again = self.make(26).reconcile(execute=True, explicit=retry)
+        self.assertEqual(again["state"]["requests"]["retry-one"], action["request"])
+        self.evidence(action["request"], run=25)
+        self.api.add_run(27)
+        settled = self.make(27).reconcile(execute=False)
+        self.assertEqual(settled["state"]["results"]["retry-one"]["outcomes"], {"core_release_stress": "passed"})
+        self.assertEqual(settled["state"]["processed"], self.sha)
+
+    def test_retry_refuses_a_lane_that_failed_on_a_test(self):
+        self.failed_candidate(failed_job="core-stress")
+        self.api.add_run(25)
+        retry = {"id": "retry-one", "kind": "retry", "target": self.sha, "retry_of": "candidate-one"}
+        with self.assertRaisesRegex(batch.BatchError, "test failure never qualifies"):
+            self.make(25).reconcile(execute=True, explicit=retry)
+        self.api.add_run(26)
+        self.assertEqual(self.make(26).reconcile(execute=False)["state"]["queue"], [])
+
+    def test_retry_command_is_closed_and_needs_its_original(self):
+        self.failed_candidate(timed_out_job="core-stress")
+        self.api.add_run(25)
+        with self.assertRaisesRegex(batch.BatchError, "explicit execution command"):
+            self.make(25).reconcile(execute=True, explicit={"id": "retry-one", "kind": "retry", "target": self.sha})
+        with self.assertRaisesRegex(batch.BatchError, "no candidate request"):
+            self.make(25).reconcile(execute=True, explicit={"id": "retry-one", "kind": "retry", "target": self.sha,
+                                                            "retry_of": "candidate-two"})
 
     def advance_main(self, *, workflow_change=False, content="changed main content\n"):
         path = runtime.EXECUTION_SOURCES[1] if workflow_change else "note.md"

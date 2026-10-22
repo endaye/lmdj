@@ -18,6 +18,13 @@ import daily_verification
 SCHEMA = "lmdj.incremental-batch.v1"
 DEBT_OUTCOMES = {"blocked", "cancelled", "infrastructure", "missing"}
 OUTCOMES = DEBT_OUTCOMES | {"passed", "failed", "quick-passed", "quick-failed", "deferred"}
+KINDS = {"auto", "bootstrap", "node", "candidate", "retry"}
+EXPLICIT_KINDS = {"node", "candidate", "retry"}
+# A `failed` suite qualifies for a retry only when every failing job ended
+# with one of these authenticated API conclusions: the platform stopped the
+# job, no test failed. A `failure` conclusion is a test failure and never
+# qualifies (#2422 item 8, #2404 item 2).
+ENVIRONMENTAL_CONCLUSIONS = {"timed_out", "cancelled"}
 
 
 class BatchError(ValueError):
@@ -55,13 +62,47 @@ def new_state(epoch):
             "history_unknown": True, "blocked": None, "recovery_requested": False}
 
 
+def _retry_of(retry_of, selection):
+    """Validate the frozen proof shape of a retry request; the reducer and the
+    release consumer cross-check it against the original result and the API."""
+    require(isinstance(retry_of, dict) and set(retry_of) == {"request", "environmental"}
+            and isinstance(retry_of["request"], str) and bool(retry_of["request"])
+            and isinstance(retry_of["environmental"], dict), "retry proof schema is not closed")
+    environmental = retry_of["environmental"]
+    require(set(environmental) == set(selection["suites"]) and bool(environmental),
+            "retry proof must name exactly the retried suites")
+    for suite, proof in environmental.items():
+        require(isinstance(proof, dict) and set(proof) == {"outcome", "jobs"}
+                and proof["outcome"] in DEBT_OUTCOMES | {"failed"} and isinstance(proof["jobs"], dict),
+                f"retry proof for {suite} is not closed")
+        jobs = proof["jobs"]
+        require(all(isinstance(job, str) and bool(job) and isinstance(conclusion, str)
+                    for job, conclusion in jobs.items()), f"retry proof for {suite} names invalid jobs")
+        require(all(conclusion != "failure" for conclusion in jobs.values()),
+                f"a test failure never qualifies for a retry ({suite})")
+        require(all(conclusion in ENVIRONMENTAL_CONCLUSIONS for conclusion in jobs.values()),
+                f"retry proof for {suite} names a non-environmental job conclusion")
+        if proof["outcome"] == "failed":
+            require(bool(jobs), f"a failed suite needs its failing jobs' environmental conclusions ({suite})")
+        else:
+            require(not jobs, f"a {proof['outcome']} suite carries no job proof ({suite})")
+    return deepcopy(retry_of)
+
+
 def make_request(policy, *, request_id, kind, base_sha, target_sha, control_sha,
-                 selection, origin_run, bound=True, verification=None):
+                 selection, origin_run, bound=True, verification=None, retry_of=None):
     require(isinstance(request_id, str) and bool(request_id), "missing request identity")
-    require(kind in {"auto", "bootstrap", "node", "candidate"}, "unknown request kind")
+    require(kind in KINDS, "unknown request kind")
+    require((kind == "retry") == (retry_of is not None), "only a retry request carries retry_of")
     if base_sha is not None:
         exact_sha(base_sha)
-    selection = test_scope.union_selections(policy, [selection])
+    if kind == "retry":
+        # A retry re-runs lanes; it is not a change, so no dependency closure.
+        require(isinstance(selection, dict) and set(selection) == {"kind", "suites", "reasons"},
+                "selection schema is not closed")
+        selection = test_scope._selection(policy, selection["suites"], selection["reasons"])
+    else:
+        selection = test_scope.union_selections(policy, [selection])
     if bound:
         # Construction bounds the explanation here, whatever produced the
         # selection: the auto interval, bootstrap, explicit debt recovery or an
@@ -74,12 +115,16 @@ def make_request(policy, *, request_id, kind, base_sha, target_sha, control_sha,
                                           test_scope.bounded_reasons(selection["reasons"]))
     if kind in {"bootstrap", "node", "candidate"}:
         require(selection["kind"] == "full", "bootstrap and explicit requests require full scope")
+    if kind == "retry":
+        require(bool(selection["suites"]), "retry selects no suite")
     request = {"id": request_id, "kind": kind, "base": base_sha,
             "target": exact_sha(target_sha), "control": exact_sha(control_sha),
             "policy": policy.digest, "selection": selection, "origin_run": identity(origin_run)}
     if verification is not None:
         require(kind == "auto", "only automatic requests may use daily workloads")
         request["verification"] = daily_verification.validate(verification, selection["suites"])
+    if retry_of is not None:
+        request["retry_of"] = _retry_of(retry_of, selection)
     return request
 
 
@@ -91,13 +136,32 @@ def missing_outcomes(request):
 
 def _request(policy, request):
     keys = {"id", "kind", "base", "target", "control", "policy", "selection", "origin_run"}
-    require(isinstance(request, dict) and set(request) in (keys, keys | {"verification"}),
+    require(isinstance(request, dict) and set(request) in (keys, keys | {"verification"}, keys | {"retry_of"}),
         "request schema is not closed")
     rebuilt = make_request(policy, request_id=request["id"], kind=request["kind"],
                            base_sha=request["base"], target_sha=request["target"],
                            control_sha=request["control"], selection=request["selection"],
-                           origin_run=request["origin_run"], bound=False, verification=request.get("verification"))
+                           origin_run=request["origin_run"], bound=False, verification=request.get("verification"),
+                           retry_of=request.get("retry_of"))
     require(request == rebuilt, "request policy or canonical representation differs")
+
+
+def _retry_admissible(state, request):
+    """Journal truth a retry must agree with: its original candidate's result."""
+    retry_of = request["retry_of"]
+    original = state["requests"].get(retry_of["request"])
+    require(original is not None and original["kind"] == "candidate", "retry names no candidate request")
+    require(original["target"] == request["target"], "retry must target the same target as its candidate")
+    require(original["policy"] == request["policy"], "retry must share its candidate's scope policy")
+    result = state["results"].get(original["id"])
+    require(result is not None, "original candidate has no durable result")
+    not_passed = {suite for suite, outcome in result["outcomes"].items() if outcome != "passed"}
+    require(set(request["selection"]["suites"]) == not_passed,
+            "retry must cover exactly the suites the candidate did not pass")
+    for suite, proof in retry_of["environmental"].items():
+        require(proof["outcome"] == result["outcomes"][suite], f"retry proof for {suite} differs from the candidate result")
+    require(not any(other["kind"] == "retry" and other["retry_of"]["request"] == original["id"]
+                    for other in state["requests"].values()), "a candidate is retried at most once")
 
 
 def required_selection(state, policy, selection):
@@ -141,10 +205,12 @@ publish this returned state as committed if journal/anchor persistence fails.
         result["pending"] = data["target"]
     elif kind == "enqueue":
         _request(policy, data)
-        require(data["kind"] in {"node", "candidate"}, "only explicit requests enter the fair queue")
+        require(data["kind"] in EXPLICIT_KINDS, "only explicit requests enter the fair queue")
         if data["id"] in result["requests"]:
             require(result["requests"][data["id"]] == data, "request ID reused with different target or scope")
         else:
+            if data["kind"] == "retry":
+                _retry_admissible(result, data)
             result["requests"][data["id"]] = deepcopy(data)
             result["queue"].append(data["id"])
     elif kind == "admit":
@@ -160,7 +226,7 @@ publish this returned state as committed if journal/anchor persistence fails.
         if result["processed"] is None:
             require(data["old_runs_terminal"] is True, "old controlled runs may still execute",
                     "verify every old controlled run is terminal before any reconstructed-state admission")
-        explicit = request["kind"] in {"node", "candidate"}
+        explicit = request["kind"] in EXPLICIT_KINDS
         if explicit:
             require(result["queue"] and result["queue"][0] == request["id"],
                     "explicit requests must follow the durable fair queue")

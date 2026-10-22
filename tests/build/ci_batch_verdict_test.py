@@ -49,6 +49,15 @@ class VerdictTest(unittest.TestCase):
         self.assertEqual(verdict.scheduler_outcomes(document, self.policy, self.identity, self.selection),
                          {"core_coverage": "passed"}, "why: nonselected sent as scheduler success; remedy: filter by selection")
 
+    def test_retry_identity_builds_and_validates_with_a_focused_selection(self):
+        self.identity.update(request_kind="retry", base_sha=None)
+        document = self.build()
+        self.assertEqual(document["status"], "passed")
+        self.assertEqual(self.validate(document)["identity"]["request_kind"], "retry")
+        self.identity["request_kind"] = "candidate"
+        with self.assertRaisesRegex(verdict.VerdictError, "full selection"):
+            self.build()
+
     def test_none_is_not_required_not_passed(self):
         self.selection = test_scope._selection(self.policy, [], ["explanatory documentation"])
         document = self.build([])

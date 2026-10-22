@@ -20,7 +20,7 @@ import zlib
 
 import batch_controller
 import batch_execution
-from batch_evidence_validation import (PREFIX, PRODUCER_JOB, ALIASES, JOB_NAMES, EXECUTION_SOURCES,
+from batch_evidence_validation import (PREFIX, PRODUCER_JOB, ALIASES, JOB_NAMES, RETIRED_JOB_NAMES, EXECUTION_SOURCES,
                                        dependencies, producer_uploaded, validate_bundle, validate_job_observations)
 import batch_github_journal as storage
 import batch_verdict
@@ -379,7 +379,7 @@ ambiguous inventory is potentially an executor and must hold bootstrap back.
             return {"status": "missing"}
         self.inputs.verify_target(request["target"])
         policy = self.inputs.policy_at(request["control"], historical=True)
-        if (request["kind"] == "candidate"
+        if (request["kind"] in {"candidate", "retry"}
                 and self.inputs.policy_at(run["head_sha"], historical=True).digest != request["policy"]):
             # Same terminal missing/advance path as workflow incompatibility.
             # A policy read/authentication error remains an error, not missing.
@@ -416,6 +416,54 @@ ambiguous inventory is potentially an executor and must hold bootstrap back.
         reference = encode_reference(checked)
         return {"status": "ready", "outcomes": batch_verdict.scheduler_outcomes(checked, policy, identity, request["selection"], verification=request.get("verification")),
                 "reference": reference}
+
+    def retry_request(self, explicit, policy, events):
+        """Freeze a lane-scoped retry of one settled candidate from journal truth and the API.
+
+        The retried suites are exactly the ones the candidate's durable result
+        did not pass. A `failed` suite qualifies only when every failing job's
+        authenticated conclusion is environmental (the platform stopped it);
+        the proof is frozen in the request, replayed exactly by the reducer and
+        re-proven by the release consumer. Nothing here executes or enqueues.
+        """
+        replay = batch_controller.Controller(self.journal(), self.inputs, self.current,
+            run_state=self.run_state, result_for=self.result_for, old_runs_terminal=self.old_runs_terminal,
+            lock_held=self.lock_held, epoch=self.config["epoch"])
+        replay.policy = policy
+        state = replay._replay(events)
+        original = state["requests"].get(explicit["retry_of"])
+        require(original is not None and original["kind"] == "candidate" and original["target"] == explicit["target"],
+                "retry names no candidate request for this target")
+        result = state["results"].get(original["id"])
+        require(result is not None, "original candidate has no durable result")
+        document = decode_reference(result["reference"])
+        require(isinstance(document, dict) and isinstance(document.get("suites"), list), "candidate result is not a verdict")
+        jobs = self.pages(f"/actions/runs/{result['run']['run_id']}/attempts/1/jobs", "jobs")
+        conclusions = {}
+        for job in jobs:
+            require(type(job.get("run_id")) is int and job["run_id"] == result["run"]["run_id"]
+                    and job.get("run_attempt") == 1 and job.get("status") == "completed", "candidate executor jobs are not terminal")
+            conclusions[job.get("name")] = job.get("conclusion")
+        environmental, reasons = {}, []
+        for suite in document["suites"]:
+            outcome = result["outcomes"].get(suite["id"])
+            if not suite.get("selected") or outcome is None or outcome == "passed":
+                continue
+            proof = {}
+            if outcome == "failed":
+                for job in suite.get("failures", []):
+                    name = PREFIX + JOB_NAMES.get(job, RETIRED_JOB_NAMES.get(job, ""))
+                    conclusion = conclusions.get(name)
+                    require(conclusion in batch.ENVIRONMENTAL_CONCLUSIONS,
+                            f"a test failure never qualifies for a retry ({suite['id']}/{job} ended {conclusion})")
+                    proof[job] = conclusion
+            environmental[suite["id"]] = {"outcome": outcome, "jobs": proof}
+            reasons.append(f"retry of {original['id']}: {suite['id']} {outcome}")
+        require(bool(environmental), "the candidate passed every suite; nothing to retry")
+        return batch.make_request(policy, request_id=explicit["id"], kind="retry", base_sha=None,
+            target_sha=explicit["target"], control_sha=self.control,
+            selection=test_scope._selection(policy, sorted(environmental), reasons), origin_run=self.current,
+            retry_of={"request": original["id"], "environmental": environmental})
 
     def validate_bundle(self, bundle, request, run, policy):
         """Pure content validation; no API, Git, journal or downloads here."""
@@ -457,12 +505,18 @@ ambiguous inventory is potentially an executor and must hold bootstrap back.
         journal = self.journal()
         request = None
         if explicit is not None:
-            require(execute and isinstance(explicit, dict) and set(explicit) == {"id", "kind", "target"}
-                    and explicit["kind"] in {"node", "candidate"}, "invalid explicit execution command")
+            require(execute and isinstance(explicit, dict)
+                    and (set(explicit) == {"id", "kind", "target"} and explicit["kind"] in {"node", "candidate"}
+                         or set(explicit) == {"id", "kind", "target", "retry_of"} and explicit["kind"] == "retry"
+                         and isinstance(explicit["retry_of"], str) and bool(explicit["retry_of"])),
+                    "invalid explicit execution command")
             policy = self.inputs.policy_at(self.control)
-            request = batch.make_request(policy, request_id=explicit["id"], kind=explicit["kind"], base_sha=None,
-                target_sha=explicit["target"], control_sha=self.control,
-                selection=test_scope._selection(policy, policy.suite_ids, ["explicit full request"]), origin_run=self.current)
+            if explicit["kind"] == "retry":
+                request = self.retry_request(explicit, policy, journal.load())
+            else:
+                request = batch.make_request(policy, request_id=explicit["id"], kind=explicit["kind"], base_sha=None,
+                    target_sha=explicit["target"], control_sha=self.control,
+                    selection=test_scope._selection(policy, policy.suite_ids, ["explicit full request"]), origin_run=self.current)
             # A new first-attempt workflow can redeliver a queued command.
             # Its original frozen control/origin are journal truth, not replaced
             # with the retry's run identity. Conflicting command reuse is fatal.
