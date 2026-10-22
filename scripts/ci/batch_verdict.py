@@ -38,7 +38,7 @@ def _identity(policy, identity):
     require(isinstance(identity, dict) and set(identity) == IDENTITY_KEYS, "identity schema is not closed")
     require(isinstance(identity["request_id"], str) and bool(identity["request_id"]), "missing request ID")
     require(isinstance(identity["request_kind"], str)
-            and identity["request_kind"] in {"auto", "bootstrap", "node", "candidate"}, "unknown request kind")
+            and identity["request_kind"] in {"auto", "bootstrap", "node", "candidate", "retry"}, "unknown request kind")
     for key in ("target_sha", "control_sha"):
         require(isinstance(identity[key], str) and re.fullmatch(r"[0-9a-f]{40}", identity[key]),
                 f"{key} is not an exact revision")
@@ -152,8 +152,17 @@ still appear in the report. Missing selected rows become uncovered obligations.
     _identity(policy, identity)
     common_events = [] if common_events is None else _common_events(identity, selection, common_events)
     try:
-        normalized = test_scope.union_selections(policy, [selection])
-        require(selection == normalized, "frozen selection omits transitive consumers")
+        if identity["request_kind"] == "retry":
+            # A retry re-runs the lanes its candidate did not pass; it is not a
+            # change, so its selection is canonical but not closed over the
+            # dependency graph (a closure would re-run suites that passed).
+            require(isinstance(selection, dict) and set(selection) == {"kind", "suites", "reasons"},
+                    "selection schema is not closed")
+            normalized = test_scope._selection(policy, selection["suites"], selection["reasons"])
+            require(selection == normalized, "retry selection is not canonical")
+        else:
+            normalized = test_scope.union_selections(policy, [selection])
+            require(selection == normalized, "frozen selection omits transitive consumers")
         selection = normalized
     except test_scope.ScopeError as error:
         raise VerdictError(str(error)) from error

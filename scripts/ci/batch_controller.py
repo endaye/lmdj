@@ -11,12 +11,46 @@ from __future__ import annotations
 from copy import deepcopy
 import json
 from pathlib import Path
+import re
 import subprocess
 
 import change_scope
 import daily_verification
 import incremental_batch as batch
 import test_scope
+
+
+# A release allocation cut bumps the Product identity and freezes its Portal
+# snapshot in one squash; the witness merge adds only the provenance record.
+# Both land on main as pushes, and `products/lmdj/` is a full-rule path, so the
+# cut alone used to admit a full automatic batch that the candidate batch for
+# the same work then waited behind (candidate 120 waited about 40 minutes;
+# #2404, #2422 item 9). While main's tip is one of these commits and no candidate batch has
+# finished for it, automatic admission yields: the candidate covers the
+# revision, and the automatic cursor is retained, so the interval still runs
+# as an automatic batch afterwards.
+RELEASE_ALLOCATION_PATH = "products/lmdj/version.json"
+RELEASE_SNAPSHOT_PREFIX = "apps/architecture-portal/versioned_metadata/"
+RELEASE_WITNESS_PATTERN = re.compile(
+    r"apps/architecture-portal/versioned_provenance/version-[^/]+-squash-witness\.json")
+
+
+def classify_release_commit(changes):
+    """'allocation', 'witness' or None for one commit's (status, path) changes.
+
+    A witness commit only adds squash-witness records; a correction or any
+    other provenance edit is not one. An allocation changes the version file
+    and a Portal snapshot path in the same commit.
+    """
+    changes = list(changes)
+    if not changes:
+        return None
+    if all(status == "A" and RELEASE_WITNESS_PATTERN.fullmatch(path) for status, path in changes):
+        return "witness"
+    paths = {path for _, path in changes}
+    if RELEASE_ALLOCATION_PATH in paths and any(path.startswith(RELEASE_SNAPSHOT_PREFIX) for path in paths):
+        return "allocation"
+    return None
 
 
 class GitInputs:
@@ -61,6 +95,21 @@ is incomplete. Complete paths and trusted policies still define the floor.
         batch.require(bool(self._git("rev-list", "--first-parent", target)), "target history is unavailable")
         batch.require(self.main is not None and self.ancestor(target, self.main),
                       "target is not verified main history")
+
+    def release_commit(self, sha):
+        """'allocation', 'witness' or None for one verified main commit."""
+        batch.exact_sha(sha)
+        batch.require(self.main is not None and self.ancestor(sha, self.main),
+                      "release classification needs verified main history")
+        listing = self._git("diff-tree", "--no-commit-id", "--no-renames", "--name-status",
+                            "-r", "--root", "-z", sha).decode()
+        fields = listing.split("\0")
+        batch.require(fields.pop() == "" and len(fields) % 2 == 0,
+                      "release classification read an unexpected diff-tree listing")
+        changes = list(zip(fields[0::2], fields[1::2]))
+        batch.require(all(status in ("A", "M", "D", "T") for status, _ in changes),
+                      "release classification read an unexpected change status")
+        return classify_release_commit(changes)
 
     def policy_at(self, control, *, historical=False):
         """Parse the trusted policy recorded at one verified main revision.
@@ -214,6 +263,28 @@ All methods must be invoked inside the SAME externally managed short lock.
         self._persist("advance", {"request_id": request["id"]})
         return None
 
+    def _release_hold(self, latest):
+        """Why automatic admission yields at this main tip, or None.
+
+        The tip is a release allocation or witness commit and no candidate
+        batch has finished for it. The queue is consulted before this, so a
+        queued candidate is admitted; a newer main push (a different tip) ends
+        the hold on its own. The hold orders dispatch; it is not evidence: any
+        durable candidate result for the tip lifts it, green or not, because
+        nothing is waiting any more and the retained cursor then covers the
+        interval as an automatic batch. The candidate targets the witness
+        merge, so the cut tip is held until the witness lands.
+        """
+        kind = self.inputs.release_commit(latest)
+        if kind is None:
+            return None
+        for request_id, request in self.state["requests"].items():
+            if request["kind"] == "candidate" and request["target"] == latest \
+                    and request_id in self.state["results"]:
+                return None
+        return (f"main tip is a release {kind} commit; automatic admission yields to the "
+                "candidate batch for it (dispatch the candidate, or push to main to resume)")
+
     def reconcile(self, *, explicit=None, resume=None, allow_execution=True):
         """At most one execution action; no loops chasing changing main.
 
@@ -273,6 +344,10 @@ same-run claim into execution, not just creating new admissions.
             if base == latest and not self.state["recovery_requested"]:
                 return self._answer("idle", "no main changes or explicit recovery")
             kind = "bootstrap" if base is None else "auto"
+            if kind == "auto" and base != latest:
+                held = self._release_hold(latest)
+                if held is not None:
+                    return self._answer("waiting", held)
             if base is None:
                 selection = test_scope._selection(self.policy, self.policy.suite_ids, ["bootstrap requires full"])
             elif base == latest:

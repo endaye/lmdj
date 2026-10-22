@@ -243,6 +243,7 @@ class BatchReleaseEvidenceTest(unittest.TestCase):
         run = {"id": identifier, "run_attempt": 1, "workflow_id": 7, "head_sha": control, "head_branch": "main",
             "path": consumer.WORKFLOW, "status": "completed", "conclusion": "success", "event": "workflow_dispatch",
             "repository": repo, "head_repository": deepcopy(repo)}
+        self.run_heads = {**getattr(self, "run_heads", {}), identifier: control}
         self.route(f"/actions/runs/{identifier}", run)
         self.route(f"/actions/runs/{identifier}/attempts/1", run)
         self.route(f"/actions/runs/{identifier}/attempts/1/jobs?per_page=100&page=1", {"total_count": 1, "jobs": [self.job(identifier, control, consumer.CONTROLLER)]})
@@ -252,7 +253,7 @@ class BatchReleaseEvidenceTest(unittest.TestCase):
         raw = zipped(documents)
         self.downloads[identifier] = raw
         self.artifacts[run].append({"id": identifier, "name": name, "expired": False, "expires_at": "2026-10-08T00:00:00Z", "size_in_bytes": len(raw),
-            "workflow_run": {"id": run, "repository_id": 11, "head_repository_id": 11, "head_sha": self.control if run == 101 else self.executor_control, "head_branch": "main"}})
+            "workflow_run": {"id": run, "repository_id": 11, "head_repository_id": 11, "head_sha": self.run_heads[run], "head_branch": "main"}})
         self.route(f"/actions/runs/{run}/artifacts?per_page=100&page=1", {"total_count": len(self.artifacts[run]), "artifacts": self.artifacts[run]})
 
     def get(self, path, *, raw=False):
@@ -276,6 +277,169 @@ class BatchReleaseEvidenceTest(unittest.TestCase):
         self.assertIn("remedy:", str(caught.exception))
         if phrase:
             self.assertIn(phrase, str(caught.exception))
+
+    # -- a candidate that lost one lane to the platform, composed with its retry
+
+    RETRIED = "core_release_stress"
+    RETRIED_JOB = "core-stress"
+
+    def compose_retry(self, *, api_conclusion="timed_out", proof_jobs=None, retry_suites=None,
+                      retry_passed=True, proof=None, retry_control=None):
+        """Rebuild the fixture: the candidate's stress lane did not pass (needs
+        `failure`, API `api_conclusion`), then a retry request executed by run
+        104 (origin run 103) passed exactly that lane. Returns the v2 reference."""
+        self.needs[shared.ALIASES[self.RETRIED_JOB]] = {"result": "failure", "outputs": {}}
+        self.verdict = batch_execution.from_needs(self.policy, self.bundle["execution.json"]["identity"],
+            self.request["selection"], self.needs, aliases=shared.ALIASES, dependencies=shared.dependencies(self.policy))
+        self.assertEqual(self.verdict["status"], "failed")
+        self.bundle["verdict.json"], self.bundle["needs.json"] = self.verdict, self.needs
+        self.executor_run["conclusion"] = "failure"
+        for job in self.jobs:
+            if job["name"] == shared.PRODUCER_JOB:
+                job["conclusion"] = "failure"
+                job["steps"][-1]["conclusion"] = "failure"
+            elif job["name"] == shared.PREFIX + shared.JOB_NAMES[self.RETRIED_JOB]:
+                job["conclusion"] = api_conclusion
+        self.artifacts[102] = [a for a in self.artifacts[102] if a["id"] != 3]
+        self.add_artifact(102, 3, f"batch-verdict-{self.control}-102-1", self.bundle)
+        self.ref["evidence_digest"] = self.verdict["evidence_digest"]
+        # The retry request, admitted through the real reducer against the result.
+        state = batch.new_state("fixture")
+        def transition(kind, data):
+            nonlocal state
+            state = batch.reduce(state, {"id": str(state["generation"]), "epoch": "fixture", "generation": state["generation"], "type": kind, "data": data}, self.policy)
+        transition("observe", {"target": self.control, "descends_pending": True})
+        transition("enqueue", self.request)
+        transition("admit", {"request": self.request, "executor_run": {"run_id": 102, "attempt": 1},
+            "history_complete": True, "ancestor": True, "old_runs_terminal": True})
+        transition("claim", {"request_id": self.request["id"], "run": {"run_id": 102, "attempt": 1}})
+        outcomes = batch_execution.batch_verdict.scheduler_outcomes(self.verdict, self.policy, self.bundle["execution.json"]["identity"], self.request["selection"])
+        transition("result", {"request_id": self.request["id"], "run": {"run_id": 102, "attempt": 1}, "target": self.control,
+            "policy": self.request["policy"], "outcomes": outcomes, "reference": "durable:candidate-fixture", "terminal": True})
+        transition("advance", {"request_id": self.request["id"]})
+        injected = proof is not None or proof_jobs is not None or retry_suites is not None
+        if proof is None:
+            proof = {self.RETRIED: {"outcome": "failed", "jobs": {self.RETRIED_JOB: "timed_out"} if proof_jobs is None else proof_jobs}}
+        suites = sorted(proof) if retry_suites is None else retry_suites
+        if retry_control is not None:
+            # A newer main whose execution sources differ from the candidate's.
+            (self.root / shared.EXECUTION_SOURCES[1]).write_text("name: changed executor workflow\n")
+            self.git("checkout", "-q", "main")
+            self.git("add", shared.EXECUTION_SOURCES[1])
+            self.git("commit", "-qm", "change an execution source")
+            retry_control = self.git("rev-parse", "HEAD")
+            self.route("/branches/main", {"name": "main", "protected": True, "commit": {"sha": retry_control}})
+        control = retry_control or self.control
+        self.retry = batch.make_request(self.policy, request_id="retry-fixture", kind="retry", base_sha=None,
+            target_sha=self.control, control_sha=control,
+            selection=test_scope._selection(self.policy, suites, ["retry of candidate-fixture"]),
+            origin_run={"run_id": 103, "attempt": 1}, retry_of={"request": "candidate-fixture", "environmental": proof})
+        if not injected:
+            transition("enqueue", self.retry)
+        else:
+            # A proof the reducer would refuse is injected past it to prove the consumer refuses it too.
+            state["requests"][self.retry["id"]] = deepcopy(self.retry)
+            state["queue"].append(self.retry["id"])
+        retry_origin = self.snapshot("waiting", None, 103, state)
+        transition("admit", {"request": self.retry, "executor_run": {"run_id": 104, "attempt": 1},
+            "history_complete": True, "ancestor": True, "old_runs_terminal": True})
+        transition("claim", {"request_id": self.retry["id"], "run": {"run_id": 104, "attempt": 1}})
+        retry_admission = self.snapshot("execute", self.retry, 104, state)
+        self.git("checkout", "--detach", "-q", control)
+        execution = batch_execution.prepare(self.policy, self.retry, {"run_id": 104, "attempt": 1}, repo=self.root,
+            run_id=104, run_attempt=1, control_sha=control, main_sha=retry_control or self.executor_control)
+        needs = {shared.ALIASES.get(job, job): {"result": "success" if execution["suites"][suite] else "skipped", "outputs": {}}
+                 for job, suite in self.policy.inventory.job_owner.items()}
+        needs["macos-fallback"] = {"result": "skipped", "outputs": {}}
+        if not retry_passed:
+            needs[shared.ALIASES[self.RETRIED_JOB]] = {"result": "failure", "outputs": {}}
+        retry_verdict = batch_execution.from_needs(self.policy, execution["identity"], self.retry["selection"], needs,
+            aliases=shared.ALIASES, dependencies=shared.dependencies(self.policy))
+        executor_control = retry_control or self.executor_control
+        self.add_run(103, control)
+        retry_run = self.add_run(104, executor_control)
+        retry_run["conclusion"] = "success" if retry_passed else "failure"
+        jobs = [self.job(104, executor_control, consumer.CONTROLLER)]
+        producer = self.job(104, executor_control, shared.PRODUCER_JOB, "success" if retry_passed else "failure")
+        producer["steps"] = [{"name": name, "status": "completed", "conclusion": status} for name, status in (
+            ("Judge selected suites from actual needs", "success"), ("Retain scoped verdict and raw needs", "success"),
+            ("Keep failed selected work visible", "skipped" if retry_passed else "failure"))]
+        jobs.append(producer)
+        for observation in retry_verdict["observations"]:
+            jobs.append(self.job(104, executor_control, shared.PREFIX + shared.JOB_NAMES[observation["job"]], observation["conclusion"]))
+        self.route("/actions/runs/104/attempts/1/jobs?per_page=100&page=1", {"total_count": len(jobs), "jobs": jobs})
+        self.artifacts[103], self.artifacts[104] = [], []
+        self.add_artifact(103, 4, "batch-controller-103-1", {"result.json": retry_origin})
+        self.add_artifact(104, 5, "batch-controller-104-1", {"result.json": retry_admission})
+        self.add_artifact(104, 6, f"batch-verdict-{self.control}-104-1",
+                          {"execution.json": execution, "needs.json": needs, "verdict.json": retry_verdict})
+        self.ref = {**self.ref, "schema": consumer.SCHEMA_V2, "retries": [{
+            "request": self.retry, "executor_control_revision": executor_control, "executor_event": "workflow_dispatch",
+            "run_attempt": 1, "origin_record_digest": self_test.digest_of(retry_origin),
+            "admission_record_digest": self_test.digest_of(retry_admission),
+            "evidence_digest": retry_verdict["evidence_digest"], "executor_run_id": 104}]}
+        return self.ref
+
+    def test_a_candidate_composed_with_its_environmental_retry_is_accepted(self):
+        self.compose_retry()
+        checked = self.verify()
+        self.assertEqual(checked["status"], "failed")
+        self.assertEqual([s["id"] for s in checked["suites"] if s["selected"] and s["scheduler_outcome"] != "passed"], [self.RETRIED])
+        self.assertTrue(all("/issues" not in path for path, _ in self.calls))
+        self.assertTrue(any("/runs/104/" in path for path, _ in self.calls))
+
+    def test_a_failed_candidate_without_a_retry_record_is_still_refused(self):
+        self.compose_retry()
+        del self.ref["retries"]
+        self.ref["schema"] = consumer.SCHEMA
+        self.rejected("not successful full-candidate evidence")
+
+    def test_a_composite_whose_lane_failed_on_a_test_is_refused(self):
+        self.compose_retry(api_conclusion="failure")
+        self.rejected("never covers a real failure")
+
+    def test_a_composite_proof_must_name_exactly_the_failing_jobs(self):
+        self.compose_retry(proof_jobs={"core-asan": "timed_out"}, retry_suites=[self.RETRIED])
+        self.rejected("does not name exactly the candidate's failing jobs")
+
+    def test_a_composite_retry_must_cover_exactly_the_non_passed_suites(self):
+        self.compose_retry(proof={self.RETRIED: {"outcome": "failed", "jobs": {self.RETRIED_JOB: "timed_out"}},
+                                  "core_asan": {"outcome": "cancelled", "jobs": {}}})
+        self.rejected("retry does not cover exactly")
+
+    def test_a_composite_proof_outcome_must_match_the_candidate_verdict(self):
+        # A proof the reducer would refuse (cancelled while the verdict says
+        # failed) is injected past it; the consumer re-derives and refuses.
+        self.compose_retry(proof={self.RETRIED: {"outcome": "cancelled", "jobs": {}}})
+        self.rejected("retry proof differs from the candidate verdict")
+
+    def test_a_composite_requires_the_same_execution_sources_in_both_runs(self):
+        self.compose_retry(retry_control=True)
+        self.rejected("execution workflow sources differ")
+
+    def test_a_composite_retry_that_did_not_pass_is_refused(self):
+        self.compose_retry(retry_passed=False)
+        self.rejected()
+
+    def test_a_composite_needs_a_candidate_that_did_not_pass(self):
+        reference = self.compose_retry()
+        self.needs[shared.ALIASES[self.RETRIED_JOB]] = {"result": "success", "outputs": {}}
+        self.verdict = batch_execution.from_needs(self.policy, self.bundle["execution.json"]["identity"],
+            self.request["selection"], self.needs, aliases=shared.ALIASES, dependencies=shared.dependencies(self.policy))
+        self.bundle["verdict.json"] = self.verdict
+        self.artifacts[102] = [a for a in self.artifacts[102] if a["id"] != 3]
+        self.add_artifact(102, 3, f"batch-verdict-{self.control}-102-1", self.bundle)
+        reference["evidence_digest"] = self.verdict["evidence_digest"]
+        self.rejected("is not the referenced failed evidence")
+
+    def test_published_composite_reads_both_runs_without_artifacts(self):
+        self.compose_retry()
+        verdict, executor = self.reader.verify_run(self.ref, run_id=102, target_revision=self.control, published=True)
+        self.assertIsNone(verdict)
+        self.assertEqual(executor["conclusion"], "failure")
+        paths = [path for path, _ in self.calls]
+        self.assertTrue(any("/runs/104/attempts/1" in path for path in paths))
+        self.assertFalse(any("/artifacts" in path for path in paths))
 
     def test_real_queued_request_claim_three_file_verdict_is_accepted(self):
         self.assertNotEqual(self.control, self.executor_control)

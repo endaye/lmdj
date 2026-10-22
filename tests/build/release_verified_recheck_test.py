@@ -464,6 +464,48 @@ class VerifiedRecheckTest(unittest.TestCase):
         self.github.runs[RUNTIME_RUN]["event"] = "push"
         self.assertEqual(self.check("runtime").status, "conflict")
 
+    RETRY_RUN = 39221726999
+
+    def composite_evidence(self):
+        self.github.runs[BATCH_RUN]["conclusion"] = "failure"
+        self.github.runs[self.RETRY_RUN] = run_document(
+            self.RETRY_RUN, ".github/workflows/self-test-report.yml", BATCH_WORKFLOW, event="workflow_dispatch")
+        return {"sha256": canonical_sha256(self.batch_reference),
+                "reference": f"batch-result:{BATCH_RUN}:{WITNESS_MERGE};retry:{self.RETRY_RUN}"}
+
+    def test_a_composite_verification_rechecks_the_candidate_and_its_retry_run(self):
+        evidence = self.composite_evidence()
+        observed = self.recheck.recheck(state(), self.operation("verification", evidence))
+        self.assertEqual(observed.status, "verified", observed.diagnostic)
+        self.assertEqual(observed.evidence, evidence)
+        self.assertIn(("batch", f"/repos/{REPOSITORY}/actions/runs/{self.RETRY_RUN}"), self.github.reads)
+
+    def test_a_composite_whose_retry_run_drifted_is_a_conflict(self):
+        evidence = self.composite_evidence()
+        for key, value in (("run_attempt", 2), ("conclusion", "failure"), ("head_branch", "feat/x")):
+            with self.subTest(key=key):
+                saved = self.github.runs[self.RETRY_RUN][key]
+                self.github.runs[self.RETRY_RUN][key] = value
+                observed = self.recheck.recheck(state(), self.operation("verification", evidence))
+                self.github.runs[self.RETRY_RUN][key] = saved
+                self.assertEqual(observed.status, "conflict")
+                self.assertIn("retry", observed.diagnostic)
+        # A retry run the API no longer serves propagates like any unreadable
+        # run: the driver records it as unknown, never as verified.
+        del self.github.runs[self.RETRY_RUN]
+        with self.assertRaises(RuntimeError):
+            self.recheck.recheck(state(), self.operation("verification", evidence))
+
+    def test_a_candidate_run_conclusion_must_match_the_reference_shape(self):
+        # A plain reference needs a passed candidate run; a composite one needs
+        # the failed candidate run it was composed over.
+        evidence = self.composite_evidence()
+        self.github.runs[BATCH_RUN]["conclusion"] = "success"
+        self.assertEqual(self.recheck.recheck(state(), self.operation("verification", evidence)).status, "conflict")
+        self.github.runs[BATCH_RUN]["conclusion"] = "failure"
+        plain = {"sha256": evidence["sha256"], "reference": f"batch-result:{BATCH_RUN}:{WITNESS_MERGE}"}
+        self.assertEqual(self.recheck.recheck(state(), self.operation("verification", plain)).status, "conflict")
+
     def test_a_verification_target_that_differs_from_the_candidate_witness_is_a_conflict(self):
         foreign = {"sha256": canonical_sha256(self.batch_reference),
                    "reference": f"batch-result:{BATCH_RUN}:{CUT_MERGE}"}

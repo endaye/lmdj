@@ -31,9 +31,7 @@ class BatchBindingTest(unittest.TestCase):
         self.addCleanup(self.e.doCleanups)
         # The production entry owns its clock. Keep fixture retention relative
         # to it rather than making all prospective journeys expire in October.
-        for rows in self.e.artifacts.values():
-            for row in rows:
-                row["expires_at"] = (datetime.now(timezone.utc) + timedelta(days=30)).strftime("%Y-%m-%dT%H:%M:%SZ")
+        self.refresh_retention()
         self.policy = replace(load_policy(ROOT / "tools/release/policy.json"),
             batch_evidence_source=freeze({"repository_id": 11, "workflow_id": 7,
                 "workflow_path": ".github/workflows/self-test-report.yml", "producer_revision": self.e.control}))
@@ -60,6 +58,11 @@ class BatchBindingTest(unittest.TestCase):
             "merged_main_run_id": 102, "evidence_paths": ["evidence.md"], "batch_test_evidence": self.e.ref}
         self.intent = load_ledger_document({"schema": "lmdj.release-intents.v1", "entries": [item], "historical_exceptions": []}, self.policy).entries[0]
         self.context = SimpleNamespace(github=self.github, policy=self.policy, repo_root=self.e.root)
+
+    def refresh_retention(self):
+        for rows in self.e.artifacts.values():
+            for row in rows:
+                row["expires_at"] = (datetime.now(timezone.utc) + timedelta(days=30)).strftime("%Y-%m-%dT%H:%M:%SZ")
 
     def verify(self, intent=None, policy=None):
         return verify_release_ci(self.github, policy=policy or self.policy, intent=intent or self.intent, git_root=self.e.root)
@@ -153,6 +156,30 @@ class BatchBindingTest(unittest.TestCase):
         self.assertIsNone(self.marker_problem(marker))
         document["ci"]["batch_test_evidence"]["request"]["selection"]["suites"].clear()
         self.assertEqual(len(self.intent.batch_test_evidence["request"]["selection"]["suites"]), 15)
+
+    def test_composite_reference_reaches_prepare_marker_and_audit_with_the_failed_candidate_run(self):
+        from tools.release.model import load_ledger_document
+        reference = self.e.compose_retry()
+        self.refresh_retention()
+        item = {"tag": "module/application-facade/v1.0.1", "kind": "module", "identity": "application-facade@1.0.1",
+            "target_revision": self.e.control, "disposition": "releasable", "profile": "source-only",
+            "merged_main_run_id": 102, "evidence_paths": ["evidence.md"], "batch_test_evidence": reference}
+        self.intent = load_ledger_document({"schema": "lmdj.release-intents.v1", "entries": [item], "historical_exceptions": []}, self.policy).entries[0]
+        self.assertEqual(self.verify().code, "ok")
+        document = self.document()
+        # The plan records the candidate executor's actual conclusion; the
+        # permanent marker binds the whole composite and the audit expects it.
+        self.assertEqual((document["ci"]["run_id"], document["ci"]["conclusion"]), (102, "failure"))
+        self.assertEqual(document["ci"]["batch_test_evidence"]["retries"][0]["executor_run_id"], 104)
+        marker = marker_for_plan(document, hashlib.sha256(canonical_json(document)).hexdigest())
+        self.assertIsNone(self.marker_problem(marker))
+        changed = deepcopy(document)
+        changed["ci"]["batch_test_evidence"]["retries"][0]["evidence_digest"] = "drift"
+        self.assertIsNotNone(self.marker_problem(marker_for_plan(changed, "d" * 64)))
+        plain = deepcopy(document)
+        del plain["ci"]["batch_test_evidence"]["retries"]
+        plain["ci"]["batch_test_evidence"]["schema"] = "lmdj.ci-batch-release-reference.v1"
+        self.assertIsNotNone(self.marker_problem(marker_for_plan(plain, "d" * 64)))
 
     def test_marker_missing_old_schema_and_each_reference_identity_drift_rejected(self):
         document = self.document()
