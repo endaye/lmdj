@@ -226,6 +226,14 @@ git_root is an existing complete checkout; reads never fetch or execute source.
             retry_checked, _, _ = self._verify_record(retry, retry["request"], retry["executor_run_id"], passed=True,
                                                       published=published, retention=retention)
             if not published:
+                # The retry may be frozen at a newer control than the candidate
+                # (as a queued candidate's executor may be newer than its
+                # origin), but both runs must have executed the same workflow
+                # sources: a composed suite is proven under one execution
+                # contract, not two.
+                for path in shared.EXECUTION_SOURCES:
+                    require(self.git("show", f"{request['control']}:{path}") == self.git("show", f"{retry['request']['control']}:{path}"),
+                            "candidate and retry execution workflow sources differ")
                 self._compose(checked, jobs, retry["request"], retry_checked)
         if published:
             return None, deepcopy(executor)

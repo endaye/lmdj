@@ -284,7 +284,7 @@ class BatchReleaseEvidenceTest(unittest.TestCase):
     RETRIED_JOB = "core-stress"
 
     def compose_retry(self, *, api_conclusion="timed_out", proof_jobs=None, retry_suites=None,
-                      retry_passed=True, proof=None):
+                      retry_passed=True, proof=None, retry_control=None):
         """Rebuild the fixture: the candidate's stress lane did not pass (needs
         `failure`, API `api_conclusion`), then a retry request executed by run
         104 (origin run 103) passed exactly that lane. Returns the v2 reference."""
@@ -321,8 +321,17 @@ class BatchReleaseEvidenceTest(unittest.TestCase):
         if proof is None:
             proof = {self.RETRIED: {"outcome": "failed", "jobs": {self.RETRIED_JOB: "timed_out"} if proof_jobs is None else proof_jobs}}
         suites = sorted(proof) if retry_suites is None else retry_suites
+        if retry_control is not None:
+            # A newer main whose execution sources differ from the candidate's.
+            (self.root / shared.EXECUTION_SOURCES[1]).write_text("name: changed executor workflow\n")
+            self.git("checkout", "-q", "main")
+            self.git("add", shared.EXECUTION_SOURCES[1])
+            self.git("commit", "-qm", "change an execution source")
+            retry_control = self.git("rev-parse", "HEAD")
+            self.route("/branches/main", {"name": "main", "protected": True, "commit": {"sha": retry_control}})
+        control = retry_control or self.control
         self.retry = batch.make_request(self.policy, request_id="retry-fixture", kind="retry", base_sha=None,
-            target_sha=self.control, control_sha=self.control,
+            target_sha=self.control, control_sha=control,
             selection=test_scope._selection(self.policy, suites, ["retry of candidate-fixture"]),
             origin_run={"run_id": 103, "attempt": 1}, retry_of={"request": "candidate-fixture", "environmental": proof})
         if not injected:
@@ -336,9 +345,9 @@ class BatchReleaseEvidenceTest(unittest.TestCase):
             "history_complete": True, "ancestor": True, "old_runs_terminal": True})
         transition("claim", {"request_id": self.retry["id"], "run": {"run_id": 104, "attempt": 1}})
         retry_admission = self.snapshot("execute", self.retry, 104, state)
-        self.git("checkout", "--detach", "-q", self.control)
+        self.git("checkout", "--detach", "-q", control)
         execution = batch_execution.prepare(self.policy, self.retry, {"run_id": 104, "attempt": 1}, repo=self.root,
-            run_id=104, run_attempt=1, control_sha=self.control, main_sha=self.executor_control)
+            run_id=104, run_attempt=1, control_sha=control, main_sha=retry_control or self.executor_control)
         needs = {shared.ALIASES.get(job, job): {"result": "success" if execution["suites"][suite] else "skipped", "outputs": {}}
                  for job, suite in self.policy.inventory.job_owner.items()}
         needs["macos-fallback"] = {"result": "skipped", "outputs": {}}
@@ -346,17 +355,18 @@ class BatchReleaseEvidenceTest(unittest.TestCase):
             needs[shared.ALIASES[self.RETRIED_JOB]] = {"result": "failure", "outputs": {}}
         retry_verdict = batch_execution.from_needs(self.policy, execution["identity"], self.retry["selection"], needs,
             aliases=shared.ALIASES, dependencies=shared.dependencies(self.policy))
-        self.add_run(103, self.control)
-        retry_run = self.add_run(104, self.executor_control)
+        executor_control = retry_control or self.executor_control
+        self.add_run(103, control)
+        retry_run = self.add_run(104, executor_control)
         retry_run["conclusion"] = "success" if retry_passed else "failure"
-        jobs = [self.job(104, self.executor_control, consumer.CONTROLLER)]
-        producer = self.job(104, self.executor_control, shared.PRODUCER_JOB, "success" if retry_passed else "failure")
+        jobs = [self.job(104, executor_control, consumer.CONTROLLER)]
+        producer = self.job(104, executor_control, shared.PRODUCER_JOB, "success" if retry_passed else "failure")
         producer["steps"] = [{"name": name, "status": "completed", "conclusion": status} for name, status in (
             ("Judge selected suites from actual needs", "success"), ("Retain scoped verdict and raw needs", "success"),
             ("Keep failed selected work visible", "skipped" if retry_passed else "failure"))]
         jobs.append(producer)
         for observation in retry_verdict["observations"]:
-            jobs.append(self.job(104, self.executor_control, shared.PREFIX + shared.JOB_NAMES[observation["job"]], observation["conclusion"]))
+            jobs.append(self.job(104, executor_control, shared.PREFIX + shared.JOB_NAMES[observation["job"]], observation["conclusion"]))
         self.route("/actions/runs/104/attempts/1/jobs?per_page=100&page=1", {"total_count": len(jobs), "jobs": jobs})
         self.artifacts[103], self.artifacts[104] = [], []
         self.add_artifact(103, 4, "batch-controller-103-1", {"result.json": retry_origin})
@@ -364,7 +374,7 @@ class BatchReleaseEvidenceTest(unittest.TestCase):
         self.add_artifact(104, 6, f"batch-verdict-{self.control}-104-1",
                           {"execution.json": execution, "needs.json": needs, "verdict.json": retry_verdict})
         self.ref = {**self.ref, "schema": consumer.SCHEMA_V2, "retries": [{
-            "request": self.retry, "executor_control_revision": self.executor_control, "executor_event": "workflow_dispatch",
+            "request": self.retry, "executor_control_revision": executor_control, "executor_event": "workflow_dispatch",
             "run_attempt": 1, "origin_record_digest": self_test.digest_of(retry_origin),
             "admission_record_digest": self_test.digest_of(retry_admission),
             "evidence_digest": retry_verdict["evidence_digest"], "executor_run_id": 104}]}
@@ -396,6 +406,16 @@ class BatchReleaseEvidenceTest(unittest.TestCase):
         self.compose_retry(proof={self.RETRIED: {"outcome": "failed", "jobs": {self.RETRIED_JOB: "timed_out"}},
                                   "core_asan": {"outcome": "cancelled", "jobs": {}}})
         self.rejected("retry does not cover exactly")
+
+    def test_a_composite_proof_outcome_must_match_the_candidate_verdict(self):
+        # A proof the reducer would refuse (cancelled while the verdict says
+        # failed) is injected past it; the consumer re-derives and refuses.
+        self.compose_retry(proof={self.RETRIED: {"outcome": "cancelled", "jobs": {}}})
+        self.rejected("retry proof differs from the candidate verdict")
+
+    def test_a_composite_requires_the_same_execution_sources_in_both_runs(self):
+        self.compose_retry(retry_control=True)
+        self.rejected("execution workflow sources differ")
 
     def test_a_composite_retry_that_did_not_pass_is_refused(self):
         self.compose_retry(retry_passed=False)

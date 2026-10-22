@@ -267,8 +267,12 @@ class BatchVerification:
             # terminal retry that passed exactly the suites it did not.
             retry = retry_result(events, witness, result.get("request_id"))
             retry_outcomes = retry.get("outcomes") if isinstance(retry, dict) else None
+            retry_request = _request_of(events, retry.get("request_id")) if isinstance(retry, dict) else None
+            selection = retry_request.get("selection") if isinstance(retry_request, dict) else None
+            not_passed = {suite for suite, value in outcomes.items() if value != "passed"}
             if (not isinstance(retry_outcomes, dict) or not retry_outcomes
-                    or set(retry_outcomes) != {suite for suite, value in outcomes.items() if value != "passed"}
+                    or not isinstance(selection, dict) or set(selection.get("suites", [])) != not_passed
+                    or set(retry_outcomes) != not_passed
                     or any(value != "passed" for value in retry_outcomes.values())):
                 _fail("batch result is not fully passed")
         reference = result.get("reference")

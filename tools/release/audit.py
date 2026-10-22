@@ -16,7 +16,7 @@ from typing import Callable, Iterable, Iterator
 import unicodedata
 
 from .ci_evidence import verify_release_ci
-from .batch_reference import thaw
+from .batch_reference import SCHEMA_V2 as BATCH_REFERENCE_V2, thaw
 from .changelog import binding as changelog_binding, render as render_changelog
 from .commands import sanitize_diagnostic
 from .github_api import GitHubAsset, GitHubEnvironment, GitHubRelease
@@ -898,7 +898,7 @@ def _release_problem(
             "head_sha": batch_reference["executor_control_revision"],
             # A composite reference's candidate run concluded failure through
             # its proven environmental lanes; the retry run passed them.
-            "conclusion": "failure" if "retries" in batch_reference else "success",
+            "conclusion": "failure" if batch_reference["schema"] == BATCH_REFERENCE_V2 else "success",
             "target_revision": intent.target_revision, "batch_test_evidence": batch_reference,
         }
         if not isinstance(marker, dict) or canonical_json(marker.get("ci")) != canonical_json(expected_ci):

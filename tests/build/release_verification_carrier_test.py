@@ -221,6 +221,18 @@ class ComposedReferenceTest(unittest.TestCase):
                 self.assertEqual(self.observe().status, "conflict")
                 self.assertIsNone(self.consumer.reference)
 
+    def test_a_retry_whose_frozen_selection_differs_from_the_failed_suites_is_a_conflict(self):
+        # The result's outcomes happen to equal the failed set, but the frozen
+        # request selected more; the carrier binds the request, not the outcomes.
+        failed = self.result(status="failed")
+        failed["data"]["outcomes"] = {"suite-a": "cancelled"}
+        self.journal.append(self.admit())
+        self.journal.append(failed)
+        self.journal.append(self.retry_admit(self.retry_request(suites=("suite-a", "suite-b"))))
+        self.journal.append(self.retry_result())
+        self.assertEqual(self.observe().status, "conflict")
+        self.assertIsNone(self.consumer.reference)
+
     def test_two_retry_results_for_one_candidate_are_a_conflict(self):
         from tools.release.verification import retry_result, VerificationError
         events = [self.admit(), self.retry_admit(), self.retry_result(),
