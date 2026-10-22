@@ -710,7 +710,17 @@ Update or servicing reboot. Any failing condition withdraws the label within
 a minute; a job already running continues. An unreadable Runner API changes
 nothing, and a failed label write is logged as such and retried on the next
 run. The selectors route by the label as before, so an unavailable host's work
-returns to netcup or the M1. `tests/build/ci_runner_network_admission_test.py`
+returns to netcup or the M1. A candidate or retry batch never takes an
+overflow host (#2422 item 11, Owner decision 2026-10-22): both selectors read
+the admitted request's kind from the frozen execution manifest, and for
+`candidate` or `retry` they pin the gates to the M1 (queueing when it is
+busy; hosted macOS only when the M1 is absent) and the Web lanes to netcup,
+however idle the M4 Pro or en-home are. Release evidence therefore comes from
+the hosts its budgets were measured on, and an admission flip during a
+release changes nothing it can see; automatic and node batches keep the
+overflow routing above. Deployment and publication workflows run on
+GitHub-hosted runners and consult no admission label.
+`tests/build/ci_runner_network_admission_test.py`
 runs the bash script against stubbed host tools and pins the twin's shared
 thresholds. The Windows task must invoke the stable App Execution Alias
 `%LOCALAPPDATA%\Microsoft\WindowsApps\pwsh.exe`; the versioned Store path
