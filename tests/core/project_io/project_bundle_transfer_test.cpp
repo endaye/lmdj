@@ -840,23 +840,23 @@ class InventoryRangePlatform final : public FaultPlatform,
   lmdj::foundation::Result<std::size_t> read_range(
       const std::filesystem::path& path, std::uint64_t offset,
       std::span<std::byte> output) const override {
-    LMDJ_CHECK(output.size() <= 65536);
+    LMDJ_CHECK(output.size() <= 1048576);
     if (path == recording_) {
       ++recording_reads;
       if (on_range) on_range();
       if (fault == 1) return lmdj::foundation::Result<std::size_t>::failure({ErrorCode::io_error,"injected inventory read error"});
       if (fault == 2) return lmdj::foundation::Result<std::size_t>::success(0);
       if (fault == 3) return lmdj::foundation::Result<std::size_t>::success(output.size()+1);
-      if (fault == 4 && offset == 131089) { output.front()=std::byte{1};return lmdj::foundation::Result<std::size_t>::success(1); }
+      if (fault == 4 && offset == 2097169) { output.front()=std::byte{1};return lmdj::foundation::Result<std::size_t>::success(1); }
     }
     const auto* reader = dynamic_cast<const lmdj::project_io::ProjectStorageRangeReader*>(actual_.get());
     LMDJ_CHECK(reader != nullptr);
     auto result = reader->read_range(path,offset,output.first(std::min(output.size(),short_limit)));
     if (path == recording_ && offset == 0 && fault == 5)
-      std::filesystem::resize_file(path,131090);
+      std::filesystem::resize_file(path,2097170);
     return result;
   }
-  std::size_t short_limit = 65536;
+  std::size_t short_limit = 1048576;
   bool claim_large = false;
   int fault = 0;
   mutable std::size_t recording_reads = 0;
@@ -867,10 +867,10 @@ class InventoryRangePlatform final : public FaultPlatform,
 };
 
 void test_discovery_hashes_bounded_bytes_under_the_project_writer() {
-  const std::string recording(131089,'x');
+  const std::string recording(2097169,'x');
   // Literal Python hashlib witness; do not let the fixture and collector's
   // shared picosha2 implementation be their only correctness oracle.
-  LMDJ_CHECK(artifact(recording).sha256 == "e3c33f1a7c00a23610a13fa6b862df2882931be5b0262aeada7a47e282f1c679");
+  LMDJ_CHECK(artifact(recording).sha256 == "647720d9dcae14801f1e73eb8fc2148607da44cf599337a5d5a0c368e9dd0769");
   Fixture f(recording);
   const auto source = project_path(f.workspace,kSourceId);
   const auto wav = source/"assets"/(artifact(recording).sha256+".wav");
@@ -898,7 +898,7 @@ void test_discovery_hashes_bounded_bytes_under_the_project_writer() {
 }
 
 void test_discovery_range_failures_never_publish_partial_identity() {
-  const std::string recording(131089,'x');
+  const std::string recording(2097169,'x');
   for (int fault : {1,2,3,4,5,6}) {
     Fixture f(recording);
     const auto source = project_path(f.workspace,kSourceId);

@@ -27,11 +27,12 @@ constexpr auto kSession = "20000000-0000-4000-8000-000000000001";
 constexpr auto kBegin = "30000000-0000-4000-8000-000000000001";
 constexpr auto kSave = "30000000-0000-4000-8000-000000000002";
 constexpr auto kStop = "30000000-0000-4000-8000-000000000003";
-// Independent literal SHA-256 of131089 bytes repeating a,b,NUL,FF,c,d,x,y.
+// Independent literal SHA-256 of 2097169 bytes (two 1 MiB windows plus 17)
+// repeating a,b,NUL,FF,c,d,x,y.
 // The verifier checks raw identity, not RIFF encoding; preserve that contract.
 const foundation::ArtifactRef kArtifact{
-    "d257cf3b0c9d53ca39e618938b660595fb3c80b8779c82f22b3a3075f04b4e55",
-    "audio/wav", 131089};
+    "766a883d0da35388bacc197ea8d30667d5e1708f829e8a426f7b32fdec332447",
+    "audio/wav", 2097169};
 constexpr std::array kPattern{'a', 'b', '\0', '\xff', 'c', 'd', 'x', 'y'};
 
 class TempDirectory {
@@ -109,10 +110,10 @@ class RangeStorage final : public ForwardStorage, public project_io::ProjectStor
   Result<std::size_t> read_range(const std::filesystem::path& p, std::uint64_t offset,
                                std::span<std::byte> output) const override {
     LMDJ_CHECK(live_leases > 0);
-    LMDJ_CHECK(output.size() <= 65536);
+    LMDJ_CHECK(output.size() <= 1048576);
     ++range_reads;
     maximum_request = std::max(maximum_request, output.size());
-    if (fault == Fault::read && offset >= 65536) return Result<std::size_t>::failure(
+    if (fault == Fault::read && offset >= 1048576) return Result<std::size_t>::failure(
         {ErrorCode::io_error, "injected range read error"});
     if (fault == Fault::zero) return Result<std::size_t>::success(0);
     if (fault == Fault::oversized) return Result<std::size_t>::success(output.size() + 1);
@@ -198,7 +199,7 @@ void bounded_save_and_bind_reopen_with_exact_identity() {
     LMDJ_CHECK(result.has_value());
     LMDJ_CHECK(result.value().committed_revision == 2);
     LMDJ_CHECK(f.platform->complete_audio_reads == 0);
-    LMDJ_CHECK(f.ranges().maximum_request == 65536);
+    LMDJ_CHECK(f.ranges().maximum_request == 1048576);
     LMDJ_CHECK(f.ranges().total_read == kArtifact.byte_length);
     LMDJ_CHECK(f.ranges().range_reads == 4); // three windows plus EOF
     ProjectStore reopened(f.platform);

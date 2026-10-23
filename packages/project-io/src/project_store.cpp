@@ -335,7 +335,9 @@ foundation::Result<void> verify_managed_wav_artifact(
     // OPFS read_complete needs a whole-file allocation and a second C++ copy.
     // Keep recording verification independent of recording length and off the
     // small Web stack, without changing writer ownership or decoding PCM.
-    constexpr std::size_t kChunkBytes = 64U * 1024U;
+    // Each OPFS range read pays a fixed suspend and handle lookup, so a 1 MiB
+    // window keeps a long recording's verification bounded by hashing (#2477).
+    constexpr std::size_t kChunkBytes = 1024U * 1024U;
     auto buffer = std::make_unique<std::array<std::byte, kChunkBytes>>();
     picosha2::hash256_one_by_one hasher;
     std::uint64_t offset = 0;
@@ -8515,7 +8517,8 @@ ProjectStore::scan_performance_recording(
     return mismatch("Performance recording byte length does not match its reference");
   }
   // Keep the buffer off the small Web stack, independently of recording size.
-  constexpr std::size_t kChunkBytes = 64U * 1024U;
+  // 1 MiB windows amortize the fixed per-call OPFS range cost (#2477).
+  constexpr std::size_t kChunkBytes = 1024U * 1024U;
   auto buffer = std::make_unique<std::array<std::byte, kChunkBytes>>();
   picosha2::hash256_one_by_one hasher;
   std::uint64_t offset = 0;

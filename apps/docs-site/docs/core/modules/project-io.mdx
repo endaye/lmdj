@@ -43,7 +43,7 @@ Host 继续只使用 Application Facade。
 `ProjectStore::scan_performance_recording` 在既有 history guard 和单次 writer lease
 内核对 Project ID、Performance ID、预期 Project revision 与精确录音 ArtifactRef，
 入口固定 bundle/selector 快照，回调改写调用方请求对象也不会改变本次读取身份；
-只扫描该录音；不执行 authoring recovery/scavenge，也不读取其他音频。它用64KiB heap
+只扫描该录音；不执行 authoring recovery/scavenge，也不读取其他音频。它用1MiB heap
 buffer、连续 uint64 offset、完整 SHA-256、前后长度和 EOF 检查验证全部输入，结束时
 重新核对 committed owner/revision/binding。既有 vector reader 的64MiB限制不适用于
 这项有界扫描，原 reader 行为保留。
@@ -59,7 +59,7 @@ range companion 时返回 typed I/O unavailable，不退回全量读取。这项
 实际重开后核对完整身份与元数据。Facade/SDK 异步查询与 owner retirement 已实现；实际 Take Host consumer 仍待。
 
 保存草稿／绑定 Performance 录音时，原有 writer lease 与 history guard 内的
-`verify_managed_wav_artifact` 也在 Native／OPFS 上使用64KiB heap 窗口，逐块校验
+`verify_managed_wav_artifact` 也在 Native／OPFS 上使用1MiB heap 窗口，逐块校验
 完整 SHA-256、前后长度和 EOF，避免 OPFS 整文件分配后再复制成 C++ vector。
 短读继续推进；零进展、错误计数、读取失败、文件增长／截断或摘要不同均保留原有
 `performance_recording_artifact_unverified` 拒绝，不发布录音引用，停止草稿可重试。
@@ -67,8 +67,13 @@ range companion 时返回 typed I/O unavailable，不退回全量读取。这项
 的读取失败不会回退整文件读取。这只验证原始 Artifact 身份，不验证 WAV 编码、
 录音完整性或演出总时长，也不改变 Save／bind 的幂等与 writer 生命周期。
 
+这三处有界读取（录音扫描、Save／bind 校验与发现摘要）共用1MiB窗口。OPFS 每次 range
+读取都有固定的挂起与 handle 查找成本：64KiB窗口下，一段三十分钟录音需要约5,300次调用，
+校验耗时约10秒且主要花在调用开销上；1MiB窗口把调用次数降到约330次，校验时间回到以
+SHA-256 为主（#2477）。窗口仍与录音长度无关，每个字节仍被完整校验。
+
 ## 6. 状态、错误与生命周期
-本地 `list_local_projects` 的完整 inventory 摘要使用64KiB heap 窗口、前后长度和
+本地 `list_local_projects` 的完整 inventory 摘要使用1MiB heap 窗口、前后长度和
 EOF 检查。history guard 覆盖 Project load 与全部 hash；能取得 writer 时持有到扫描
 结束。foreign writer 繁忙时保留 `ProjectStore::load` 原有的已提交只读读取，不能因此
 恢复、修改或取得对方的 writer 权限，也不承诺跨 owner 的原子文件系统 snapshot。

@@ -45,7 +45,7 @@ SHA-256 或 Project ownership。后续消费者仍须在既有 owner/lease 下�
 ## 证据
 
 Project I/O 的 `scan_performance_recording` 在一个 Project writer lease 内解析 committed
-owner、预期 revision 与录音 binding，再以64KiB heap buffer读取和 SHA-256 校验完整
+owner、预期 revision 与录音 binding，再以1MiB heap buffer读取和 SHA-256 校验完整
 Artifact；前后长度和 expected EOF 均检查。history guard 先于 lease 取得，既有平台
 writer admission/intent 语义保留。Store 不触发 authoring recovery 或 orphan scavenge，
 不为此读取无关 Asset/Performance 音频。同步 consumer 的每个 span 只在回调期间有效，
@@ -61,7 +61,7 @@ C++/Wasm/OPFS 旅程再验证多窗口、固定 digest/bytes、关页重开两�
 或 Performance elapsed。Project Cooker 的 `WavMetadataInspector` 可消费相同临时
 窗口，以固定状态验证完整 RIFF/WAVE PCM16 并解释实际 data frames，不分配 PCM。
 格式错误必须与扫描最终回执分开：完整 hash 成功后才报告元数据或 unsupported
-encoding；尾部摘要错误即丢弃 parser 状态。组合 OPFS 旅程覆盖192124字节、48017帧
+encoding；尾部摘要错误即丢弃 parser 状态。组合 OPFS 旅程覆盖2158204字节、539537帧
 的零事件静音和 odd JUNK，以及不支持的编码与末字节损坏，各自实际重开两次。
 Facade 的 typed `PerformanceRecordingMetadataReader` 可在独立 worker 消费上述输入。
 它由 Application 工厂保留精确 shared platform，使用独立只读 Store/history，避免长
