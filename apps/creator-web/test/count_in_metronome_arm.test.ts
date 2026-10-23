@@ -41,3 +41,10 @@ test("no plan, a refused or cancelled start, or a cancellation disarms it", () =
   expect(countInMetronomeArm(counting({cancelReceipt: receipt("cancelled")}))).toBeNull();
   expect(countInMetronomeArm({...counting(), active: false})).toBeNull();
 });
+
+test("a cancellation the user requested disarms before its receipt arrives", () => {
+  // Record or Play/Stop during the count-in publishes `cancelling` at once;
+  // no click may be scheduled while that cancellation is in flight.
+  expect(countInMetronomeArm({...counting(), phase: "cancelling"})).toBeNull();
+  expect(countInMetronomeArm({...counting(), phase: "settling"})).toBeNull();
+});

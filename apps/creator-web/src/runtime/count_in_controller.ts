@@ -46,7 +46,7 @@ export const initialCountInState: CountInState = Object.freeze({
 // clock without waiting for the transport inspect that a Control stall right
 // after S can delay past it. An Applied start keeps the same origin and
 // downbeat, so the armed loop is not rebuilt at S. Only an Applied receipt
-// proves the start: a refusal or cancellation disarms the loop, which cancels
+// proves the start: a refusal, a requested cancellation or its receipt disarms the loop, which cancels
 // every click that has not sounded; a refusal observed later than S + one
 // beat minus the 120 ms lookahead cannot recall an already scheduled beat 1.
 export function countInMetronomeArm(
@@ -55,6 +55,9 @@ export function countInMetronomeArm(
   const status = state.status;
   const planned = status?.countIn?.startFrame;
   if (!state.active || status == null || planned == null) return null;
+  // A cancellation the user asked for disarms at once, before its receipt:
+  // no JS click may be scheduled for a count-in that is being cancelled.
+  if (state.phase === "cancelling" || state.phase === "settling") return null;
   if (status.cancelReceipt != null) return null;
   if (status.startReceipt != null && status.startReceipt.result !== "applied") return null;
   return Object.freeze({originFrame: planned, downbeatFrame: state.nativeDownbeatFrame ?? planned});
