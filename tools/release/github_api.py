@@ -1094,6 +1094,49 @@ class GitHubClient:
         if response.status != 204:
             raise GitHubApiError("GitHub Draft deletion is unavailable")
 
+    # -- repository Actions variables: the release freeze lives in one of them
+    def get_repository_variable(self, repository: str, name: str) -> str | None:
+        """The variable's value, or None when the repository has no such variable."""
+        _require_repository(repository)
+        _require_variable_name(name)
+        response = self._request("GET", f"/repos/{repository}/actions/variables/{name}")
+        if response.status == 404:
+            return None
+        document = _json_response(response, {200})
+        value = document.get("value") if isinstance(document, dict) else None
+        if not isinstance(document, dict) or document.get("name") != name or not isinstance(value, str):
+            raise GitHubApiError("GitHub repository variable projection is invalid")
+        return value
+
+    def create_repository_variable(self, repository: str, name: str, value: str) -> None:
+        _require_repository(repository)
+        _require_variable_name(name)
+        if not isinstance(value, str) or not value:
+            raise GitHubApiError("GitHub repository variable value is invalid")
+        response = self._request(
+            "POST", f"/repos/{repository}/actions/variables",
+            json.dumps({"name": name, "value": value}).encode("utf-8"), content_type="application/json")
+        if response.status != 201:
+            raise GitHubApiError("GitHub repository variable creation was rejected")
+
+    def update_repository_variable(self, repository: str, name: str, value: str) -> None:
+        _require_repository(repository)
+        _require_variable_name(name)
+        if not isinstance(value, str) or not value:
+            raise GitHubApiError("GitHub repository variable value is invalid")
+        response = self._request(
+            "PATCH", f"/repos/{repository}/actions/variables/{name}",
+            json.dumps({"name": name, "value": value}).encode("utf-8"), content_type="application/json")
+        if response.status != 204:
+            raise GitHubApiError("GitHub repository variable update was rejected")
+
+    def delete_repository_variable(self, repository: str, name: str) -> None:
+        _require_repository(repository)
+        _require_variable_name(name)
+        response = self._request("DELETE", f"/repos/{repository}/actions/variables/{name}")
+        if response.status != 204:
+            raise GitHubApiError("GitHub repository variable deletion was rejected")
+
     def _list_deployment_branch_policies(
         self, repository: str,
     ) -> tuple[DeploymentBranchPolicy, ...]:
@@ -1202,6 +1245,14 @@ def _http_request(method: str, url: str, headers: Mapping[str, str], body: bytes
         return HttpResponse(error.code, dict(error.headers.items()) if error.headers else {}, payload)
     except Exception:
         raise GitHubApiError("GitHub release request is unavailable") from None
+
+
+_VARIABLE_NAME = re.compile(r"[A-Z][A-Z0-9_]{0,99}\Z")
+
+
+def _require_variable_name(name: str) -> None:
+    if not isinstance(name, str) or _VARIABLE_NAME.fullmatch(name) is None:
+        raise GitHubApiError("GitHub repository variable name is invalid")
 
 
 def _json_response(response: HttpResponse, allowed: set[int]) -> object:

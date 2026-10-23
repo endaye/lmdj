@@ -63,7 +63,18 @@ The single sequential entry is `scripts/release.sh run --authority REF [--tag TA
 [REQUEST_ID]` and continuation `scripts/release.sh resume REQUEST_ID`. `run`
 freezes one request from the authenticated canonical control and drives it
 through the one ordered driver; `resume` continues that same request ID
-without replaying an unresolved intent. A step the journal already verified is
+without replaying an unresolved intent. Both hold the release freeze for the
+request they drive: the repository variable `LMDJ_RELEASE_FREEZE` names it
+from before the first transition until the request completes (`final`
+verified) or is retired, and the PR Contract's `Release freeze` job fails any
+Pull Request that changes CI or release-tool control-plane paths
+(`.github/workflows/`, `.github/actions/`, `scripts/ci/`, `scripts/release.sh`,
+`tools/release/`) while it is set; agents do not merge such PRs either
+(issue-done §5). Ordinary product PRs are not frozen. A second release
+request refuses to start while another holds the freeze; `doctor` reports who
+holds it, names the clearing command for a freeze whose request this journal
+retired, and for a holder this journal does not know sends the operator to the
+host that drove it first (#2422 item 10). A step the journal already verified is
 not re-driven and not re-proven: the driver rechecks only its immutable
 identity — the candidate and reviewed PR merge commits and heads, the executor
 run, the Release's numeric identity, plan digest and asset inventory, the

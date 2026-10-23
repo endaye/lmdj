@@ -12,6 +12,7 @@ import fcntl
 import json
 import os
 from pathlib import Path
+import shutil
 import sys
 import tempfile
 import unittest
@@ -344,8 +345,8 @@ class DoctorChecksTest(unittest.TestCase):
                             journal_root=self.root / "journal", probes=self.probes)
         self.assertEqual([c.name for c in checks],
                          ["emsdk", "signing key (product)", "signing key (checksum)", "gh auth",
-                          "journal lock", "release processes", "disk space", "host load",
-                          "fseventsd", "spotlight", "m1 runner"])
+                          "journal lock", "release freeze", "release processes", "disk space",
+                          "host load", "fseventsd", "spotlight", "m1 runner"])
         self.assertTrue(doctor_passed(checks))
         self.assertIn("release doctor: all checks passed", format_doctor(checks))
         self.probes.commands[("launchctl", "list")] = (0, "77\t0\tactions.runner.x.y\n", "")
@@ -370,6 +371,87 @@ class DoctorChecksTest(unittest.TestCase):
             Check("x", "fail", "broken")
         with self.assertRaises(ValueError):
             Check("x", "broken", "")
+
+
+class ReleaseFreezeCheckTest(unittest.TestCase):
+    """The doctor reports who holds the release freeze and refuses a stale one."""
+
+    def setUp(self):
+        self.root = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.root, True)
+        self.journal = self.root / "journal"
+        self.journal.mkdir()
+        self.probes = Probes(self.root)
+        self.repository_command = ("gh", "api", "repos/endaye/lmdj", "--jq", ".full_name")
+        self.probes.commands[self.repository_command] = (0, "endaye/lmdj\n", "")
+        self.command = ("gh", "api", "repos/endaye/lmdj/actions/variables/LMDJ_RELEASE_FREEZE", "--jq", ".value")
+
+    def check(self):
+        return doctor.check_release_freeze(self.probes, repository="endaye/lmdj", journal_root=self.journal)
+
+    def test_no_freeze_is_ok(self):
+        self.probes.commands[self.command] = (1, '{"message":"Not Found","status":"404"}', "gh: Not Found (HTTP 404)")
+        self.assertEqual(self.check().status, "ok")
+
+    def test_an_unreadable_repository_fails_closed_even_when_gh_says_not_found(self):
+        # `gh variable get` says "not found" for an absent variable and for a
+        # repository it cannot read alike; the repository is proven first.
+        self.probes.commands[self.repository_command] = (1, '{"message":"Not Found","status":"404"}', "gh: Not Found (HTTP 404)")
+        self.probes.commands[self.command] = (1, "", "gh: Not Found (HTTP 404)")
+        check = self.check()
+        self.assertEqual(check.status, "fail")
+        self.assertIn("cannot read repository", check.detail)
+        self.probes.commands[self.repository_command] = (0, "someone/else\n", "")
+        self.assertEqual(self.check().status, "fail")
+
+    def test_a_freeze_held_by_an_active_request_is_ok(self):
+        request = "release-" + "1" * 16
+        (self.journal / f"{request}.json").write_text("{}")
+        self.probes.commands[self.command] = (0, request + "\n", "")
+        check = self.check()
+        self.assertEqual(check.status, "ok")
+        self.assertIn(request, check.detail)
+
+    def test_a_retired_requests_freeze_is_stale_and_names_the_clearing_command(self):
+        request = "release-" + "1" * 16
+        (self.journal / f"{request}.json").write_text("{}")
+        (self.journal / f"{request}.retired").write_text("{}")
+        self.probes.commands[self.command] = (0, request + "\n", "")
+        check = self.check()
+        self.assertEqual(check.status, "fail")
+        self.assertIn("retired", check.detail)
+        self.assertIn("gh variable delete LMDJ_RELEASE_FREEZE --repo endaye/lmdj", check.remedy)
+
+    def test_an_unknown_well_formed_holder_fails_without_a_bare_delete(self):
+        # Another operator host's live release has its journal there: the
+        # check refuses to start anything here and sends the operator to that
+        # host before any clearing command (review of #2475).
+        self.probes.commands[self.command] = (0, "release-" + "2" * 16 + "\n", "")
+        check = self.check()
+        self.assertEqual(check.status, "fail")
+        self.assertIn("another operator host", check.detail)
+        self.assertIn("scripts/release.sh status", check.remedy)
+        self.assertLess(check.remedy.index("scripts/release.sh status"), check.remedy.index("gh variable delete"))
+        self.assertIn("never clear it to merge", check.remedy)
+
+    def test_a_malformed_holder_fails(self):
+        self.probes.commands[self.command] = (0, "garbage\n", "")
+        check = self.check()
+        self.assertEqual(check.status, "fail")
+        self.assertIn("not a release request id", check.detail)
+        self.assertIn("gh variable delete", check.remedy)
+
+    def test_an_unreadable_variable_api_fails_closed(self):
+        self.probes.commands[self.command] = (1, "", "gh: Bad Gateway (HTTP 502)")
+        check = self.check()
+        self.assertEqual(check.status, "fail")
+        self.assertIn("cannot read", check.detail)
+
+    def test_run_doctor_includes_the_freeze_check(self):
+        self.probes.commands[self.command] = (1, "", "gh: Not Found (HTTP 404)")
+        checks = run_doctor(self.root, product_fingerprint=PRODUCT, checksum_fingerprint=CHECKSUM,
+                            journal_root=self.journal, probes=self.probes, repository="endaye/lmdj")
+        self.assertIn("release freeze", [check.name for check in checks])
 
 
 class HostProbesTest(unittest.TestCase):

@@ -55,9 +55,48 @@ class Git:
         return target == CONTROL
 
 
-class GitHub:
+class VariableStore:
+    """An in-memory repository Actions variable store for the freeze."""
+
+    def __init__(self):
+        self.variables = {}
+
+    def get_repository_variable(self, repository, name):
+        return self.variables.get(name)
+
+    def create_repository_variable(self, repository, name, value):
+        self.variables[name] = value
+
+    def update_repository_variable(self, repository, name, value):
+        self.variables[name] = value
+
+    def delete_repository_variable(self, repository, name):
+        self.variables.pop(name, None)
+
+
+class GitHub(VariableStore):
     def get_authenticated_actor(self):
         return ACTOR
+
+
+class Freeze:
+    """Records the hold/release the entry point performs for its request."""
+
+    def __init__(self, *, holder=None, refuse=False):
+        self.holder, self.refuse, self.held, self.released = holder, refuse, [], []
+
+    def read(self):
+        return self.holder
+
+    def hold(self, request_id):
+        if self.refuse or (self.holder is not None and self.holder != request_id):
+            raise JournalError("why: another release request holds the freeze; remedy: finish or retire it")
+        self.held.append(request_id)
+        self.holder = request_id
+
+    def release(self, request_id):
+        self.released.append(request_id)
+        self.holder = None
 
 
 class Policy:
@@ -119,12 +158,14 @@ class ReleaseEntryPointTest(unittest.TestCase):
             "git": Git(self.gitdir), "github": GitHub(), "policy": Policy(),
         })()
         self.carriers = {step: Carrier(step, self.remote) for step in STEPS}
+        self.freeze = Freeze()
 
     def run_cli(self, arguments, carriers=None, *, capture=None):
         selected = tuple(self.carriers.values()) if carriers is None else tuple(carriers)
         stream = capture if capture is not None else io.StringIO()
         with patch.object(cli, "build_context", return_value=self.context), \
                 patch.object(cli, "release_carriers", return_value=selected), \
+                patch.object(cli, "release_freeze", return_value=self.freeze), \
                 patch.object(cli, "release_recheck", return_value=None), \
                 patch.object(cli, "release_doctor", return_value=[]), \
                 patch.object(cli, "confirm_canonical_signing_keys", return_value=[]), \
@@ -154,6 +195,102 @@ class ReleaseEntryPointTest(unittest.TestCase):
 
     def far_side(self):
         return sorted(path.name for path in self.remote.iterdir())
+
+    def test_run_holds_the_release_freeze_and_a_complete_request_releases_it(self):
+        self.assertEqual(self.run_cli(["run", "--authority", "issue:1301"]), 0)
+        (request_id,) = self.request_ids()
+        self.assertEqual(self.freeze.held, [request_id])
+        self.assertEqual(self.freeze.released, [request_id])
+        self.assertIsNone(self.freeze.holder)
+
+    def test_a_blocked_request_keeps_the_freeze_and_resume_holds_it_again(self):
+        carriers = dict(self.carriers)
+        carriers["verification"] = Carrier("verification", self.remote, fail_after_write=True)
+        self.assertEqual(self.run_cli(["run", "--authority", "issue:1301"], carriers.values()), 2)
+        (request_id,) = self.request_ids()
+        self.assertEqual((self.freeze.held, self.freeze.released, self.freeze.holder),
+                         ([request_id], [], request_id))
+        self.assertEqual(self.run_cli(["resume", request_id]), 0)
+        self.assertEqual(self.freeze.released, [request_id])
+
+    def test_a_start_that_fails_before_creating_the_request_releases_its_freeze(self):
+        # The driver raises before any journal write: the freeze held for the
+        # never-created request is released, so nothing stays frozen for a
+        # request that does not exist (review of #2475).
+        class Driver:
+            def __init__(self, *args, **kwargs):
+                pass
+
+            def run(self, request):
+                raise JournalError("why: journal unavailable; remedy: retry")
+
+        output = io.StringIO()
+        with patch.object(cli, "ReleaseDriver", Driver):
+            self.assertEqual(self.run_cli(["run", "--authority", "issue:1301"], capture=output), 2)
+        self.assertEqual(self.request_ids(), [])
+        self.assertEqual(len(self.freeze.held), 1)
+        self.assertEqual(self.freeze.released, self.freeze.held)
+        self.assertIsNone(self.freeze.holder)
+
+    def test_a_failed_start_keeps_the_freeze_when_the_journal_cannot_be_read(self):
+        # Absence must be observed, not assumed: an unreadable journal after a
+        # driver failure keeps the freeze for the doctor to report.
+        real_journal = cli.RequestJournal
+        broken = []
+
+        class Journal(real_journal):
+            def __init__(self, directory, *args, **kwargs):
+                if broken:
+                    raise JournalError("why: journal unreadable; remedy: restore it")
+                super().__init__(directory, *args, **kwargs)
+
+        class Driver:
+            def __init__(self, *args, **kwargs):
+                pass
+
+            def run(self, request):
+                broken.append(True)
+                raise RuntimeError("driver failed")
+
+        with patch.object(cli, "RequestJournal", Journal), patch.object(cli, "ReleaseDriver", Driver), \
+                self.assertRaises(RuntimeError):
+            self.run_cli(["run", "--authority", "issue:1301"])
+        self.assertEqual(len(self.freeze.held), 1)
+        self.assertEqual(self.freeze.released, [])
+        self.assertEqual(self.freeze.holder, self.freeze.held[0])
+
+    def test_retire_releases_the_freeze_only_after_the_journal_retirement_is_durable(self):
+        # An unfinished request (its publication intent outstanding) that a
+        # published Build supersedes, as in the passing retire journey.
+        self.carriers["publication"].fail_after_write = True
+        self.assertEqual(self.run_cli(["run", "--authority", "issue:1301"]), 2)
+        (request_id,) = self.request_ids()
+        with patch.object(RequestJournal, "retire", side_effect=JournalError("why: retire refused; remedy: inspect")) as retired:
+            code, output, _ = self.retire(request_id, "lmdj-v1.0.61.0")
+        self.assertEqual(code, 2)
+        self.assertEqual(retired.call_count, 1, output)   # the retirement itself was attempted and refused
+        self.assertEqual(self.retire_freeze.released, [])
+        self.assertEqual(self.retire_freeze.holder, request_id)
+        # The same path succeeds end to end and releases after the retirement.
+        code, output, _ = self.retire(request_id, "lmdj-v1.0.61.0")
+        self.assertEqual(code, 0, output)
+        self.assertEqual(self.retire_freeze.released, [request_id])
+
+    def test_retire_freeze_lives_in_the_repository_the_request_record_names(self):
+        from tools.release.release_freeze import ReleaseFreeze
+        client = object()
+        with patch.object(cli, "_authenticated_github_client", return_value=client):
+            freeze = cli.retire_freeze(self.root, "other/repository")
+        self.assertIsInstance(freeze, ReleaseFreeze)
+        self.assertEqual((freeze.github, freeze.repository), (client, "other/repository"))
+
+    def test_run_refuses_before_creating_a_request_while_another_holds_the_freeze(self):
+        self.freeze = Freeze(holder="release-" + "9" * 16)
+        output = io.StringIO()
+        self.assertEqual(self.run_cli(["run", "--authority", "issue:1301"], capture=output), 2)
+        self.assertEqual(self.request_ids(), [])
+        self.assertIn("another release request holds the freeze", output.getvalue())
+        self.assertEqual(self.far_side(), [])
 
     def test_one_entry_point_drives_every_step_and_status_reads_the_same_journal(self):
         self.assertEqual(self.run_cli(["run", "--authority", "issue:1301"]), 0)
@@ -372,8 +509,10 @@ class ReleaseEntryPointTest(unittest.TestCase):
 
         version = ProductVersion(*map(int, reserved.split(".")))
         output = io.StringIO()
+        self.retire_freeze = Freeze(holder=request_id)
         with patch.object(CandidateReservations, "recorded", return_value=version), \
                 patch.object(cli, "build_audit_context", return_value=context), \
+                patch.object(cli, "retire_freeze", return_value=self.retire_freeze), \
                 patch.object(cli, "audit", side_effect=audit), \
                 contextlib.redirect_stdout(output), contextlib.redirect_stderr(output):
             code = cli.main(["--repo-root", str(self.root), "retire", request_id,
@@ -403,8 +542,10 @@ class ReleaseEntryPointTest(unittest.TestCase):
             "policy": type("Policy", (), {"repository": "endaye/lmdj"}),
         })()
         output = io.StringIO()
+        self.retire_freeze = Freeze(holder=request_id)
         with patch.object(CandidateReservations, "recorded", return_value=version(reserved)), \
                 patch.object(CandidateReservations, "version_at", return_value=version(on_main)), \
+                patch.object(cli, "retire_freeze", return_value=self.retire_freeze), \
                 patch.object(cli, "build_context", side_effect=lambda root: calls.append("context") or context), \
                 contextlib.redirect_stdout(output), contextlib.redirect_stderr(output):
             code = cli.main(["--repo-root", str(self.root), "retire", request_id,
@@ -1127,7 +1268,7 @@ class CompositionGit:
         raise AssertionError("assembly never reads local tags")
 
 
-class CompositionGitHub:
+class CompositionGitHub(VariableStore):
     def get_authenticated_actor(self):
         return ACTOR
 

@@ -295,9 +295,21 @@ class CiWorkflowTopologyTest(unittest.TestCase):
         change_scope = self.pr_contract_job("change-scope")
         self.assertIn("github.event.pull_request.head.repo.full_name == github.repository", change_scope)
         self.assertIn("github.event.pull_request.draft == false", change_scope)
-        for job_name in ("ci-contract", "docs-static", "documentation-impact", "portal-provenance"):
+        for job_name in ("ci-contract", "docs-static", "documentation-impact", "portal-provenance", "release-freeze"):
             with self.subTest(job=job_name):
                 self.assertIn("needs.change-scope.outputs.trusted-head == 'true'", self.pr_contract_job(job_name))
+
+    def test_pr_contract_release_freeze_reads_the_variable_and_the_frozen_manifest(self) -> None:
+        # The freeze signal is the repository variable the release driver
+        # holds for its request; the changed files come from the frozen
+        # change-scope manifest, never from a dispatcher-supplied list
+        # (#2422 item 10).
+        job = self.pr_contract_job("release-freeze")
+        self.assertIn("name: Release freeze", job)
+        self.assertIn("LMDJ_RELEASE_FREEZE: ${{ vars.LMDJ_RELEASE_FREEZE }}", job)
+        self.assertIn("MANIFEST: ${{ needs.change-scope.outputs.manifest }}", job)
+        self.assertIn("python3 scripts/ci/release_freeze_check.py", job)
+        self.assertIn("needs.change-scope.outputs.metadata-only != 'true'", job)
 
     def test_pr_contract_selects_only_the_deterministic_floor(self) -> None:
         scope = self.pr_contract_job("change-scope")

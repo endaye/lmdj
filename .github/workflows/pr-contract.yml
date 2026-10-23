@@ -157,6 +157,38 @@ jobs:
         if: ${{ steps.contracts.outputs.seam != 'false' }}
         run: scripts/ci/pr-agent/integration-test.sh
 
+  release-freeze:
+    name: Release freeze
+    # While `scripts/release.sh run` drives a request it holds the repository
+    # variable LMDJ_RELEASE_FREEZE; a Pull Request that changes CI or
+    # release-tool control-plane paths then fails here, and agents do not
+    # merge it (#2422 item 10). The changed files come from the frozen
+    # change-scope manifest, never from a dispatcher-supplied list.
+    needs: change-scope
+    if: >-
+      !cancelled() &&
+      needs.change-scope.outputs.trusted-head == 'true' &&
+      needs.change-scope.outputs.metadata-only != 'true'
+    runs-on: [self-hosted, Linux, X64, lmdj-linux, lmdj-linux-pool, ci-general]
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.change-scope.outputs.head-sha }}
+          fetch-depth: 1
+          persist-credentials: false
+      - name: Verify the exact tested PR head
+        env:
+          EXPECTED_HEAD: ${{ needs.change-scope.outputs.head-sha }}
+        run: test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+      - name: Refuse frozen control-plane changes while a release request is active
+        env:
+          LMDJ_RELEASE_FREEZE: ${{ vars.LMDJ_RELEASE_FREEZE }}
+          MANIFEST: ${{ needs.change-scope.outputs.manifest }}
+        run: |
+          set -euo pipefail
+          python3 scripts/ci/release_freeze_check.py --freeze "$LMDJ_RELEASE_FREEZE" --manifest-json "$MANIFEST"
+
   docs-static:
     name: Docs / static
     needs: change-scope

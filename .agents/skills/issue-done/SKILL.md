@@ -556,6 +556,18 @@ Issues. Retain the postmerge live Issue-state audit below.
    unresolved review threads and effective protection. Unknown mergeability is
    not proof of no conflict: reread with a bounded wait or report it.
 
+   **Check the release freeze**. Run
+   `gh variable get LMDJ_RELEASE_FREEZE --repo endaye/lmdj`. While it names a
+   release request, CI and release-tool control-plane paths are frozen
+   (`.github/workflows/`, `.github/actions/`, `scripts/ci/`, `scripts/release.sh`,
+   `tools/release/`): do not merge a PR that changes any of them, even with a
+   clean review; the PR Contract's `Release freeze` job fails such a PR for
+   the same reason. Report the holder and wait for the request to complete or
+   be retired (`scripts/release.sh status` on the operator host). A "variable
+   not found" answer means nothing is frozen. Never clear the variable to
+   merge; a stale freeze is cleared only as `scripts/release.sh doctor`
+   directs (#2422 item 10).
+
    **Check the Task's verification on the current head.** Read the live PR
    body's commands, results, affected-risk coverage and explicit gaps. Re-run
    tests whose inputs changed, resolve actual findings, and retain evidence of

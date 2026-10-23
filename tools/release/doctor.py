@@ -254,6 +254,57 @@ def check_journal_lock(probes, journal_root):
                  "never delete or replace it")
 
 
+FREEZE_VARIABLE = "LMDJ_RELEASE_FREEZE"
+_REQUEST_ID = re.compile(r"release-[0-9a-f]{16}\Z")
+
+
+def check_release_freeze(probes, *, repository, journal_root):
+    """Who holds the release freeze. An active request may; a retired or
+    unknown one is a stale freeze that blocks every control-plane merge for
+    nothing, so it fails with the clearing remedy (#2422 item 10).
+
+    `gh variable get` answers "not found" for an absent variable and for an
+    unreadable repository alike, so the repository is read first and the
+    variable through the REST path, where only an HTTP 404 means absent."""
+    if not repository:
+        return Check("release freeze", "skip", "repository unknown; the policy names it in production")
+    code, stdout, stderr = probes.run(["gh", "api", f"repos/{repository}", "--jq", ".full_name"])
+    if code != 0 or stdout.strip() != repository:
+        return Check("release freeze", "fail", f"cannot read repository {repository}: {(stderr or stdout).strip()[:200]}",
+                     "authenticate gh (`gh auth login`) with access to the repository and rerun")
+    code, stdout, stderr = probes.run(["gh", "api", f"repos/{repository}/actions/variables/{FREEZE_VARIABLE}",
+                                       "--jq", ".value"])
+    if code != 0:
+        if "HTTP 404" in stderr + stdout:
+            return Check("release freeze", "ok", f"{FREEZE_VARIABLE} is not set: no release request holds the freeze")
+        return Check("release freeze", "fail", f"cannot read {FREEZE_VARIABLE}: {(stderr or stdout).strip()[:200]}",
+                     "authenticate gh (`gh auth login`) with access to the repository's Actions variables and rerun")
+    holder = stdout.strip()
+    journal = Path(journal_root)
+    if not _REQUEST_ID.fullmatch(holder):
+        return Check("release freeze", "fail", f"{FREEZE_VARIABLE} is {holder!r}, not a release request id",
+                     f"no driver writes such a value; clear it with `gh variable delete {FREEZE_VARIABLE} "
+                     f"--repo {repository}` and investigate who set it")
+    if (journal / f"{holder}.retired").exists():
+        return Check("release freeze", "fail",
+                     f"{FREEZE_VARIABLE} names {holder}, a request this journal retired; the freeze is stale",
+                     f"clear it with `gh variable delete {FREEZE_VARIABLE} --repo {repository}` once "
+                     "`scripts/release.sh status` shows no other active request")
+    if (journal / f"{holder}.json").is_file():
+        return Check("release freeze", "ok", f"held by active request {holder}: CI and release-tool "
+                     "control-plane merges are frozen until it completes or is retired")
+    # Well-formed but not in this journal: most likely a live release driven
+    # from another operator host (its journal is there), or a start that
+    # crashed between holding and creating. Neither is ours to clear here.
+    return Check("release freeze", "fail",
+                 f"{FREEZE_VARIABLE} names {holder}, which is not a request of this journal; a release "
+                 "driven from another operator host may hold it",
+                 f"run `scripts/release.sh status` on the host that drove {holder} and let that request "
+                 "finish or retire there; only if no driver runs anywhere and no journal knows the "
+                 f"request, clear it with `gh variable delete {FREEZE_VARIABLE} --repo {repository}`; "
+                 "never clear it to merge")
+
+
 # The release.sh commands that drive or mutate release state; a second one of
 # these is a second driver. Read-only commands (status, audit, doctor,
 # publication-record, publication-patch, verify-*) and the object-store
@@ -447,7 +498,7 @@ def check_runner(probes, *, require_paused=False):
 
 
 def run_doctor(root, *, product_fingerprint, checksum_fingerprint, journal_root, probes=None,
-               require_paused_runner=False):
+               require_paused_runner=False, repository=None):
     probes = HostProbes() if probes is None else probes
     root = Path(root)
     return [
@@ -456,6 +507,7 @@ def run_doctor(root, *, product_fingerprint, checksum_fingerprint, journal_root,
                             checksum_fingerprint=checksum_fingerprint),
         check_github_auth(probes),
         check_journal_lock(probes, journal_root),
+        check_release_freeze(probes, repository=repository, journal_root=journal_root),
         check_release_processes(probes),
         check_disk(probes, root),
         check_load(probes),
