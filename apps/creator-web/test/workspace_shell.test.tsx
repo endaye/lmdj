@@ -7813,6 +7813,9 @@ test.each(["missing-sdk", "no-cue-output"] as const)(
     expect(await readCountInPreference()).toBe(1);
     expect(f.session.requestPatternCountIn).not.toHaveBeenCalled();
     expect(f.session.requestPatternTransport).not.toHaveBeenCalled();
+    // Choosing Off withdraws the refusal: it described a setting no longer chosen.
+    await userEvent.click(within(group).getByRole("button", {name: "Count-in Off"}));
+    await waitFor(() => expect(screen.queryByText(/Count-in is unavailable/)).toBeNull());
   },
 );
 

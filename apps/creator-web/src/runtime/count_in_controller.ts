@@ -321,6 +321,13 @@ export function createCountInController(options: Readonly<{
         catch (error) {report(error); throw error;}
       }
     },
+    // A new count-in choice withdraws a refusal that described the old one;
+    // an error raised by a live count-in stays until that count-in settles.
+    clearRefusal() {
+      if (!disposed && owner === null && state.errorCode !== null) {
+        publish({errorCode: null, errorMessage: null});
+      }
+    },
     clearHandoff() {
       if (owner === null && state.nativeDownbeatFrame !== null) publish({nativeDownbeatFrame: null});
     },

@@ -2483,6 +2483,9 @@ function Workspace({
   };
 
   const onCountInBarsChange = (bars: CountInBars) => {
+    // A refusal described the setting it refused; a new choice withdraws it.
+    setCountInRefusal(null);
+    countInControllerRef.current?.clearRefusal();
     countInTouchedRef.current = true;
     countInBarsRef.current = bars;
     setCountInBars(bars);
