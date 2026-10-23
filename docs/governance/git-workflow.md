@@ -329,6 +329,13 @@ Publication never implicitly fans out to deployments.
 Keep Product Build allocation reviewable and separate from unrelated feature /
 infrastructure changes; freeze its immutable snapshot and verify post-merge
 provenance. A cut does not freeze all ordinary PR merges or require queue labels.
+While a release request is active, the repository variable
+`LMDJ_RELEASE_FREEZE` names it and the CI and release-tool control-plane
+paths (`.github/workflows/`, `.github/actions/`, `scripts/ci/`,
+`scripts/release.sh`, `tools/release/`) are frozen: the PR Contract's
+`Release freeze` check fails a PR that changes them and agents do not merge
+it until the request completes or is retired (#2422 item 10). Product and
+documentation PRs still merge as usual.
 Selected candidate/tag identities do not move just because main advances.
 Urgent fixes use short-lived `fix/<task>` branches and ordinary PR review;
 urgency does not grant direct-main writes, release authority or protection bypass.

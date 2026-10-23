@@ -98,6 +98,12 @@ def staged_gate_errors(source: str) -> list[str]:
     return errors
 
 
+RELEASE_FREEZE_RULE = (
+    "gh variable get LMDJ_RELEASE_FREEZE",
+    "release freeze",
+)
+
+
 class TemporaryRepository:
     def __init__(self) -> None:
         self.temporary_directory = tempfile.TemporaryDirectory()
@@ -187,6 +193,15 @@ class IssueDoneSkillTest(unittest.TestCase):
         reasons = set(result["reasons"])
         self.assertIn(f"unclassified path: {path}", reasons, CONTRACT_FAILURE)
         self.assertTrue(full_rule_reasons & reasons, CONTRACT_FAILURE)
+
+    def test_merge_step_checks_the_release_freeze_before_merging_control_plane_changes(self) -> None:
+        # While a release request holds LMDJ_RELEASE_FREEZE, CI and
+        # release-tool control-plane PRs are not merged by agents either; the
+        # PR Contract's Release freeze check is the machine side of the rule.
+        source = SKILL.read_text(encoding="utf-8")
+        for expected in RELEASE_FREEZE_RULE:
+            with self.subTest(expected=expected):
+                self.assertIn(expected, source)
 
     def test_pre_push_states_complete_canonical_ownership_contract(self) -> None:
         self.assertEqual([], pre_push_contract_errors(self.source), CONTRACT_FAILURE)

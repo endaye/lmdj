@@ -95,7 +95,8 @@ class CiHostedRunnerPolicyTest(unittest.TestCase):
         jobs = [job for job in all_jobs() if job.workflow == "pr-contract.yml"]
         self.assertEqual(
             {job.job_id for job in jobs},
-            {"change-scope", "ci-contract", "docs-static", "documentation-impact", "portal-provenance"},
+            {"change-scope", "ci-contract", "docs-static", "documentation-impact", "portal-provenance",
+             "release-freeze"},
         )
         for job in jobs:
             with self.subTest(job=job.job_id):

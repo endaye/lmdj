@@ -237,6 +237,8 @@ class ReleaseSkillTest(unittest.TestCase):
             '"kind":"retry"',
             '"retry_of":"<the candidate\'s request id>"',
             "pinned release hosts",
+            "`LMDJ_RELEASE_FREEZE`",
+            "release freeze",
             "never list suites",
             "retried at most once",
         ):
@@ -260,6 +262,8 @@ class ReleaseSkillTest(unittest.TestCase):
             "Expired or missing evidence",
             "new authorized test request",
             "separate verification boundaries",
+            "`LMDJ_RELEASE_FREEZE`",
+            "Release freeze",
         ):
             with self.subTest(document="git-workflow", expected=expected):
                 self.assertIn(expected, git_workflow)

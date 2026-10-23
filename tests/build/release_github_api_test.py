@@ -878,5 +878,45 @@ class BatchEvidenceHttpTest(unittest.TestCase):
             self.client._download_artifact(artifact)
 
 
+
+class RepositoryVariableTest(unittest.TestCase):
+    """The release freeze lives in one repository Actions variable (#2422 item 10)."""
+
+    URL = f"/repos/{REPOSITORY}/actions/variables/LMDJ_RELEASE_FREEZE"
+    COLLECTION = f"/repos/{REPOSITORY}/actions/variables"
+
+    def setUp(self) -> None:
+        self.transport = FakeTransport()
+        self.client = GitHubClient(http_transport=self.transport, token="token")
+
+    def test_get_returns_the_value_or_none_when_absent(self) -> None:
+        self.transport.route(self.URL, HttpResponse(200, {"Content-Type": "application/json"},
+                                                    json.dumps({"name": "LMDJ_RELEASE_FREEZE", "value": "release-" + "1" * 16}).encode()))
+        self.assertEqual(self.client.get_repository_variable(REPOSITORY, "LMDJ_RELEASE_FREEZE"), "release-" + "1" * 16)
+        self.transport.route(self.URL, HttpResponse(404, {}, b"{}"))
+        self.assertIsNone(self.client.get_repository_variable(REPOSITORY, "LMDJ_RELEASE_FREEZE"))
+        for status, body in ((500, b""), (200, b"not json"), (200, json.dumps({"name": "x", "value": 3}).encode())):
+            with self.subTest(status=status, body=body[:10]):
+                self.transport.route(self.URL, HttpResponse(status, {}, body))
+                with self.assertRaises(GitHubApiError):
+                    self.client.get_repository_variable(REPOSITORY, "LMDJ_RELEASE_FREEZE")
+
+    def test_create_update_and_delete_send_closed_bodies_and_require_their_status(self) -> None:
+        self.transport.route(self.COLLECTION, HttpResponse(201, {}, b""))
+        self.client.create_repository_variable(REPOSITORY, "LMDJ_RELEASE_FREEZE", "release-" + "1" * 16)
+        self.transport.route(self.URL, HttpResponse(204, {}, b""))
+        self.client.update_repository_variable(REPOSITORY, "LMDJ_RELEASE_FREEZE", "release-" + "2" * 16)
+        self.client.delete_repository_variable(REPOSITORY, "LMDJ_RELEASE_FREEZE")
+        self.assertEqual([(m, u) for m, u, _ in self.transport.requests],
+                         [("POST", self.COLLECTION), ("PATCH", self.URL), ("DELETE", self.URL)])
+        self.transport.route(self.COLLECTION, HttpResponse(409, {}, b""))
+        with self.assertRaises(GitHubApiError):
+            self.client.create_repository_variable(REPOSITORY, "LMDJ_RELEASE_FREEZE", "release-" + "1" * 16)
+        self.transport.route(self.URL, HttpResponse(500, {}, b""))
+        with self.assertRaises(GitHubApiError):
+            self.client.delete_repository_variable(REPOSITORY, "LMDJ_RELEASE_FREEZE")
+        with self.assertRaises(GitHubApiError):
+            self.client.create_repository_variable(REPOSITORY, "bad name", "x")
+
 if __name__ == "__main__":
     unittest.main()

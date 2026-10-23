@@ -307,7 +307,22 @@ def release_doctor(root: Path, *, require_paused_runner: bool = False):
     return run_doctor(
         root, product_fingerprint=policy.product_fingerprint,
         checksum_fingerprint=policy.checksum_fingerprint, journal_root=journal,
-        require_paused_runner=require_paused_runner)
+        require_paused_runner=require_paused_runner, repository=policy.repository)
+
+
+def release_freeze(context: PrepareContext):
+    """The freeze the entry point holds for the request it drives (#2422 item 10)."""
+    from tools.release.release_freeze import ReleaseFreeze
+
+    return ReleaseFreeze(context.github, context.policy.repository)
+
+
+def retire_freeze(root: Path):
+    """The freeze a retire releases, through the logged-in gh identity."""
+    from tools.release.release_freeze import ReleaseFreeze
+
+    policy, _ = load_authority_documents(root)
+    return ReleaseFreeze(_authenticated_github_client(GitRepository(root).runner), policy.repository)
 
 
 def confirm_canonical_signing_keys(context: PrepareContext):
@@ -459,7 +474,8 @@ def _retire_request(root: Path, request_id: str, tag: str) -> int:
     The far side is proven before the journal changes: the tag must be the
     Build this exact request reserved (a tag-mode request reserves nothing and
     is bound to its requested tag), and its exact-tag remote audit must pass
-    with a published intent. Nothing remote is mutated.
+    with a published intent. No tag, Release or branch is mutated; the only
+    remote write releases this request's freeze variable.
     """
     from tools.release.candidate import CATALOG, CandidateReservations
     from tools.release.model import Disposition
@@ -505,6 +521,10 @@ def _retire_request(root: Path, request_id: str, tag: str) -> int:
         "observed_utc": report.observed_utc,
         "audit": [f"[{item.code}] {item.subject}: {item.message}" for item in report.findings],
     }
+    # The freeze is released before the journal changes: if the variable
+    # cannot be cleared, the request stays active and the freeze stays
+    # consistent with it.
+    retire_freeze(root).release(request_id)
     with RequestJournal(directory) as journal:
         # The identity and audit were proven for this exact request.
         journal.retire(request_id, retirement, expected_request=request)
@@ -519,7 +539,8 @@ def _retire_unreleased_request(root: Path, request_id: str, build: str) -> int:
     Proven before the journal changes: this request reserved Build V; the
     freshly fetched canonical main now carries the named later BUILD on the
     same product line; no remote tag exists for V; and V's intent is neither
-    releasable nor published. Nothing remote is mutated.
+    releasable nor published. No tag, Release or branch is mutated; the only
+    remote write releases this request's freeze variable.
     """
     from datetime import datetime, timezone
     from tools.release.candidate import CATALOG, CandidateReservations
@@ -584,6 +605,7 @@ def _retire_unreleased_request(root: Path, request_id: str, build: str) -> int:
             " (settles the outstanding candidate intent)")
     for line in retirement["evidence"]:
         print(line)
+    retire_freeze(root).release(request_id)
     with RequestJournal(directory) as journal:
         journal.retire(request_id, retirement, expected_request=request)
     clear_reprove(root, GitRepository(root), request_id)
@@ -932,10 +954,22 @@ def main(argv: list[str] | None = None) -> int:
             candidate = compose_candidate(context, policy, request)
             driver = ReleaseDriver(release_journal_root(root, context.git), policy,
                                    backend, candidate=candidate)
+            # The freeze is held for the request the journal will drive (a
+            # same-scope run adopts the unfinished original; another scope is
+            # refused by the journal first) and released only when it
+            # completes. A second release refuses here, before any journal
+            # write, instead of taking the freeze over.
+            journal_root = release_journal_root(root, context.git)
+            with RequestJournal(journal_root) as journal:
+                original = journal.resolve_active(request)
+            freeze = release_freeze(context)
+            freeze.hold(request["id"] if original is None else original["request"]["id"])
             result = (
                 driver.run(request)
                 if options.command == "run" else driver.resume(options.request_id)
             )
+            if result.status == "complete":
+                freeze.release(result.request_id)
             if getattr(options, "reprove", False):
                 # The driver returned, so the request exists (or was adopted):
                 # record the wish under the ID a later `resume` names and under

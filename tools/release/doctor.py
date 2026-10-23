@@ -254,6 +254,36 @@ def check_journal_lock(probes, journal_root):
                  "never delete or replace it")
 
 
+FREEZE_VARIABLE = "LMDJ_RELEASE_FREEZE"
+_REQUEST_ID = re.compile(r"release-[0-9a-f]{16}\Z")
+
+
+def check_release_freeze(probes, *, repository, journal_root):
+    """Who holds the release freeze. An active request may; a retired or
+    unknown one is a stale freeze that blocks every control-plane merge for
+    nothing, so it fails with the clearing remedy (#2422 item 10)."""
+    if not repository:
+        return Check("release freeze", "skip", "repository unknown; the policy names it in production")
+    code, stdout, stderr = probes.run(["gh", "variable", "get", FREEZE_VARIABLE, "--repo", repository])
+    if code != 0:
+        if "not found" in (stderr + stdout).lower():
+            return Check("release freeze", "ok", f"{FREEZE_VARIABLE} is not set: no release request holds the freeze")
+        return Check("release freeze", "fail", f"cannot read {FREEZE_VARIABLE}: {(stderr or stdout).strip()[:200]}",
+                     "authenticate gh (`gh auth login`) with access to the repository's Actions variables and rerun")
+    holder = stdout.strip()
+    journal = Path(journal_root)
+    if _REQUEST_ID.fullmatch(holder) and (journal / f"{holder}.json").is_file() \
+            and not (journal / f"{holder}.retired").exists():
+        return Check("release freeze", "ok", f"held by active request {holder}: CI and release-tool "
+                     "control-plane merges are frozen until it completes or is retired")
+    return Check("release freeze", "fail",
+                 f"{FREEZE_VARIABLE} names {holder!r}, which is not an active request of this journal "
+                 "(retired, unknown or malformed)",
+                 f"if no release is running anywhere, clear it with `gh variable delete {FREEZE_VARIABLE} "
+                 f"--repo {repository}`; a request that is still active elsewhere must finish or be "
+                 "retired first (`scripts/release.sh status`, `scripts/release.sh retire`)")
+
+
 # The release.sh commands that drive or mutate release state; a second one of
 # these is a second driver. Read-only commands (status, audit, doctor,
 # publication-record, publication-patch, verify-*) and the object-store
@@ -447,7 +477,7 @@ def check_runner(probes, *, require_paused=False):
 
 
 def run_doctor(root, *, product_fingerprint, checksum_fingerprint, journal_root, probes=None,
-               require_paused_runner=False):
+               require_paused_runner=False, repository=None):
     probes = HostProbes() if probes is None else probes
     root = Path(root)
     return [
@@ -456,6 +486,7 @@ def run_doctor(root, *, product_fingerprint, checksum_fingerprint, journal_root,
                             checksum_fingerprint=checksum_fingerprint),
         check_github_auth(probes),
         check_journal_lock(probes, journal_root),
+        check_release_freeze(probes, repository=repository, journal_root=journal_root),
         check_release_processes(probes),
         check_disk(probes, root),
         check_load(probes),

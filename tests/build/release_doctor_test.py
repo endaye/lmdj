@@ -12,6 +12,7 @@ import fcntl
 import json
 import os
 from pathlib import Path
+import shutil
 import sys
 import tempfile
 import unittest
@@ -344,8 +345,8 @@ class DoctorChecksTest(unittest.TestCase):
                             journal_root=self.root / "journal", probes=self.probes)
         self.assertEqual([c.name for c in checks],
                          ["emsdk", "signing key (product)", "signing key (checksum)", "gh auth",
-                          "journal lock", "release processes", "disk space", "host load",
-                          "fseventsd", "spotlight", "m1 runner"])
+                          "journal lock", "release freeze", "release processes", "disk space",
+                          "host load", "fseventsd", "spotlight", "m1 runner"])
         self.assertTrue(doctor_passed(checks))
         self.assertIn("release doctor: all checks passed", format_doctor(checks))
         self.probes.commands[("launchctl", "list")] = (0, "77\t0\tactions.runner.x.y\n", "")
@@ -370,6 +371,57 @@ class DoctorChecksTest(unittest.TestCase):
             Check("x", "fail", "broken")
         with self.assertRaises(ValueError):
             Check("x", "broken", "")
+
+
+class ReleaseFreezeCheckTest(unittest.TestCase):
+    """The doctor reports who holds the release freeze and refuses a stale one."""
+
+    def setUp(self):
+        self.root = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.root, True)
+        self.journal = self.root / "journal"
+        self.journal.mkdir()
+        self.probes = Probes(self.root)
+        self.command = ("gh", "variable", "get", "LMDJ_RELEASE_FREEZE", "--repo", "endaye/lmdj")
+
+    def check(self):
+        return doctor.check_release_freeze(self.probes, repository="endaye/lmdj", journal_root=self.journal)
+
+    def test_no_freeze_is_ok(self):
+        self.probes.commands[self.command] = (1, "", "variable not found: LMDJ_RELEASE_FREEZE")
+        self.assertEqual(self.check().status, "ok")
+
+    def test_a_freeze_held_by_an_active_request_is_ok(self):
+        request = "release-" + "1" * 16
+        (self.journal / f"{request}.json").write_text("{}")
+        self.probes.commands[self.command] = (0, request + "\n", "")
+        check = self.check()
+        self.assertEqual(check.status, "ok")
+        self.assertIn(request, check.detail)
+
+    def test_a_stale_or_unknown_freeze_fails_with_the_clearing_remedy(self):
+        request = "release-" + "1" * 16
+        (self.journal / f"{request}.json").write_text("{}")
+        (self.journal / f"{request}.retired").write_text("{}")
+        for value in (request, "release-" + "2" * 16, "garbage"):
+            with self.subTest(value=value):
+                self.probes.commands[self.command] = (0, value + "\n", "")
+                check = self.check()
+                self.assertEqual(check.status, "fail")
+                self.assertIn("gh variable delete LMDJ_RELEASE_FREEZE", check.remedy)
+                self.assertIn("retire", check.remedy)
+
+    def test_an_unreadable_variable_api_fails_closed(self):
+        self.probes.commands[self.command] = (1, "", "HTTP 502")
+        check = self.check()
+        self.assertEqual(check.status, "fail")
+        self.assertIn("cannot read", check.detail)
+
+    def test_run_doctor_includes_the_freeze_check(self):
+        self.probes.commands[self.command] = (1, "", "variable not found")
+        checks = run_doctor(self.root, product_fingerprint=PRODUCT, checksum_fingerprint=CHECKSUM,
+                            journal_root=self.journal, probes=self.probes, repository="endaye/lmdj")
+        self.assertIn("release freeze", [check.name for check in checks])
 
 
 class HostProbesTest(unittest.TestCase):
