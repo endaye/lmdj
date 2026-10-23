@@ -742,7 +742,15 @@ M1, and two batches on a loaded M1 were cancelled at the former 60 minutes
 (`facade.pattern_count_in_stress` 131 s instead of 106 s per repetition,
 `facade.candidate_store_stress` 57 s instead of 47 s). The repeat count is
 unchanged; the limit is a hang detector, not a target, and reducing the stress
-cost without weakening it is tracked by #2284 and #2306.
+cost without weakening it is tracked by #2284 and #2306. Re-measured on
+2026-10-23 ([decision](../prd/decisions/2026-10-23-release-stress-budget-remeasured.md),
+#2422 item 14): all 14 batch runs from 2026-10-19 to 2026-10-23 passed on the
+M1; the nine on an idle host took 52.5-58.0 min, and the five that took
+64.4-78.7 min all ran beside a release, a `prepare` or a local Creator lane on
+the same machine, with the extra time in `facade.pattern_count_in_stress` and
+`facade.candidate_store_stress`. The limit stays at 80 minutes; the remedy for
+the loaded runs is the operator-host rule in the lmdj-release skill, not a
+wider limit.
 
 `master_fx_stress` times its two Sample parity scenarios differently. The
 #1666 scenario, 128 kernel voices with every #1666 stage under all eight master
