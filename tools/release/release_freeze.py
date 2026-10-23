@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import re
 
+from .github_api import GitHubApiError
 from .orchestration import JournalError
 
 VARIABLE = "LMDJ_RELEASE_FREEZE"
@@ -42,12 +43,29 @@ class ReleaseFreeze:
         return self.github.get_repository_variable(self.repository, VARIABLE)
 
     def hold(self, request_id):
-        """Hold the freeze for this request; refuse while another request holds it."""
+        """Hold the freeze for this request; refuse while another request holds it.
+
+        The variable API has no compare-and-set, so the hold is a create that
+        the API refuses when the variable exists, followed by a read that
+        must show this request: a concurrent start that lost the race, or a
+        holder that appeared between the read and the create, is refused
+        rather than taken over.
+        """
         request_id = _request_id(request_id)
         holder = self.read()
         if holder is None:
-            self.github.create_repository_variable(self.repository, VARIABLE, request_id)
-        elif holder != request_id:
+            try:
+                self.github.create_repository_variable(self.repository, VARIABLE, request_id)
+            except GitHubApiError:
+                # Created meanwhile by another start (409) or refused: the
+                # holder decides. Our own value means our create landed.
+                holder = self.read()
+                if holder != request_id:
+                    if holder is None:
+                        raise
+                    _fail(f"another release request holds the freeze ({holder})")
+            holder = self.read()
+        if holder != request_id:
             _fail(f"another release request holds the freeze ({holder})")
 
     def release(self, request_id):

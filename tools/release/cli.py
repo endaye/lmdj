@@ -974,10 +974,15 @@ def main(argv: list[str] | None = None) -> int:
                 # A request that exists keeps its freeze through a failure (it
                 # is still unfinished and will be resumed); a freeze held for
                 # a request the driver never created is released, so a failed
-                # start leaves nothing behind.
-                with RequestJournal(journal_root, writable=False) as journal:
-                    exists = journal.read(held) is not None
-                if not exists:
+                # start leaves nothing behind. Only a positively observed
+                # absence releases: an unreadable journal keeps the freeze and
+                # leaves the doctor to report it.
+                try:
+                    with RequestJournal(journal_root, writable=False) as journal:
+                        absent = journal.read(held) is None
+                except Exception:
+                    absent = False
+                if absent:
                     freeze.release(held)
                 raise
             if result.status == "complete":

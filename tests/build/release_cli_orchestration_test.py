@@ -232,6 +232,33 @@ class ReleaseEntryPointTest(unittest.TestCase):
         self.assertEqual(self.freeze.released, self.freeze.held)
         self.assertIsNone(self.freeze.holder)
 
+    def test_a_failed_start_keeps_the_freeze_when_the_journal_cannot_be_read(self):
+        # Absence must be observed, not assumed: an unreadable journal after a
+        # driver failure keeps the freeze for the doctor to report.
+        real_journal = cli.RequestJournal
+        broken = []
+
+        class Journal(real_journal):
+            def __init__(self, directory, *args, **kwargs):
+                if broken:
+                    raise JournalError("why: journal unreadable; remedy: restore it")
+                super().__init__(directory, *args, **kwargs)
+
+        class Driver:
+            def __init__(self, *args, **kwargs):
+                pass
+
+            def run(self, request):
+                broken.append(True)
+                raise RuntimeError("driver failed")
+
+        with patch.object(cli, "RequestJournal", Journal), patch.object(cli, "ReleaseDriver", Driver), \
+                self.assertRaises(RuntimeError):
+            self.run_cli(["run", "--authority", "issue:1301"])
+        self.assertEqual(len(self.freeze.held), 1)
+        self.assertEqual(self.freeze.released, [])
+        self.assertEqual(self.freeze.holder, self.freeze.held[0])
+
     def test_retire_freeze_lives_in_the_repository_the_request_record_names(self):
         from tools.release.release_freeze import ReleaseFreeze
         client = object()

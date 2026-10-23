@@ -57,7 +57,9 @@ class ReleaseFreezeTest(unittest.TestCase):
     def test_hold_creates_the_variable_for_the_request(self):
         github = FakeGitHub()
         ReleaseFreeze(github, REPOSITORY).hold(ONE)
-        self.assertEqual(github.calls, [("get", REPOSITORY, VARIABLE), ("create", REPOSITORY, VARIABLE, ONE)])
+        # read, create, then the confirming read that proves the create landed as ours
+        self.assertEqual(github.calls, [("get", REPOSITORY, VARIABLE), ("create", REPOSITORY, VARIABLE, ONE),
+                                        ("get", REPOSITORY, VARIABLE)])
         self.assertEqual(github.value, ONE)
 
     def test_hold_is_idempotent_for_the_same_request(self):
@@ -71,6 +73,39 @@ class ReleaseFreezeTest(unittest.TestCase):
             ReleaseFreeze(github, REPOSITORY).hold(TWO)
         self.assertEqual(github.value, ONE)
         self.assertEqual([call[0] for call in github.calls], ["get"])
+
+    def test_a_create_the_api_refuses_is_settled_by_rereading_the_holder(self):
+        # Two starts raced: the loser's create is refused (409) and the holder
+        # it then reads is the winner; it refuses instead of taking over.
+        class Racing(FakeGitHub):
+            def create_repository_variable(self, repository, name, value):
+                self.calls.append(("create", repository, name, value))
+                self.value = TWO
+                raise GitHubApiError("GitHub repository variable creation was rejected")
+        github = Racing(None)
+        with self.assertRaisesRegex(JournalError, "another release request holds the freeze"):
+            ReleaseFreeze(github, REPOSITORY).hold(ONE)
+        self.assertEqual(github.value, TWO)
+        # Our own create landed although the API answered with an error: held.
+        class Landed(FakeGitHub):
+            def create_repository_variable(self, repository, name, value):
+                self.value = value
+                raise GitHubApiError("GitHub repository variable creation was rejected")
+        github = Landed(None)
+        ReleaseFreeze(github, REPOSITORY).hold(ONE)
+        self.assertEqual(github.value, ONE)
+        # Refused and still absent: the API error itself is the answer.
+        with self.assertRaises(GitHubApiError):
+            ReleaseFreeze(FakeGitHub(None, fail="create"), REPOSITORY).hold(ONE)
+
+    def test_hold_confirms_the_variable_names_this_request_after_creating_it(self):
+        class Overwritten(FakeGitHub):
+            def create_repository_variable(self, repository, name, value):
+                self.calls.append(("create", repository, name, value))
+                self.value = TWO   # another writer landed between create and the confirming read
+        github = Overwritten(None)
+        with self.assertRaisesRegex(JournalError, "another release request holds the freeze"):
+            ReleaseFreeze(github, REPOSITORY).hold(ONE)
 
     def test_release_deletes_only_this_requests_freeze(self):
         github = FakeGitHub(ONE)
