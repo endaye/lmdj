@@ -51,7 +51,8 @@ Runtime or Creator browser Proof journeys, a lane with a deadline or budget
 (`core_macos` gates, `core_release_stress`, `core_tsan_stress`,
 `web_runtime_host`, `creator`), or its PR left an unverified claim in a
 batch-only lane; when in doubt, treat it as timing-sensitive. The COUNT-IN
-merges of 2026-10-18 cost two candidates this way (#2394, #2395).
+merges of 2026-10-18 (#2342, #2359) cost two candidates this way through
+their latency defects #2394 and #2395.
 
 Only a verified releasable intent admits new preparation/tag/Draft/publication.
 For an already published identity, audit and verify it without republishing or
