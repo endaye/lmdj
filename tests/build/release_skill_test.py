@@ -239,6 +239,8 @@ class ReleaseSkillTest(unittest.TestCase):
             "pinned release hosts",
             "`LMDJ_RELEASE_FREEZE`",
             "release freeze",
+            "two consecutive green automatic",
+            "withdrawn from the cut",
             "never list suites",
             "retried at most once",
         ):

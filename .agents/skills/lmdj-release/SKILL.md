@@ -36,6 +36,21 @@ verify each result, and continue without renewed approval while its gates pass.
 A boundary-specific restriction still stops at that boundary. This permission
 does not imply an unattended controller exists or that credentials are usable.
 
+Before cutting a candidate, apply the feature admission rule (#2422 item 12,
+Owner decision 2026-10-23): a timing-sensitive feature merged since the last
+candidate is in release scope only after two consecutive green automatic
+main batches on the candidate hosts (the M1 for the macOS gates and Release
+stress, netcup for the Web lanes, ci-core for Linux Core), each with a
+successful executor run, the suites owning the feature's lanes `passed` in
+its `batch-verdict-<target>-<run>-1` artifact and no new triage Issue for
+them; candidate, node and overflow-host batches do not count. A feature that
+has not earned that is withdrawn from the cut (reverted or the cut waits);
+there is no release-scope flag yet. Timing-sensitive means it touches audio
+scheduling, the Control thread or worker, count-in, recording switches, the
+Runtime or Creator browser Proof journeys, or a lane with a deadline or
+budget; when in doubt, treat it as timing-sensitive. The COUNT-IN merges of
+2026-10-18 cost two candidates this way (#2394, #2395).
+
 Only a verified releasable intent admits new preparation/tag/Draft/publication.
 For an already published identity, audit and verify it without republishing or
 rewriting history; continue only any separately verified, covered deployment or
