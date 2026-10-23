@@ -261,12 +261,21 @@ _REQUEST_ID = re.compile(r"release-[0-9a-f]{16}\Z")
 def check_release_freeze(probes, *, repository, journal_root):
     """Who holds the release freeze. An active request may; a retired or
     unknown one is a stale freeze that blocks every control-plane merge for
-    nothing, so it fails with the clearing remedy (#2422 item 10)."""
+    nothing, so it fails with the clearing remedy (#2422 item 10).
+
+    `gh variable get` answers "not found" for an absent variable and for an
+    unreadable repository alike, so the repository is read first and the
+    variable through the REST path, where only an HTTP 404 means absent."""
     if not repository:
         return Check("release freeze", "skip", "repository unknown; the policy names it in production")
-    code, stdout, stderr = probes.run(["gh", "variable", "get", FREEZE_VARIABLE, "--repo", repository])
+    code, stdout, stderr = probes.run(["gh", "api", f"repos/{repository}", "--jq", ".full_name"])
+    if code != 0 or stdout.strip() != repository:
+        return Check("release freeze", "fail", f"cannot read repository {repository}: {(stderr or stdout).strip()[:200]}",
+                     "authenticate gh (`gh auth login`) with access to the repository and rerun")
+    code, stdout, stderr = probes.run(["gh", "api", f"repos/{repository}/actions/variables/{FREEZE_VARIABLE}",
+                                       "--jq", ".value"])
     if code != 0:
-        if "not found" in (stderr + stdout).lower():
+        if "HTTP 404" in stderr + stdout:
             return Check("release freeze", "ok", f"{FREEZE_VARIABLE} is not set: no release request holds the freeze")
         return Check("release freeze", "fail", f"cannot read {FREEZE_VARIABLE}: {(stderr or stdout).strip()[:200]}",
                      "authenticate gh (`gh auth login`) with access to the repository's Actions variables and rerun")

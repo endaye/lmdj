@@ -382,14 +382,27 @@ class ReleaseFreezeCheckTest(unittest.TestCase):
         self.journal = self.root / "journal"
         self.journal.mkdir()
         self.probes = Probes(self.root)
-        self.command = ("gh", "variable", "get", "LMDJ_RELEASE_FREEZE", "--repo", "endaye/lmdj")
+        self.repository_command = ("gh", "api", "repos/endaye/lmdj", "--jq", ".full_name")
+        self.probes.commands[self.repository_command] = (0, "endaye/lmdj\n", "")
+        self.command = ("gh", "api", "repos/endaye/lmdj/actions/variables/LMDJ_RELEASE_FREEZE", "--jq", ".value")
 
     def check(self):
         return doctor.check_release_freeze(self.probes, repository="endaye/lmdj", journal_root=self.journal)
 
     def test_no_freeze_is_ok(self):
-        self.probes.commands[self.command] = (1, "", "variable not found: LMDJ_RELEASE_FREEZE")
+        self.probes.commands[self.command] = (1, '{"message":"Not Found","status":"404"}', "gh: Not Found (HTTP 404)")
         self.assertEqual(self.check().status, "ok")
+
+    def test_an_unreadable_repository_fails_closed_even_when_gh_says_not_found(self):
+        # `gh variable get` says "not found" for an absent variable and for a
+        # repository it cannot read alike; the repository is proven first.
+        self.probes.commands[self.repository_command] = (1, '{"message":"Not Found","status":"404"}', "gh: Not Found (HTTP 404)")
+        self.probes.commands[self.command] = (1, "", "gh: Not Found (HTTP 404)")
+        check = self.check()
+        self.assertEqual(check.status, "fail")
+        self.assertIn("cannot read repository", check.detail)
+        self.probes.commands[self.repository_command] = (0, "someone/else\n", "")
+        self.assertEqual(self.check().status, "fail")
 
     def test_a_freeze_held_by_an_active_request_is_ok(self):
         request = "release-" + "1" * 16
@@ -429,13 +442,13 @@ class ReleaseFreezeCheckTest(unittest.TestCase):
         self.assertIn("gh variable delete", check.remedy)
 
     def test_an_unreadable_variable_api_fails_closed(self):
-        self.probes.commands[self.command] = (1, "", "HTTP 502")
+        self.probes.commands[self.command] = (1, "", "gh: Bad Gateway (HTTP 502)")
         check = self.check()
         self.assertEqual(check.status, "fail")
         self.assertIn("cannot read", check.detail)
 
     def test_run_doctor_includes_the_freeze_check(self):
-        self.probes.commands[self.command] = (1, "", "variable not found")
+        self.probes.commands[self.command] = (1, "", "gh: Not Found (HTTP 404)")
         checks = run_doctor(self.root, product_fingerprint=PRODUCT, checksum_fingerprint=CHECKSUM,
                             journal_root=self.journal, probes=self.probes, repository="endaye/lmdj")
         self.assertIn("release freeze", [check.name for check in checks])

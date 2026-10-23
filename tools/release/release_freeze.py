@@ -64,7 +64,14 @@ class ReleaseFreeze:
                     if holder is None:
                         raise
                     _fail(f"another release request holds the freeze ({holder})")
-            holder = self.read()
+            try:
+                holder = self.read()
+            except GitHubApiError:
+                # Our create may have landed; without the confirming read the
+                # hold is unproven, so it is not reported as held. The same
+                # request re-holds its own freeze on the next start.
+                _fail(f"could not be confirmed after creating it for {request_id}; rerun the same "
+                      "command (a request re-holds its own freeze) or run `scripts/release.sh doctor`")
         if holder != request_id:
             _fail(f"another release request holds the freeze ({holder})")
 

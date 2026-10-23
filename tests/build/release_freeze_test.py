@@ -98,6 +98,18 @@ class ReleaseFreezeTest(unittest.TestCase):
         with self.assertRaises(GitHubApiError):
             ReleaseFreeze(FakeGitHub(None, fail="create"), REPOSITORY).hold(ONE)
 
+    def test_a_confirming_read_that_fails_is_not_reported_as_held(self):
+        class Flaky(FakeGitHub):
+            def get_repository_variable(self, repository, name):
+                self.calls.append(("get", repository, name))
+                if len([c for c in self.calls if c[0] == "get"]) > 1:
+                    raise GitHubApiError("GitHub release request was rejected")
+                return self.value
+        github = Flaky(None)
+        with self.assertRaisesRegex(JournalError, "could not be confirmed"):
+            ReleaseFreeze(github, REPOSITORY).hold(ONE)
+        self.assertEqual(github.value, ONE)   # the create landed; the next start re-holds it
+
     def test_hold_confirms_the_variable_names_this_request_after_creating_it(self):
         class Overwritten(FakeGitHub):
             def create_repository_variable(self, repository, name, value):

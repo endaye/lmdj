@@ -521,13 +521,13 @@ def _retire_request(root: Path, request_id: str, tag: str) -> int:
         "observed_utc": report.observed_utc,
         "audit": [f"[{item.code}] {item.subject}: {item.message}" for item in report.findings],
     }
-    # The freeze is released before the journal changes: if the variable
-    # cannot be cleared, the request stays active and the freeze stays
-    # consistent with it.
-    retire_freeze(root, request["repository"]).release(request_id)
     with RequestJournal(directory) as journal:
         # The identity and audit were proven for this exact request.
         journal.retire(request_id, retirement, expected_request=request)
+    # Released only once the retirement is durable: a retirement that fails
+    # leaves the request active and its freeze in place; a release that
+    # fails leaves a retired holder the doctor reports as stale.
+    retire_freeze(root, request["repository"]).release(request_id)
     clear_reprove(root, GitRepository(root), request_id)
     print(f"release request retired: {request_id} superseded by {tag}")
     return 0
@@ -605,9 +605,9 @@ def _retire_unreleased_request(root: Path, request_id: str, build: str) -> int:
             " (settles the outstanding candidate intent)")
     for line in retirement["evidence"]:
         print(line)
-    retire_freeze(root, request["repository"]).release(request_id)
     with RequestJournal(directory) as journal:
         journal.retire(request_id, retirement, expected_request=request)
+    retire_freeze(root, request["repository"]).release(request_id)
     clear_reprove(root, GitRepository(root), request_id)
     print(f"release request retired: {request_id} ({reserved}, never published) superseded by Build {newer}")
     return 0

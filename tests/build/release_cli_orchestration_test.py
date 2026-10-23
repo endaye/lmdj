@@ -259,6 +259,23 @@ class ReleaseEntryPointTest(unittest.TestCase):
         self.assertEqual(self.freeze.released, [])
         self.assertEqual(self.freeze.holder, self.freeze.held[0])
 
+    def test_retire_releases_the_freeze_only_after_the_journal_retirement_is_durable(self):
+        # An unfinished request (its publication intent outstanding) that a
+        # published Build supersedes, as in the passing retire journey.
+        self.carriers["publication"].fail_after_write = True
+        self.assertEqual(self.run_cli(["run", "--authority", "issue:1301"]), 2)
+        (request_id,) = self.request_ids()
+        with patch.object(RequestJournal, "retire", side_effect=JournalError("why: retire refused; remedy: inspect")) as retired:
+            code, output, _ = self.retire(request_id, "lmdj-v1.0.61.0")
+        self.assertEqual(code, 2)
+        self.assertEqual(retired.call_count, 1, output)   # the retirement itself was attempted and refused
+        self.assertEqual(self.retire_freeze.released, [])
+        self.assertEqual(self.retire_freeze.holder, request_id)
+        # The same path succeeds end to end and releases after the retirement.
+        code, output, _ = self.retire(request_id, "lmdj-v1.0.61.0")
+        self.assertEqual(code, 0, output)
+        self.assertEqual(self.retire_freeze.released, [request_id])
+
     def test_retire_freeze_lives_in_the_repository_the_request_record_names(self):
         from tools.release.release_freeze import ReleaseFreeze
         client = object()

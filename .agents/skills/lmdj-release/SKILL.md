@@ -72,8 +72,9 @@ Pull Request that changes CI or release-tool control-plane paths
 `tools/release/`) while it is set; agents do not merge such PRs either
 (issue-done §5). Ordinary product PRs are not frozen. A second release
 request refuses to start while another holds the freeze; `doctor` reports who
-holds it and names the clearing command only for a stale freeze whose request
-is retired or unknown (#2422 item 10). A step the journal already verified is
+holds it, names the clearing command for a freeze whose request this journal
+retired, and for a holder this journal does not know sends the operator to the
+host that drove it first (#2422 item 10). A step the journal already verified is
 not re-driven and not re-proven: the driver rechecks only its immutable
 identity — the candidate and reviewed PR merge commits and heads, the executor
 run, the Release's numeric identity, plan digest and asset inventory, the
