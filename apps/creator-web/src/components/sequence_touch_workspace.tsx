@@ -21,6 +21,7 @@ import {
 } from "../state/pattern_transport_state";
 import {padColourOf} from "../state/pad_colour";
 import type {SeqSnap} from "../state/seq_snap_preference";
+import type {CountInBars} from "../state/count_in_preference";
 import {SequenceGrid} from "./sequence_grid";
 import {PatternSelector, TouchSegment, type TouchSegmentOption} from "./touch_kit";
 import "./sequence_setup_layout.css";
@@ -63,6 +64,9 @@ interface SequenceTouchWorkspaceProps {
   onToggleMetronome(): void;
   // Pattern selection stays independent of recording authoring locks.
   patternSelectionLocked?: boolean;
+  countInBars?: CountInBars;
+  onCountInBarsChange?(bars: CountInBars): void;
+  countInLocked?: boolean;
   // #1958 S4: the device's SEQ SNAP boundary. A per-device preference like
   // the metronome — never a Transport setting, never Project Truth — so it
   // stays reachable while recording and is
@@ -116,10 +120,12 @@ export function SequenceTouchWorkspace(props: SequenceTouchWorkspaceProps) {
   const selectionDisabled = selectTransportBusy(transport) || props.settingsActive === false ||
     props.patternSelectionLocked === true;
   const disabled = selectTransportBusy(transport) || selectTransportRecording(transport) ||
-    props.settingsActive === false;
+    props.settingsActive === false || props.countInLocked === true;
   // Grid editing is refused while the transport records (the Core refuses it
   // too); a busy transport holds the commit instead, and the app retries it.
-  const editReason = selectTransportRecording(transport)
+  const editReason = props.countInLocked === true
+    ? "Count-in — wait for recording or cancellation to settle."
+    : selectTransportRecording(transport)
     ? "Recording — stop recording to edit the grid."
     : null;
   const selectedPatternId = state.selectedPatternId ?? project.patternId;
@@ -356,6 +362,16 @@ export function SequenceTouchWorkspace(props: SequenceTouchWorkspaceProps) {
             onClick={props.onToggleMetronome}>
             METRONOME <span aria-hidden="true">{props.metronomeOn ? "On" : "Off"}</span>
           </button>
+        </div>
+        <div className="sequence-setup-row sequence-setup-seq-snap">
+          <span>COUNT-IN</span>
+          <TouchSegment<CountInBars> label="Count-in" options={[
+            {value: 0, label: "OFF", ariaLabel: "Count-in Off"},
+            {value: 1, label: "1", ariaLabel: "Count-in 1 bar"},
+            {value: 2, label: "2", ariaLabel: "Count-in 2 bars"},
+          ]} value={props.countInBars ?? 0}
+            disabled={props.onCountInBarsChange === undefined}
+            onChange={(value) => props.onCountInBarsChange?.(value)} />
         </div>
         {props.showRefresh === false ? null : (
           <details className="sequence-details">

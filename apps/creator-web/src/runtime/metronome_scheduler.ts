@@ -32,6 +32,9 @@ export interface MetronomeGridSegment {
 export type MetronomeWindow = Readonly<{
   fromFrame: number;
   toFrame: number;
+  // Native owns this scheduled-start beat even when the toggle was Off at S
+  // and becomes On only after the receipt. JS must never replay that frame.
+  nativeDownbeatFrame?: number | null;
 }> & Readonly<
   | {originFrame: number; bpm: number}
   | {segments: readonly MetronomeGridSegment[]}
@@ -96,7 +99,7 @@ export function beatsInWindow(window: MetronomeWindow): MetronomeBeat[] {
         : window.toFrame;
       segmentBeats(segment, window.fromFrame, until, beats);
     }
-    return beats;
+    return beats.filter((beat) => beat.frame !== window.nativeDownbeatFrame);
   }
   segmentBeats(
     {fromFrame: 0, originFrame: window.originFrame, bpm: window.bpm},
@@ -104,5 +107,5 @@ export function beatsInWindow(window: MetronomeWindow): MetronomeBeat[] {
     window.toFrame,
     beats,
   );
-  return beats;
+  return beats.filter((beat) => beat.frame !== window.nativeDownbeatFrame);
 }

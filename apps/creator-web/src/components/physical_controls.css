@@ -2,3 +2,18 @@
    active key's dark ink on its light face. Geometry belongs to the control kit. */
 .physical-key.is-record:not(.is-active) { color: var(--creator-rose, #e5adc4); }
 .physical-key.is-play:not(.is-active) { color: var(--creator-lime); }
+.physical-key.is-record.is-counting-in {
+  animation: count-in-record-lamp 800ms ease-in-out infinite;
+}
+
+@keyframes count-in-record-lamp {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.45; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .physical-key.is-record.is-counting-in {
+    animation: none;
+    outline: 1px solid currentColor;
+  }
+}

@@ -12,6 +12,8 @@ source_paths:
   - packages/web-runtime-platform/web/input_adapters.mjs
   - packages/web-runtime-platform/web/runtime_session.mjs
   - apps/creator-web/src/runtime/input_controller.ts
+  - apps/creator-web/src/runtime/count_in_controller.ts
+  - docs/prd/decisions/2026-10-10-record-key-and-count-in.md
   - apps/web-runtime-host/src/main.mjs
   - docs/release-evidence/2026-08-27-web-runtime-l1-macos-safari-pointer-1.0.36.0.md
   - docs/release-evidence/2026-08-31-web-runtime-l2-macos-chrome-pointer-1.0.40.0.md
@@ -29,6 +31,14 @@ import {StatusBadge} from '@site/src/components/StatusBadge';
 <StatusBadge status="partial" /> Product Build `1.0.41.0` 的 Creator Web Host `2.1.1` 与 Diagnostic Web Runtime Host `2.1.1` 通过 Web Runtime Platform `2.0.1` 使用 64-Pad Pointer、Keyboard 与 Web MIDI adapter。三种输入以同一 Audio Runtime frame clock 和单调 `input_sequence` 驱动 live trigger 与 Sequence recording；双 Host 交付控制面不改变输入语义，`partial` 仅表示仍缺少完整物理输入/延迟矩阵。
 
 ## 目标事件
+
+Creator 的 global Pattern COUNT-IN 只改变停止状态下 Record 的开录时机，不改变
+Pointer／Keyboard／MIDI 的 Pad Press/Release 入口。数拍中 BPM 和 Pattern authoring
+保持锁定，Pad 仍可演奏；实际 S 之前按住的手势及其跨 S 释放保持 live-only，
+新的 post-S 手势才按 Core 的实际录音 authority 进入 Journal。屏幕到达计划 S 不
+等于开录或持久化成功；Host 跟随 Applied、opening、cancel 和真实 consume 回执。
+Record／Play-Stop 在数拍中保持取消入口，不重新走音频激活；未知结果不生成第二个
+相反意图，也不提前放开锁。Sample capture 和 Performance Record 保留独立入口。
 
 Pointer、Keyboard、MIDI 汇入共享 Runtime Session 的 Sample inspect→`trigger(flatSlot, velocity, source)` admission，并保留归一化来源和 release/cancel identity。Project `{bank, pad}` 只在输入边界按 `bank * 16 + pad` 展平一次；adapter 不操作 Asset、Project Truth、Provider 或音频字节。在全局 Pattern transport 已 engaged 且录音中的 session，同一 trigger 路径在 enqueue 接受后把 press/release 注入 transport coordinator 的 admission 候选：watermark 单调分配、release 携带其归属 press 的 correlation；这一注入不改变返回给输入侧的 successful/failed/unknown 结果，unknown 输入绝不自动重 trigger。
 
