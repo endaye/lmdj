@@ -6,6 +6,7 @@ import {initialCreatorState, type CreatorState} from "../src/state/creator_state
 import {initialSequenceState} from "../src/state/sequence_state";
 import {initialPatternTransportState} from "../src/state/pattern_transport_state";
 import {projectSamplePlayback} from "../src/state/sample_state";
+import {initialCountInState, type CountInState} from "../src/runtime/count_in_controller";
 
 const state: CreatorState = {...initialCreatorState,
   audio: {phase: "suspended"},
@@ -40,6 +41,48 @@ test("Overview forwards the meter only while the actual Perform body is mounted"
   view.rerender(<OverviewDisplay {...common} state={running} activeMode="sample" outputMeterSource={source} />);
   expect(screen.queryByLabelText("Stereo output readout")).toBeNull();
   expect(outputMeter).toHaveBeenCalledTimes(reads);
+});
+
+const countInReadoutFixture = (): CountInState => ({...initialCountInState,
+  active: true, phase: "counting", ticket: {sessionId: "session", commandId: "command",
+    runtimeGeneration: "1", frameEpoch: "2", scheduleSerial: "3"},
+  status: {ticket: {sessionId: "session", commandId: "command", runtimeGeneration: "1",
+    frameEpoch: "2", scheduleSerial: "3"}, countIn: {runtimeGeneration: "1", frameEpoch: "2",
+    scheduleSerial: "3", phase: "armed", bars: 1, bpm: 120, barFrames: 96000,
+    countInFrame: 100000, startFrame: 196000}, startReceipt: null, cancelReceipt: null,
+    openingPending: false, openingComplete: false, observedAtMilliseconds: performance.now(), error: null},
+});
+
+test.each(["project", "sample", "sequence", "perform", "soundset", "slice"] as const)(
+  "%s keeps the global COUNT-IN readout on the upper screen", (activeMode) => {
+    render(<OverviewDisplay {...common} activeMode={activeMode}
+      state={{...state, audio: {phase: "running"}}}
+      countIn={countInReadoutFixture()}
+      transport={{...initialPatternTransportState, status: {engaged: true, phase: "awaiting_audio",
+        playing: false, recording: false, runtimeGeneration: 1, transportEpoch: 1,
+        originFrame: 0, runtimeFrame: 100000, observedAtMilliseconds: performance.now(),
+        commandId: "command", publicationPending: false, currentPatternId: null, pendingSwitch: null, error: null}}} />);
+    expect(screen.getByLabelText("Count-in status").textContent).toBe("COUNT-IN · 4 beats left");
+    expect(screen.queryByText("RECORDING", {exact: true})).toBeNull();
+  },
+);
+
+test("passing planned S shows Starting until an actual Applied projection arrives", () => {
+  const countIn = countInReadoutFixture();
+  const transport = {...initialPatternTransportState, status: {engaged: true,
+    phase: "awaiting_audio" as const, playing: false, recording: false, runtimeGeneration: 1,
+    transportEpoch: 1, originFrame: 0, runtimeFrame: 196000,
+    observedAtMilliseconds: performance.now(), commandId: "command", publicationPending: false,
+    currentPatternId: null, pendingSwitch: null, error: null}};
+  const view = render(<OverviewDisplay {...common} activeMode="sequence"
+    state={{...state, audio: {phase: "running"}}} transport={transport} countIn={countIn} />);
+  expect(screen.getByLabelText("Count-in status").textContent).toBe("COUNT-IN · Starting");
+  expect(screen.queryByText("RECORDING", {exact: true})).toBeNull();
+  view.rerender(<OverviewDisplay {...common} activeMode="sequence"
+    state={{...state, audio: {phase: "running"}}} transport={transport}
+    countIn={{...countIn, recording: true, phase: "recording"}} />);
+  expect(screen.queryByLabelText("Count-in status")).toBeNull();
+  expect(screen.getByText("RECORDING", {exact: true})).toBeDefined();
 });
 
 test.each(["project", "sample", "sequence", "perform", "soundset", "slice"] as const)(

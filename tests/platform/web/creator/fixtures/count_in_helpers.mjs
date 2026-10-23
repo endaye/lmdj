@@ -132,7 +132,8 @@ export async function attachCountInPcmObserver(page) {
     const native = window.__countInNativeNodes.findLast(node => node.context === context);
     if (!native || native.numberOfOutputs !== 2) throw new Error("actual two-output Native node missing");
     await context.audioWorklet.addModule("/__lmdj-test__/audio-observer.js");
-    const capacity = 16 * 48_000;
+    // Two 40 BPM bars plus a post-S JS beat that may follow a late release.
+    const capacity = 24 * 48_000;
     const headerBuffer = new SharedArrayBuffer(4 * Int32Array.BYTES_PER_ELEMENT);
     const sampleBuffer = new SharedArrayBuffer(6 * capacity * Float32Array.BYTES_PER_ELEMENT);
     const header = new Int32Array(headerBuffer);
@@ -544,7 +545,7 @@ export async function startCountInMasterCapture(page) {
     window.__countInMaster.capture = await session.startPerformanceMasterCapture({
       onBatch(channels) {
         const master = window.__countInMaster;
-        if (master.frames + channels[0].length > 16 * 48_000) {
+        if (master.frames + channels[0].length > 24 * 48_000) {
           master.overflow = true;
           return;
         }
@@ -569,7 +570,7 @@ export async function stopCountInMasterCapture(page, {silent = true} = {}) {
     const {frames, nonzero, failures, stopped, overflow, batches} = window.__countInMaster;
     return {frames, nonzero, failures, stopped, overflow, batchCount: batches[0].length, stopRequestedFrame, ack: window.__countInTapStopAck};
   });
-  expect(result.overflow, "fixed 16-second capture witness capacity").toBe(false);
+  expect(result.overflow, "fixed 24-second capture witness capacity").toBe(false);
   expect(result.frames).toBeGreaterThan(0);
   if (silent) expect(result.nonzero, "forced cues never enter the product master capture").toBe(0);
   expect(result.failures).toEqual([]);
@@ -870,7 +871,7 @@ export async function resampleCountInMasterCapture(page, setup, markers) {
     const sha = async bytes => [...new Uint8Array(await crypto.subtle.digest("SHA-256", bytes))]
       .map(byte => byte.toString(16).padStart(2, "0")).join("");
     const master = window.__countInMaster;
-    if (!master.stopped || master.failures.length || master.overflow || master.frames > 16 * 48_000)
+    if (!master.stopped || master.failures.length || master.overflow || master.frames > 24 * 48_000)
       throw new Error("only genuinely stopped, bounded real Master capture can be resampled");
     const channels = master.batches.map(batches => {
       const channel = new Float32Array(master.frames);
