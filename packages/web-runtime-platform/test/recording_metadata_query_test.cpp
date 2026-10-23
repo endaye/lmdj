@@ -69,7 +69,7 @@ class Storage : public project_io::ProjectStoragePlatform {
   }
   Result<std::size_t> read_window(const std::filesystem::path& p,std::uint64_t at,std::span<std::byte> output) const {
     const auto* reader=dynamic_cast<const project_io::ProjectStorageRangeReader*>(actual.get());
-    LMDJ_CHECK(reader && output.size()<=65536);
+    LMDJ_CHECK(reader && output.size()<=1048576);
     auto result=reader->read_range(p,at,output);++ranges;
     if(at==0) gate->read();
     return result;

@@ -29,7 +29,8 @@ using project_io::PerformanceRecordingSelector;
 constexpr auto kProject = "00000000-0000-4000-8000-000000000001";
 constexpr auto kPerformance = "10000000-0000-4000-8000-000000000001";
 constexpr auto kOther = "10000000-0000-4000-8000-000000000002";
-constexpr auto kDigest = "d257cf3b0c9d53ca39e618938b660595fb3c80b8779c82f22b3a3075f04b4e55";
+// Independent literal SHA-256 of 2097169 bytes (two 1 MiB windows plus 17).
+constexpr auto kDigest = "766a883d0da35388bacc197ea8d30667d5e1708f829e8a426f7b32fdec332447";
 constexpr std::array kPattern{std::byte{97}, std::byte{98}, std::byte{0}, std::byte{255},
                               std::byte{99}, std::byte{100}, std::byte{120}, std::byte{121}};
 
@@ -110,7 +111,7 @@ class RangeStorage final : public ForwardStorage, public project_io::ProjectStor
   Result<std::size_t> read_range(const std::filesystem::path& p, std::uint64_t offset,
                                std::span<std::byte> output) const override {
     LMDJ_CHECK(live_leases > 0);
-    LMDJ_CHECK(output.size() <= 65536);
+    LMDJ_CHECK(output.size() <= 1048576);
     if (read_error && offset >= error_offset) return Result<std::size_t>::failure(*read_error);
     if (zero_progress && !output.empty()) return Result<std::size_t>::success(0);
     if (invalid_count) return Result<std::size_t>::success(output.size() + 1);
@@ -138,7 +139,7 @@ struct Fixture {
       std::optional<foundation::ArtifactRef> custom = std::nullopt)
       : platform(ranges ? std::static_pointer_cast<ForwardStorage>(std::make_shared<RangeStorage>(temp.path()/"metadata"))
                         : std::make_shared<ForwardStorage>(temp.path()/"metadata")),
-        store(platform), artifact(custom.value_or(foundation::ArtifactRef{kDigest,"audio/wav",131089})) {
+        store(platform), artifact(custom.value_or(foundation::ArtifactRef{kDigest,"audio/wav",2097169})) {
     auto project = domain::create_project(foundation::ProjectId{kProject},120);
     LMDJ_CHECK(project.has_value());
     project.value().performances.emplace(domain::PerformanceId{kPerformance}, domain::Performance{
@@ -146,7 +147,7 @@ struct Fixture {
         bound ? std::optional{artifact} : std::nullopt,{}});
     LMDJ_CHECK(store.create(bundle,project.value()).has_value());
     if (!custom) {
-      payload.resize(131089);
+      payload.resize(2097169);
       for (std::size_t i=0;i<payload.size();++i) payload[i]=kPattern[i%kPattern.size()];
       auto lease=platform->acquire_writer(bundle);
       LMDJ_CHECK(lease.has_value());
@@ -174,17 +175,17 @@ void test_exact_stream_receipt_and_custody(bool short_reads) {
     const auto refused=competitor->acquire_writer(f.bundle);
     LMDJ_CHECK(!refused.has_value());
     LMDJ_CHECK(refused.error().details.at("storage_condition")=="project_busy");
-    LMDJ_CHECK(!input.empty() && input.size()<=65536);
+    LMDJ_CHECK(!input.empty() && input.size()<=1048576);
     for(const auto byte:input) { LMDJ_CHECK(byte==kPattern[consumed%8]); ++consumed; }
     return Result<void>::success();
   });
   LMDJ_CHECK(scanned.has_value());
   LMDJ_CHECK(scanned.value()==(project_io::PerformanceRecordingVerification{
       foundation::ProjectId{kProject},domain::PerformanceId{kPerformance},0,0,f.artifact}));
-  LMDJ_CHECK(consumed==131089);
+  LMDJ_CHECK(consumed==2097169);
   std::uint64_t next=0;
   for(const auto& [offset,capacity,actual]:f.ranges().reads) {
-    LMDJ_CHECK(offset==next && capacity<=65536); next+=actual;
+    LMDJ_CHECK(offset==next && capacity<=1048576); next+=actual;
   }
   LMDJ_CHECK(std::get<1>(f.ranges().reads.back())==1 && std::get<2>(f.ranges().reads.back())==0);
   LMDJ_CHECK(f.platform->writes==writes && f.platform->acquisitions==acquisitions+1);
@@ -250,7 +251,7 @@ void test_length_change_between_windows_cannot_receive_receipt() {
     Fixture f;
     bool changed=false;
     const auto result=f.store.scan_performance_recording(f.bundle,f.selector(),[&](auto) {
-      if(!changed) {std::filesystem::resize_file(f.path(),grow ? f.artifact.byte_length+1 : 65535);changed=true;}
+      if(!changed) {std::filesystem::resize_file(f.path(),grow ? f.artifact.byte_length+1 : 1048575);changed=true;}
       return Result<void>::success();
     });
     LMDJ_CHECK(changed && !result.has_value());
@@ -262,7 +263,7 @@ void test_length_change_between_windows_cannot_receive_receipt() {
 void test_storage_and_consumer_errors_release_lease() {
   Fixture f;
   const foundation::Error sentinel{ErrorCode::io_error,"exact scan I/O failure",{{"storage_condition","quota_exceeded"}}};
-  f.ranges().read_error=sentinel; f.ranges().error_offset=65536;
+  f.ranges().read_error=sentinel; f.ranges().error_offset=1048576;
   std::size_t calls=0;
   const auto failed=f.store.scan_performance_recording(f.bundle,f.selector(),[&](auto){++calls;return Result<void>::success();});
   LMDJ_CHECK(!failed.has_value() && failed.error().message==sentinel.message && failed.error().details==sentinel.details);
@@ -307,7 +308,7 @@ void test_consumer_cannot_retarget_callers_selector() {
     return Result<void>::success();
   });
   LMDJ_CHECK(result.has_value());
-  LMDJ_CHECK(bytes==131089 && result.value().project_revision==0);
+  LMDJ_CHECK(bytes==2097169 && result.value().project_revision==0);
   LMDJ_CHECK(result.value().project_id==foundation::ProjectId{kProject});
   LMDJ_CHECK(result.value().performance_id==domain::PerformanceId{kPerformance});
   LMDJ_CHECK(result.value().artifact==f.artifact);

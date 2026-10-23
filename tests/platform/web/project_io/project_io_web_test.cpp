@@ -1803,7 +1803,7 @@ nlohmann::json tempo_history(lmdj::facade::Application& app, const std::filesyst
   constexpr auto project_id = "00000000-0000-4000-8000-000000000001";
   constexpr auto performance_id = "10000000-0000-4000-8000-000000000001";
   const foundation::ArtifactRef artifact{
-      "d257cf3b0c9d53ca39e618938b660595fb3c80b8779c82f22b3a3075f04b4e55", "audio/wav", 131089};
+      "766a883d0da35388bacc197ea8d30667d5e1708f829e8a426f7b32fdec332447", "audio/wav", 2097169};
   constexpr std::array pattern{std::byte{97}, std::byte{98}, std::byte{0}, std::byte{255},
                                std::byte{99}, std::byte{100}, std::byte{120}, std::byte{121}};
   project_io::ProjectStore store{platform};
@@ -1821,7 +1821,10 @@ nlohmann::json tempo_history(lmdj::facade::Application& app, const std::filesyst
     auto lease = value(platform->acquire_writer(bundle), "scan fixture seed lease");
     std::vector<std::byte> payload(artifact.byte_length);
     for (std::size_t i = 0; i < payload.size(); ++i) payload[i] = pattern[i % pattern.size()];
-    success(platform->create_immutable(bundle / "assets" / (artifact.sha256 + ".wav"), payload),
+    // Seed with one complete write: this test build's immutable observer writes
+    // two bytes per call (owned by the short-write test), which would make a
+    // multi-window fixture cost minutes. The scan only reads these bytes.
+    success(platform->replace_complete(bundle / "assets" / (artifact.sha256 + ".wav"), payload),
             "scan fixture raw recording");
     lease.reset();
   }
@@ -1833,7 +1836,7 @@ nlohmann::json tempo_history(lmdj::facade::Application& app, const std::filesyst
       foundation::ProjectId{project_id}, domain::PerformanceId{performance_id}, 0, artifact};
   const auto verified = value(store.scan_performance_recording(bundle, selector, [&](auto input) {
     require(lmdj_project_io_physical_writer_count() == 1, "scan lost physical writer custody");
-    require(!input.empty() && input.size() <= 65536, "scan exceeded its bounded window");
+    require(!input.empty() && input.size() <= 1048576, "scan exceeded its bounded window");
     for (const auto byte : input) {
       require(byte == pattern[bytes_seen % pattern.size()], "scan received incorrect recording byte");
       ++bytes_seen;
@@ -1841,7 +1844,7 @@ nlohmann::json tempo_history(lmdj::facade::Application& app, const std::filesyst
     ++calls;
     return Result<void>::success();
   }), "verified Performance recording scan");
-  require(bytes_seen == 131089 && calls == 3, "scan did not consume every recording window");
+  require(bytes_seen == 2097169 && calls == 3, "scan did not consume every recording window");
   require(lmdj_project_io_physical_writer_count() == 0, "scan retained writer custody after return");
   auto stale = selector;
   stale.expected_revision = 1;
@@ -1968,9 +1971,9 @@ nlohmann::json tempo_history(lmdj::facade::Application& app, const std::filesyst
   // Independent Python struct/hashlib oracle; the mismatch retains the valid
   // reference but changes the very last PCM byte, after all header windows.
   const foundation::ArtifactRef artifact{variant == "unsupported"
-      ? "62aedd330eea859b7e3725d842cf089a97177d8a0f2918ad0d151212230c9d19"
-      : "985ee1bbde8458eeb675cff7bb99b6bd61278b9646a127c7c39b1fb7634cb2d5",
-      "audio/wav", 192124};
+      ? "e120c174c9077ae537a908a6ffd42b7d56daef6518f3d891fca612403bf93be0"
+      : "b29079c0cf7adb348911ab9ebc7fb115f1870b6edf2990316956ad379a0dea99",
+      "audio/wav", 2158204};
   project_io::ProjectStore store{platform};
   if (phase == "prepare") {
     auto initial = std::unique_ptr<Result<domain::ProjectState>>(new Result<domain::ProjectState>(
@@ -1989,14 +1992,17 @@ nlohmann::json tempo_history(lmdj::facade::Application& app, const std::filesyst
       for (unsigned i = 0; i < width; ++i) payload[at + i] = static_cast<std::byte>(n >> (i * 8));
     };
     const std::uint32_t rate = variant == "unsupported" ? 32000 : 48000;
-    tag(0, "RIFF"); number(4, 192116, 4); tag(8, "WAVE");
+    tag(0, "RIFF"); number(4, 2158196, 4); tag(8, "WAVE");
     tag(12, "fmt "); number(16, 16, 4); number(20, 1, 2); number(22, 2, 2);
     number(24, rate, 4); number(28, rate * 4, 4); number(32, 4, 2); number(34, 16, 2);
     tag(36, "JUNK"); number(40, 3, 4);
     payload[44] = std::byte{1}; payload[45] = std::byte{2}; payload[46] = std::byte{3};
-    payload[47] = std::byte{0xab}; tag(48, "data"); number(52, 192068, 4);
+    payload[47] = std::byte{0xab}; tag(48, "data"); number(52, 2158148, 4);
     if (variant == "mismatch") payload.back() = std::byte{1};
-    success(platform->create_immutable(bundle / "assets" / (artifact.sha256 + ".wav"), payload),
+    // Seed with one complete write: this test build's immutable observer writes
+    // two bytes per call (owned by the short-write test), which would make a
+    // multi-window fixture cost minutes. The scan only reads these bytes.
+    success(platform->replace_complete(bundle / "assets" / (artifact.sha256 + ".wav"), payload),
             "WAV fixture raw recording");
     lease.reset();
   }
@@ -2011,7 +2017,7 @@ nlohmann::json tempo_history(lmdj::facade::Application& app, const std::filesyst
       foundation::ProjectId{project_id}, domain::PerformanceId{performance_id}, 0, artifact};
   const auto scanned = store.scan_performance_recording(bundle, selector, [&](auto input) {
     require(lmdj_project_io_physical_writer_count() == 1, "WAV scan lost physical writer custody");
-    require(!input.empty() && input.size() <= 65536, "WAV scan exceeded bounded window");
+    require(!input.empty() && input.size() <= 1048576, "WAV scan exceeded bounded window");
     const auto fed = inspector.feed(input);
     if (!fed.has_value() && !format_error) format_error = fed.error();
     bytes_seen += input.size();
@@ -2019,7 +2025,7 @@ nlohmann::json tempo_history(lmdj::facade::Application& app, const std::filesyst
     // A format refusal must not stop the independent full Artifact hash.
     return Result<void>::success();
   });
-  require(bytes_seen == 192124 && calls == 3, "WAV scan omitted a window");
+  require(bytes_seen == 2158204 && calls == 3, "WAV scan omitted a window");
   require(lmdj_project_io_physical_writer_count() == 0, "WAV scan retained physical custody");
   require(lmdj_opfs_immutable_write_count() == writes_before, "WAV inspection wrote Project bytes");
   nlohmann::json report{{"requested", {{"projectId", project_id}, {"performanceId", performance_id},

@@ -354,7 +354,8 @@ foundation::Result<InventoryEntry> read_inventory_entry(
     if (content.value().size() != length.value()) return changed();
     return ReadResult::success({std::move(portable),length.value(),sha256(content.value())});
   }
-  constexpr std::size_t kWindowBytes = 64U*1024U;
+  // 1 MiB windows amortize the fixed per-call OPFS range cost (#2477).
+  constexpr std::size_t kWindowBytes = 1024U*1024U;
   auto buffer = std::make_unique<std::array<std::byte,kWindowBytes>>();
   picosha2::hash256_one_by_one hasher;
   std::uint64_t offset = 0;

@@ -28,7 +28,9 @@ using ReadResult = Result<facade::PerformanceRecordingRead>;
 constexpr auto kProject = "00000000-0000-4000-8000-000000000001";
 constexpr auto kPerformance = "10000000-0000-4000-8000-000000000001";
 constexpr auto kOther = "10000000-0000-4000-8000-000000000002";
-constexpr auto kDigest = "985ee1bbde8458eeb675cff7bb99b6bd61278b9646a127c7c39b1fb7634cb2d5";
+// Independent Python struct/hashlib literals for a 2158204-byte WAV: two 1 MiB
+// windows plus 61052 bytes, so every scan crosses window boundaries.
+constexpr auto kDigest = "b29079c0cf7adb348911ab9ebc7fb115f1870b6edf2990316956ad379a0dea99";
 
 class TempDirectory {
  public:
@@ -97,7 +99,7 @@ class RangeStorage final : public Storage, public project_io::ProjectStorageRang
   using Storage::Storage;
   Result<std::size_t> read_range(const std::filesystem::path& p,std::uint64_t at,
                                std::span<std::byte> output) const override {
-    LMDJ_CHECK(leases.load()>0 && output.size()<=65536);
+    LMDJ_CHECK(leases.load()>0 && output.size()<=1048576);
     const auto* reader=dynamic_cast<const project_io::ProjectStorageRangeReader*>(actual.get());
     LMDJ_CHECK(reader!=nullptr);
     auto result=reader->read_range(p,at,output);
@@ -124,16 +126,16 @@ struct Fixture {
   explicit Fixture(Variant variant=Variant::valid,bool ranges=true,std::uint64_t recording_revision=0)
       : platform(ranges ? std::static_pointer_cast<Storage>(std::make_shared<RangeStorage>(temp.path()/"coordination"))
                         : std::make_shared<Storage>(temp.path()/"coordination")), store(platform),
-        artifact{variant==Variant::unsupported ? "62aedd330eea859b7e3725d842cf089a97177d8a0f2918ad0d151212230c9d19"
+        artifact{variant==Variant::unsupported ? "e120c174c9077ae537a908a6ffd42b7d56daef6518f3d891fca612403bf93be0"
             : (variant==Variant::bad_header || variant==Variant::bad_header_mismatch)
-                ? "61347c7afec90b482677a76a92b562c8d60d7467c024d912dad9f0b74dbe436f" : kDigest,
-            "audio/wav",192124} {
+                ? "1c4adbe87653893bc454def91e5e6c89f8eda6a43db2fa8a29bdcbf9950c39e3" : kDigest,
+            "audio/wav",2158204} {
     auto project=std::make_unique<Result<domain::ProjectState>>(domain::create_project(foundation::ProjectId{kProject},120));
     LMDJ_CHECK(project->has_value());
     project->value().performances.emplace(domain::PerformanceId{kPerformance},domain::Performance{
         domain::PerformanceId{kPerformance},"silence",120,recording_revision,artifact,{}});
     LMDJ_CHECK(store.create(bundle,project->value()).has_value());
-    std::vector<std::byte> payload(192124);
+    std::vector<std::byte> payload(2158204);
     const auto tag=[&](std::size_t at,std::string_view text) {
       for(std::size_t i=0;i<text.size();++i) payload[at+i]=static_cast<std::byte>(text[i]);
     };
@@ -142,10 +144,10 @@ struct Fixture {
     };
     const std::uint32_t rate=variant==Variant::unsupported ? 32000 : 48000;
     tag(0,(variant==Variant::bad_header || variant==Variant::bad_header_mismatch)?"XIFF":"RIFF");
-    number(4,192116,4);tag(8,"WAVE");tag(12,"fmt ");number(16,16,4);
+    number(4,2158196,4);tag(8,"WAVE");tag(12,"fmt ");number(16,16,4);
     number(20,1,2);number(22,2,2);number(24,rate,4);number(28,rate*4,4);number(32,4,2);number(34,16,2);
     tag(36,"JUNK");number(40,3,4);payload[44]=std::byte{1};payload[45]=std::byte{2};payload[46]=std::byte{3};
-    payload[47]=std::byte{0xab};tag(48,"data");number(52,192068,4);
+    payload[47]=std::byte{0xab};tag(48,"data");number(52,2158148,4);
     if(variant==Variant::mismatch || variant==Variant::bad_header_mismatch) payload.back()=std::byte{1};
     {
       auto lease=platform->acquire_writer(bundle);LMDJ_CHECK(lease.has_value());
@@ -189,14 +191,14 @@ void test_exact_metadata_and_read_only_reopen() {
   const auto result=reader->inspect(f.request());const auto& value=verified(result);identity(value,f.artifact);
   LMDJ_CHECK(value.audio.has_value());
   LMDJ_CHECK(value.audio.value().sample_rate==48000 && value.audio.value().channels==2);
-  LMDJ_CHECK(value.audio.value().source_frames==48017); // data size / 4, excluding odd JUNK and padding.
-  LMDJ_CHECK(f.ranges().bytes_seen.load()==192124 && f.ranges().range_calls.load()==4);
+  LMDJ_CHECK(value.audio.value().source_frames==539537); // data size / 4, excluding odd JUNK and padding.
+  LMDJ_CHECK(f.ranges().bytes_seen.load()==2158204 && f.ranges().range_calls.load()==4);
   LMDJ_CHECK(f.platform->whole_audio_reads.load()==0 && f.platform->leases.load()==0);
   LMDJ_CHECK(f.platform->writes.load()==writes);
   reader.reset();f.app.reset();
   facade::Application reopened(f.config());auto reopened_reader=reopened.make_performance_recording_metadata_reader();
   const auto again=reopened_reader->inspect(f.request());identity(verified(again),f.artifact);
-  LMDJ_CHECK(verified(again).audio.value().source_frames==48017);
+  LMDJ_CHECK(verified(again).audio.value().source_frames==539537);
 }
 
 void test_format_is_published_only_after_complete_integrity() {
@@ -204,7 +206,7 @@ void test_format_is_published_only_after_complete_integrity() {
     Fixture f{variant};auto reader=f.app->make_performance_recording_metadata_reader();
     const auto result=reader->inspect(f.request());const auto& value=verified(result);identity(value,f.artifact);
     LMDJ_CHECK(!value.audio.has_value() && value.audio.error().code==ErrorCode::unsupported_audio);
-    LMDJ_CHECK(f.ranges().bytes_seen.load()==192124 && f.ranges().range_calls.load()==4);
+    LMDJ_CHECK(f.ranges().bytes_seen.load()==2158204 && f.ranges().range_calls.load()==4);
     LMDJ_CHECK(f.platform->leases.load()==0);
   }
   for(auto variant:{Variant::mismatch,Variant::bad_header_mismatch}) {
@@ -212,7 +214,7 @@ void test_format_is_published_only_after_complete_integrity() {
     const auto result=reader->inspect(f.request());
     LMDJ_CHECK(!result.has_value() && result.error().code==ErrorCode::cook_failed);
     LMDJ_CHECK(result.error().details.at("storage_condition")=="artifact_mismatch");
-    LMDJ_CHECK(f.ranges().bytes_seen.load()==192124 && f.platform->leases.load()==0);
+    LMDJ_CHECK(f.ranges().bytes_seen.load()==2158204 && f.platform->leases.load()==0);
   }
 }
 
@@ -231,7 +233,7 @@ void test_project_and_recording_revisions_are_distinct_verified_facts() {
   LMDJ_CHECK(value.project_revision==1);
   LMDJ_CHECK(value.recording_revision==17);
   LMDJ_CHECK(value.artifact==f.artifact && value.audio.has_value());
-  LMDJ_CHECK(value.audio.value().source_frames==48017);
+  LMDJ_CHECK(value.audio.value().source_frames==539537);
 }
 
 void test_selectors_missing_capability_and_request_snapshot() {
@@ -265,13 +267,13 @@ void test_cancellation_before_window_and_after_final_input() {
     const auto writes=f.platform->writes.load(),reads=f.platform->reads.load();
     if(point==0) stop.request_stop();
     f.ranges().after_range=[&,point](std::uint64_t at) {
-      if((point==1 && at==0) || (point==2 && at==192124)) stop.request_stop();
+      if((point==1 && at==0) || (point==2 && at==2158204)) stop.request_stop();
     };
     const auto result=reader->inspect(f.request(),stop.get_token());cancelled(result);
     LMDJ_CHECK(f.platform->leases.load()==0 && f.platform->writes.load()==writes);
     if(point==0) LMDJ_CHECK(f.platform->reads.load()==reads && f.ranges().range_calls.load()==0);
     if(point==1) LMDJ_CHECK(f.ranges().range_calls.load()==1);
-    if(point==2) LMDJ_CHECK(f.ranges().range_calls.load()==4 && f.ranges().bytes_seen.load()==192124);
+    if(point==2) LMDJ_CHECK(f.ranges().range_calls.load()==4 && f.ranges().bytes_seen.load()==2158204);
   }
 }
 
