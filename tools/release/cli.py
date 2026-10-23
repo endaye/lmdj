@@ -317,12 +317,12 @@ def release_freeze(context: PrepareContext):
     return ReleaseFreeze(context.github, context.policy.repository)
 
 
-def retire_freeze(root: Path):
-    """The freeze a retire releases, through the logged-in gh identity."""
+def retire_freeze(root: Path, repository: str):
+    """The freeze a retire releases, in the repository the request record names,
+    through the logged-in gh identity."""
     from tools.release.release_freeze import ReleaseFreeze
 
-    policy, _ = load_authority_documents(root)
-    return ReleaseFreeze(_authenticated_github_client(GitRepository(root).runner), policy.repository)
+    return ReleaseFreeze(_authenticated_github_client(GitRepository(root).runner), repository)
 
 
 def confirm_canonical_signing_keys(context: PrepareContext):
@@ -524,7 +524,7 @@ def _retire_request(root: Path, request_id: str, tag: str) -> int:
     # The freeze is released before the journal changes: if the variable
     # cannot be cleared, the request stays active and the freeze stays
     # consistent with it.
-    retire_freeze(root).release(request_id)
+    retire_freeze(root, request["repository"]).release(request_id)
     with RequestJournal(directory) as journal:
         # The identity and audit were proven for this exact request.
         journal.retire(request_id, retirement, expected_request=request)
@@ -605,7 +605,7 @@ def _retire_unreleased_request(root: Path, request_id: str, build: str) -> int:
             " (settles the outstanding candidate intent)")
     for line in retirement["evidence"]:
         print(line)
-    retire_freeze(root).release(request_id)
+    retire_freeze(root, request["repository"]).release(request_id)
     with RequestJournal(directory) as journal:
         journal.retire(request_id, retirement, expected_request=request)
     clear_reprove(root, GitRepository(root), request_id)
@@ -963,11 +963,23 @@ def main(argv: list[str] | None = None) -> int:
             with RequestJournal(journal_root) as journal:
                 original = journal.resolve_active(request)
             freeze = release_freeze(context)
-            freeze.hold(request["id"] if original is None else original["request"]["id"])
-            result = (
-                driver.run(request)
-                if options.command == "run" else driver.resume(options.request_id)
-            )
+            held = request["id"] if original is None else original["request"]["id"]
+            freeze.hold(held)
+            try:
+                result = (
+                    driver.run(request)
+                    if options.command == "run" else driver.resume(options.request_id)
+                )
+            except Exception:
+                # A request that exists keeps its freeze through a failure (it
+                # is still unfinished and will be resumed); a freeze held for
+                # a request the driver never created is released, so a failed
+                # start leaves nothing behind.
+                with RequestJournal(journal_root, writable=False) as journal:
+                    exists = journal.read(held) is not None
+                if not exists:
+                    freeze.release(held)
+                raise
             if result.status == "complete":
                 freeze.release(result.request_id)
             if getattr(options, "reprove", False):

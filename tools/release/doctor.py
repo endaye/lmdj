@@ -272,16 +272,28 @@ def check_release_freeze(probes, *, repository, journal_root):
                      "authenticate gh (`gh auth login`) with access to the repository's Actions variables and rerun")
     holder = stdout.strip()
     journal = Path(journal_root)
-    if _REQUEST_ID.fullmatch(holder) and (journal / f"{holder}.json").is_file() \
-            and not (journal / f"{holder}.retired").exists():
+    if not _REQUEST_ID.fullmatch(holder):
+        return Check("release freeze", "fail", f"{FREEZE_VARIABLE} is {holder!r}, not a release request id",
+                     f"no driver writes such a value; clear it with `gh variable delete {FREEZE_VARIABLE} "
+                     f"--repo {repository}` and investigate who set it")
+    if (journal / f"{holder}.retired").exists():
+        return Check("release freeze", "fail",
+                     f"{FREEZE_VARIABLE} names {holder}, a request this journal retired; the freeze is stale",
+                     f"clear it with `gh variable delete {FREEZE_VARIABLE} --repo {repository}` once "
+                     "`scripts/release.sh status` shows no other active request")
+    if (journal / f"{holder}.json").is_file():
         return Check("release freeze", "ok", f"held by active request {holder}: CI and release-tool "
                      "control-plane merges are frozen until it completes or is retired")
+    # Well-formed but not in this journal: most likely a live release driven
+    # from another operator host (its journal is there), or a start that
+    # crashed between holding and creating. Neither is ours to clear here.
     return Check("release freeze", "fail",
-                 f"{FREEZE_VARIABLE} names {holder!r}, which is not an active request of this journal "
-                 "(retired, unknown or malformed)",
-                 f"if no release is running anywhere, clear it with `gh variable delete {FREEZE_VARIABLE} "
-                 f"--repo {repository}`; a request that is still active elsewhere must finish or be "
-                 "retired first (`scripts/release.sh status`, `scripts/release.sh retire`)")
+                 f"{FREEZE_VARIABLE} names {holder}, which is not a request of this journal; a release "
+                 "driven from another operator host may hold it",
+                 f"run `scripts/release.sh status` on the host that drove {holder} and let that request "
+                 "finish or retire there; only if no driver runs anywhere and no journal knows the "
+                 f"request, clear it with `gh variable delete {FREEZE_VARIABLE} --repo {repository}`; "
+                 "never clear it to merge")
 
 
 # The release.sh commands that drive or mutate release state; a second one of

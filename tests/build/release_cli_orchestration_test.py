@@ -213,6 +213,33 @@ class ReleaseEntryPointTest(unittest.TestCase):
         self.assertEqual(self.run_cli(["resume", request_id]), 0)
         self.assertEqual(self.freeze.released, [request_id])
 
+    def test_a_start_that_fails_before_creating_the_request_releases_its_freeze(self):
+        # The driver raises before any journal write: the freeze held for the
+        # never-created request is released, so nothing stays frozen for a
+        # request that does not exist (review of #2475).
+        class Driver:
+            def __init__(self, *args, **kwargs):
+                pass
+
+            def run(self, request):
+                raise JournalError("why: journal unavailable; remedy: retry")
+
+        output = io.StringIO()
+        with patch.object(cli, "ReleaseDriver", Driver):
+            self.assertEqual(self.run_cli(["run", "--authority", "issue:1301"], capture=output), 2)
+        self.assertEqual(self.request_ids(), [])
+        self.assertEqual(len(self.freeze.held), 1)
+        self.assertEqual(self.freeze.released, self.freeze.held)
+        self.assertIsNone(self.freeze.holder)
+
+    def test_retire_freeze_lives_in_the_repository_the_request_record_names(self):
+        from tools.release.release_freeze import ReleaseFreeze
+        client = object()
+        with patch.object(cli, "_authenticated_github_client", return_value=client):
+            freeze = cli.retire_freeze(self.root, "other/repository")
+        self.assertIsInstance(freeze, ReleaseFreeze)
+        self.assertEqual((freeze.github, freeze.repository), (client, "other/repository"))
+
     def test_run_refuses_before_creating_a_request_while_another_holds_the_freeze(self):
         self.freeze = Freeze(holder="release-" + "9" * 16)
         output = io.StringIO()

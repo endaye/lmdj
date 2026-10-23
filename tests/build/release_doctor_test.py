@@ -399,17 +399,34 @@ class ReleaseFreezeCheckTest(unittest.TestCase):
         self.assertEqual(check.status, "ok")
         self.assertIn(request, check.detail)
 
-    def test_a_stale_or_unknown_freeze_fails_with_the_clearing_remedy(self):
+    def test_a_retired_requests_freeze_is_stale_and_names_the_clearing_command(self):
         request = "release-" + "1" * 16
         (self.journal / f"{request}.json").write_text("{}")
         (self.journal / f"{request}.retired").write_text("{}")
-        for value in (request, "release-" + "2" * 16, "garbage"):
-            with self.subTest(value=value):
-                self.probes.commands[self.command] = (0, value + "\n", "")
-                check = self.check()
-                self.assertEqual(check.status, "fail")
-                self.assertIn("gh variable delete LMDJ_RELEASE_FREEZE", check.remedy)
-                self.assertIn("retire", check.remedy)
+        self.probes.commands[self.command] = (0, request + "\n", "")
+        check = self.check()
+        self.assertEqual(check.status, "fail")
+        self.assertIn("retired", check.detail)
+        self.assertIn("gh variable delete LMDJ_RELEASE_FREEZE --repo endaye/lmdj", check.remedy)
+
+    def test_an_unknown_well_formed_holder_fails_without_a_bare_delete(self):
+        # Another operator host's live release has its journal there: the
+        # check refuses to start anything here and sends the operator to that
+        # host before any clearing command (review of #2475).
+        self.probes.commands[self.command] = (0, "release-" + "2" * 16 + "\n", "")
+        check = self.check()
+        self.assertEqual(check.status, "fail")
+        self.assertIn("another operator host", check.detail)
+        self.assertIn("scripts/release.sh status", check.remedy)
+        self.assertLess(check.remedy.index("scripts/release.sh status"), check.remedy.index("gh variable delete"))
+        self.assertIn("never clear it to merge", check.remedy)
+
+    def test_a_malformed_holder_fails(self):
+        self.probes.commands[self.command] = (0, "garbage\n", "")
+        check = self.check()
+        self.assertEqual(check.status, "fail")
+        self.assertIn("not a release request id", check.detail)
+        self.assertIn("gh variable delete", check.remedy)
 
     def test_an_unreadable_variable_api_fails_closed(self):
         self.probes.commands[self.command] = (1, "", "HTTP 502")
