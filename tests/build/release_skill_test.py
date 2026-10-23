@@ -239,8 +239,6 @@ class ReleaseSkillTest(unittest.TestCase):
             "pinned release hosts",
             "`LMDJ_RELEASE_FREEZE`",
             "release freeze",
-            "two consecutive green automatic",
-            "withdrawn from the cut",
             "never list suites",
             "retried at most once",
         ):
@@ -253,6 +251,23 @@ class ReleaseSkillTest(unittest.TestCase):
             {"id": "<stable-request-id>", "kind": "candidate", "target": "<exact-main-SHA>"},
             f"why: candidate request fields or exact target differ; {remedy}",
         )
+
+    def test_skill_applies_the_feature_admission_rule_before_a_cut(self) -> None:
+        # #2422 item 12 (Owner decision 2026-10-23): a timing-sensitive feature
+        # enters release scope only after two consecutive green automatic main
+        # batches on the candidate hosts; otherwise it is withdrawn from the cut.
+        source = self.read(SKILL)
+        remedy = "remedy: keep the feature admission rule in the candidate admission section of the skill"
+        for expected in (
+            "Before cutting a candidate, apply the feature admission rule",
+            "two consecutive green automatic",
+            "candidate hosts",
+            "`batch-verdict-<target>-<run>-1`",
+            "withdrawn from the cut",
+            "no release-scope flag yet",
+        ):
+            with self.subTest(expected=expected):
+                self.assertIn(expected, source, f"why: missing feature admission rule {expected!r}; {remedy}")
 
     def test_governance_binds_release_authority_to_full_exact_main_evidence(self) -> None:
         git_workflow = self.read(GIT_WORKFLOW)
