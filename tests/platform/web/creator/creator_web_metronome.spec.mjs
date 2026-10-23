@@ -1,4 +1,4 @@
-import {showSamplePage, showPerformPage} from "./fixtures/creator_navigation.mjs";
+import {openCreatorSlice, showSamplePage, showPerformPage} from "./fixtures/creator_navigation.mjs";
 import {selectedSequencePatternId, showSequenceLayer} from "./fixtures/creator_navigation.mjs";
 import {wakeAudioWithPad} from "./fixtures/creator_audio.mjs";
 import {expect, test} from "./fixtures/refusal_diagnostics.mjs";
@@ -703,8 +703,8 @@ test("global COUNT-IN on every page cancels through both physical keys without a
       await page.getByRole("button", {name: "Project", exact: true}).click();
       await page.getByRole("button", {name: "Sound Sets", exact: true}).click();
     } else if (mode === "Slice") {
-      await page.getByRole("button", {name: "Sample", exact: true}).click();
-      await page.getByRole("button", {name: "Slice", exact: true}).click();
+      // Slice now sits on the Sample page's Pad layer (#2462).
+      await openCreatorSlice(page);
     } else await page.getByRole("button", {name: mode, exact: true}).click();
     await recordKey(page).click();
     const ticket = await uiCountInTicket(page, index);
