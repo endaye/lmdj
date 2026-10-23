@@ -47,9 +47,11 @@ them; candidate, node and overflow-host batches do not count. A feature that
 has not earned that is withdrawn from the cut (reverted or the cut waits);
 there is no release-scope flag yet. Timing-sensitive means it touches audio
 scheduling, the Control thread or worker, count-in, recording switches, the
-Runtime or Creator browser Proof journeys, or a lane with a deadline or
-budget; when in doubt, treat it as timing-sensitive. The COUNT-IN merges of
-2026-10-18 cost two candidates this way (#2394, #2395).
+Runtime or Creator browser Proof journeys, a lane with a deadline or budget
+(`core_macos` gates, `core_release_stress`, `core_tsan_stress`,
+`web_runtime_host`, `creator`), or its PR left an unverified claim in a
+batch-only lane; when in doubt, treat it as timing-sensitive. The COUNT-IN
+merges of 2026-10-18 cost two candidates this way (#2394, #2395).
 
 Only a verified releasable intent admits new preparation/tag/Draft/publication.
 For an already published identity, audit and verify it without republishing or

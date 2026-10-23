@@ -265,6 +265,10 @@ class ReleaseSkillTest(unittest.TestCase):
             "`batch-verdict-<target>-<run>-1`",
             "withdrawn from the cut",
             "no release-scope flag yet",
+            "unverified claim in a",
+            "batch-only lane",
+            "`core_release_stress`",
+            "`web_runtime_host`",
         ):
             with self.subTest(expected=expected):
                 self.assertIn(expected, source, f"why: missing feature admission rule {expected!r}; {remedy}")
