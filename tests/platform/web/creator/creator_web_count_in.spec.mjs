@@ -42,9 +42,13 @@ async function finishCountIn(page, setup, ticket, intent = "play_stop") {
   let status, ordinary;
   await expect.poll(async () => {
     status = await inspectCountIn(page, ticket);
-    ordinary = (await inspectOrdinary(page, setup.sessionId)).legacy;
+    const observed = await inspectOrdinary(page, setup.sessionId);
+    ordinary = observed.legacy;
+    // Idle can precede the final ordinary publication ACK. Keep the original
+    // 5s closure budget and require that real ACK before consuming the caller.
     return status.cancelReceipt?.result === "applied" && ordinary.phase === "idle" &&
-      !ordinary.recording && ordinary.playing === (intent === "record");
+      !ordinary.recording && ordinary.playing === (intent === "record") &&
+      observed.raw.publication_pending === false;
   }, {timeout: 5_000, intervals: [10]}).toBe(true);
   expect(status.error).toBeNull();
   expect(ordinary.error).toBeNull();
