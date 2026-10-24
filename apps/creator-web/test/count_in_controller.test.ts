@@ -306,6 +306,30 @@ test("an outstanding consume fences cancellation without retiring a refused call
   expect(f.session.cancelPatternCountIn.mock.calls[1]![0]).toEqual(f.session.cancelPatternCountIn.mock.calls[0]![0]);
 });
 
+test("a foreign consumed reply preserves the original caller for genuine cancellation", async () => {
+  const f = fixture();
+  await f.controller.start(1, 4);
+  const original = structuredClone(f.ticket());
+  f.status = {...f.status, startReceipt: f.receipt("cancelled"), cancelReceipt: f.receipt("cancelled", true)};
+  const inspect = f.session.inspectPatternCountIn.getMockImplementation()!;
+  let foreign = true;
+  f.session.inspectPatternCountIn.mockImplementation(async (ticket, consume) => {
+    if (consume && foreign) return {...f.status, ticket: {...original, scheduleSerial: "18"}};
+    return inspect(ticket, consume);
+  });
+  await f.controller.observe();
+  expect(f.onError).toHaveBeenCalledWith(expect.objectContaining({code: "HOST_PROTOCOL_MISMATCH"}));
+  expect(f.controller.getState()).toMatchObject({active: true, ticket: original});
+  foreign = false;
+  await f.controller.cancel("play_stop");
+  expect(f.session.cancelPatternCountIn).toHaveBeenCalledOnce();
+  expect(f.session.cancelPatternCountIn.mock.calls[0]![0].ticket).toEqual(original);
+  expect(f.session.inspectPatternCountIn.mock.calls.filter(([, consume]) => consume)).toEqual([
+    [original, true], [original, true],
+  ]);
+  expect(f.controller.getState().active).toBe(false);
+});
+
 test("Record-off waits for opening/closure and preserves Native's S for the JS handoff", async () => {
   const f = fixture();
   await f.controller.start(1, 4);

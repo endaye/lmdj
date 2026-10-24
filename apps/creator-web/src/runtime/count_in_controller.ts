@@ -188,8 +188,8 @@ export function createCountInController(options: Readonly<{
       // Positive consumption seals this caller before any awaited projection.
       // Keep transport locked until that projection can drive an ordinary
       // gesture; another key press must never resend the now-stale cancel.
-      candidate.consumed = true;
       accept(candidate, consumed);
+      candidate.consumed = true;
       publish({phase: "handoff"});
       try {
         await refreshTransport(candidate);
