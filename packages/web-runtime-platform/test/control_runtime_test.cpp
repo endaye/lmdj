@@ -13583,6 +13583,10 @@ class HeldLegacyCandidateStorage final
   };
   explicit HeldLegacyCandidateStorage(std::filesystem::path bundle)
       : bundle_(std::move(bundle)) {}
+  std::size_t complete_reads() const {
+    std::lock_guard lock(mutex_);
+    return complete_reads_;
+  }
   void arm(std::string kind = "admission-candidate", bool lose_reply = false) {
     std::lock_guard lock(mutex_);
     observation_ = {};
@@ -13683,6 +13687,7 @@ class HeldLegacyCandidateStorage final
     bool selected = false;
     {
       std::unique_lock lock(mutex_);
+      ++complete_reads_;
       if (read_ordinal_ != 0 && p == bundle_ / "manifest.json" && ++reads_seen_ == read_ordinal_) {
         selected = true;
         read_observation_ = {p, std::this_thread::get_id(), true};
@@ -13721,8 +13726,52 @@ class HeldLegacyCandidateStorage final
   bool lose_reply_{};
   mutable ReadObservation read_observation_;
   mutable std::size_t read_ordinal_{}, reads_seen_{};
+  mutable std::size_t complete_reads_{};
   bool read_released_{};
 };
+
+void test_host_live_status_and_control_reuse_verified_writer_identity() {
+  TempDirectory temp;
+  FakeCoordinator coordinator;
+  const auto bundle = temp.path() / "projects" / (std::string(kProjectId) + ".lmdj");
+  auto storage = std::make_shared<HeldLegacyCandidateStorage>(bundle);
+  auto config = make_application_config(temp.path());
+  config.storage_platform = storage;
+  auto created = ControlRuntime::create(temp.path(), std::move(config), kWebLimits);
+  LMDJ_CHECK(created.has_value());
+  auto runtime = std::move(created.value());
+  check_success(dispatch_retained_for_test(*runtime, "project.create", create_opted_in_project(), {}));
+  import_and_assign(*runtime, mono_pcm16_wav(2'400), kAssetId, 10510, 10511, 0);
+  check_success(dispatch_retained_for_test(*runtime, "snapshot.reload", {{"pattern_id", kPatternId}}, {}));
+  LMDJ_CHECK(ControlRuntimeAudioAccess::install(*runtime, coordinator.seam()).has_value());
+  coordinator.begin_acknowledgement = runtime->engine().bank_telemetry().accepted_publications;
+  coordinator.engine = &runtime->engine();
+  coordinator.observe_engine_generation = true;
+  check_success(dispatch_retained_for_test(*runtime, "audio.activate", Json::object(), {}));
+
+  const auto before_inspect = storage->complete_reads();
+  const auto truth = runtime->dispatch("project.inspect", Json::object(), {}).at("result").at("project");
+  LMDJ_CHECK(storage->complete_reads() > before_inspect); // Known-present storage positive control.
+  const auto before_live = storage->complete_reads();
+  const auto status = runtime->dispatch("performance.live.status", Json::object(), {});
+  check_success(status);
+  const Json control{{"control_epoch", status.at("result").at("control_epoch")},
+      {"command_id", uuid(10512)}, {"expected_control_sequence", "0"},
+      {"intent", {{"kind", "pad_mute"}, {"slot", 4}, {"enabled", true}}}};
+  const auto accepted = runtime->dispatch("performance.live.control", control, {});
+  check_success(accepted);
+  LMDJ_CHECK(accepted.at("result").at("control_sequence") == "1");
+  static_cast<void>(render_grid_frames(runtime->engine(), 128));
+  const auto retried = runtime->dispatch("performance.live.control", control, {});
+  check_success(retried);
+  LMDJ_CHECK(retried.at("result").at("replayed") == true);
+  LMDJ_CHECK(retried.at("result").at("applied") == true);
+  const auto applied = runtime->dispatch("performance.live.status", Json::object(), {});
+  check_success(applied);
+  LMDJ_CHECK(applied.at("result").at("applied_control_sequence") == "1");
+  LMDJ_CHECK(storage->complete_reads() == before_live);
+  LMDJ_CHECK(runtime->dispatch("project.inspect", Json::object(), {}).at("result").at("project") == truth);
+}
 
 void test_bridge_retains_original_legacy_rpc_until_exact_candidate_is_durable(
     bool expire_then_reuse = false) {
@@ -15002,6 +15051,7 @@ int main(int argc, char** argv) {
     test_known_deadline_failed_count_in_consumes_only_after_real_stop_and_all_owners_settle();
     test_exceptional_count_in_receipt_requires_owner_and_caller_ack();
     test_normal_count_in_close_consumption_precedes_retirement();
+    test_host_live_status_and_control_reuse_verified_writer_identity();
     test_bridge_retains_original_legacy_rpc_until_exact_candidate_is_durable();
     test_bridge_retains_original_legacy_rpc_until_exact_candidate_is_durable(true);
     test_retained_asset_assignment_replaces_the_destination_pcm();

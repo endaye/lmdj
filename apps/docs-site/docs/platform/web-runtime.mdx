@@ -88,6 +88,18 @@ COUNT-IN UI 继续撤回，恢复与验收债仍在 #2394／#2395；consumer、�
 
 监听输出属于 Session/Host 状态，位于 master capture 下游。`monitorVolume()` 返回 0–100 的百分比，`setMonitorVolume(value)` 在未激活时先记录值，创建音频图时先应用；运行中用 20 ms ramp 调整线性 gain。`monitorDestination()` 在图未建立或会话终止时返回 `null`，其余时候返回同一监听节点，供 Host 的非录制声音接入。正常 master tap、tap 初始化失败和 processorerror 恢复路径均经过这个节点。录制批次、Project Truth、authoring history 与导出电平不受监听音量影响；关闭时断开节点并拒绝后续设置。设备记忆由 Host 实现。
 
+## Live control 的身份准备
+
+Project create/open 在长轮次内通过 Facade 完整验证并准备当前 writer lease 的
+Project 身份。后续 `performance.live.status` / `performance.live.control` 通过
+该 opaque lease 进入原 Facade dispatcher，不在每次实时控制时重放 Project 历史
+或重新验证全部 Asset。原 1 秒截止时间、实际 Engine epoch、控制序号、精确重试、
+录音期排斥与命令 service 规则保留，wire operation 和 payload 不变。
+
+新身份只在 Core 验证成功后可用；Project 替换或关闭结束旧 lease 的作用域。
+这不把其它长查询或已有 service 宣称为无 I/O，也不代表历史 Host 超时、完整
+候选或物理音频验收已经完成。
+
 ## 可听 BPM 预览
 
 同一 Session 的 `patternTransport` namespace 提供

@@ -206,6 +206,8 @@ private:
 class PostWriteFailingStorage final
     : public lmdj::project_io::ProjectStoragePlatform {
 public:
+  mutable std::size_t complete_reads{};
+  bool reject_complete_reads{};
   PostWriteFailingStorage()
       : delegate_(lmdj::project_io::make_default_project_storage_platform()) {}
 
@@ -235,6 +237,11 @@ public:
   }
   lmdj::foundation::Result<std::vector<std::byte>>
   read_complete(const std::filesystem::path &path) const override {
+    ++complete_reads;
+    if (reject_complete_reads) {
+      return lmdj::foundation::Result<std::vector<std::byte>>::failure({
+          lmdj::foundation::ErrorCode::io_error, "injected complete-read failure"});
+    }
     if (journal_read_armed_ &&
         path.generic_string().find("performance.jsonl") !=
             std::string::npos) {
@@ -3307,10 +3314,153 @@ void test_live_control_reserve_and_publish_failures_advance_nothing() {
              (std::uint64_t{1} << 3));
 }
 
+struct PreparedLiveFixture : HeaderedFixture {
+  explicit PreparedLiveFixture(bool prepare = true)
+      : PreparedLiveFixture(std::make_shared<PostWriteFailingStorage>(), prepare) {}
+
+  PreparedLiveFixture(std::shared_ptr<PostWriteFailingStorage> platform, bool prepare)
+      : HeaderedFixture(platform), storage(std::move(platform)) {
+    create_project();
+    auto acquired = application->acquire_project_writer(bundle());
+    LMDJ_CHECK(acquired.has_value());
+    lease.emplace(std::move(acquired.value()));
+    if (prepare) LMDJ_CHECK(application->prepare_performance_live_target(*lease).has_value());
+  }
+
+  nlohmann::json status_request() const {
+    return {{"operation", "performance.live.status"},
+            {"project_path", bundle().generic_string()}};
+  }
+  nlohmann::json control_request() const {
+    return {{"operation", "performance.live.control"},
+            {"project_path", bundle().generic_string()},
+            {"control_epoch", std::string(FakeLiveControl::kEpoch)},
+            {"command_id", "10000000-0000-4000-8000-000000000950"},
+            {"expected_control_sequence", "0"},
+            {"intent", {{"kind", "pad_mute"}, {"slot", 4}, {"enabled", true}}}};
+  }
+
+  std::shared_ptr<PostWriteFailingStorage> storage;
+  std::optional<lmdj::facade::RuntimeProjectWriterLease> lease;
+};
+
+void test_prepared_live_status_avoids_reloading_project_identity() {
+  PreparedLiveFixture fixture;
+  const auto before_legacy = fixture.storage->complete_reads;
+  check_ok(fixture.application->query(fixture.status_request()));
+  // Positive control: the same counter sees the original complete load.
+  LMDJ_CHECK(fixture.storage->complete_reads > before_legacy);
+  const auto before = fixture.storage->complete_reads;
+  const auto status = fixture.application->dispatch_performance_live(
+      *fixture.lease, fixture.status_request());
+  check_ok(status);
+  LMDJ_CHECK(status.at("result").at("available") == true);
+  LMDJ_CHECK(status.at("result").at("control_epoch") == std::string(FakeLiveControl::kEpoch));
+  LMDJ_CHECK(fixture.storage->complete_reads == before);
+}
+
+void test_prepared_live_control_and_exact_retry_do_not_reload_identity() {
+  PreparedLiveFixture fixture;
+  const auto before = fixture.storage->complete_reads;
+  const auto first = fixture.application->dispatch_performance_live(
+      *fixture.lease, fixture.control_request());
+  check_ok(first);
+  LMDJ_CHECK(first.at("result").at("control_sequence") == "1");
+  LMDJ_CHECK(fixture.live->accepted().state.muted_mask == (std::uint64_t{1} << 4));
+  const auto retry = fixture.application->dispatch_performance_live(
+      *fixture.lease, fixture.control_request());
+  check_ok(retry);
+  LMDJ_CHECK(retry.at("result").at("replayed") == true);
+  LMDJ_CHECK(fixture.live->publish_calls() == 1);
+  LMDJ_CHECK(fixture.storage->complete_reads == before);
+}
+
+void test_prepared_live_target_requires_a_live_prepared_lease() {
+  PreparedLiveFixture fixture(false);
+  const auto before = fixture.storage->complete_reads;
+  LMDJ_CHECK(!fixture.application->dispatch_performance_live(
+      *fixture.lease, fixture.status_request()).at("ok").get<bool>());
+  LMDJ_CHECK(fixture.storage->complete_reads == before);
+  LMDJ_CHECK(fixture.application->prepare_performance_live_target(*fixture.lease).has_value());
+  auto moved = std::move(*fixture.lease);
+  LMDJ_CHECK(!fixture.application->dispatch_performance_live(
+      *fixture.lease, fixture.status_request()).at("ok").get<bool>());
+  check_ok(fixture.application->dispatch_performance_live(moved, fixture.status_request()));
+}
+
+void test_prepared_live_target_cannot_cross_application_or_project_path() {
+  PreparedLiveFixture fixture;
+  HeaderedFixture foreign;
+  const auto before = fixture.storage->complete_reads;
+  LMDJ_CHECK(!foreign.application->prepare_performance_live_target(*fixture.lease).has_value());
+  LMDJ_CHECK(!foreign.application->dispatch_performance_live(
+      *fixture.lease, fixture.control_request()).at("ok").get<bool>());
+  auto wrong_path = fixture.control_request();
+  wrong_path["project_path"] = (fixture.temp.path() / "foreign.lmdj").generic_string();
+  LMDJ_CHECK(!fixture.application->dispatch_performance_live(
+      *fixture.lease, wrong_path).at("ok").get<bool>());
+  LMDJ_CHECK(fixture.live->publish_calls() == 0);
+  LMDJ_CHECK(fixture.storage->complete_reads == before);
+  // An invalid foreign request cannot revoke the real owner's authority.
+  check_ok(fixture.application->dispatch_performance_live(*fixture.lease, fixture.control_request()));
+}
+
+void test_failed_live_target_preparation_retires_previous_identity() {
+  PreparedLiveFixture fixture;
+  fixture.storage->reject_complete_reads = true;
+  LMDJ_CHECK(!fixture.application->prepare_performance_live_target(*fixture.lease).has_value());
+  const auto before = fixture.storage->complete_reads;
+  LMDJ_CHECK(!fixture.application->dispatch_performance_live(
+      *fixture.lease, fixture.control_request()).at("ok").get<bool>());
+  LMDJ_CHECK(fixture.live->publish_calls() == 0);
+  LMDJ_CHECK(fixture.storage->complete_reads == before);
+  fixture.storage->reject_complete_reads = false;
+  LMDJ_CHECK(fixture.application->prepare_performance_live_target(*fixture.lease).has_value());
+  check_ok(fixture.application->dispatch_performance_live(*fixture.lease, fixture.control_request()));
+}
+
+void test_prepared_live_target_still_refuses_a_stale_engine_epoch() {
+  PreparedLiveFixture fixture;
+  auto request = fixture.control_request();
+  request["control_epoch"] = "10000000-0000-4000-8000-000000000999";
+  const auto refused = fixture.application->dispatch_performance_live(*fixture.lease, request);
+  LMDJ_CHECK(!refused.at("ok").get<bool>());
+  LMDJ_CHECK(refused.at("error").at("details").at("reason") == "performance_control_epoch_stale");
+  LMDJ_CHECK(fixture.live->publish_calls() == 0);
+}
+
+void test_prepared_live_target_cannot_forward_an_unrelated_operation() {
+  PreparedLiveFixture fixture;
+  auto request = fixture.status_request();
+  request["operation"] = "project.inspect";
+  const auto before = fixture.storage->complete_reads;
+  const auto refused = fixture.application->dispatch_performance_live(*fixture.lease, request);
+  LMDJ_CHECK(!refused.at("ok").get<bool>());
+  LMDJ_CHECK(fixture.storage->complete_reads == before);
+}
+
+void test_prepared_live_target_keeps_the_headered_recording_route_exclusive() {
+  PreparedLiveFixture fixture;
+  check_ok(fixture.begin_headered());
+  const auto refused = fixture.application->dispatch_performance_live(
+      *fixture.lease, fixture.control_request());
+  LMDJ_CHECK(!refused.at("ok").get<bool>());
+  LMDJ_CHECK(refused.at("error").at("details").at("reason") == "performance_recording_route_required");
+  LMDJ_CHECK(fixture.live->publish_calls() == 0);
+}
+
 } // namespace
 
 int main() {
   try {
+    test_prepared_live_status_avoids_reloading_project_identity();
+    test_prepared_live_control_and_exact_retry_do_not_reload_identity();
+    test_prepared_live_target_requires_a_live_prepared_lease();
+    test_prepared_live_target_cannot_cross_application_or_project_path();
+    test_failed_live_target_preparation_retires_previous_identity();
+    test_prepared_live_target_still_refuses_a_stale_engine_epoch();
+    test_prepared_live_target_cannot_forward_an_unrelated_operation();
+    test_prepared_live_target_keeps_the_headered_recording_route_exclusive();
     test_status_is_read_only_and_explicit_service_is_exactly_once();
     test_launch_service_retries_without_loss_or_duplicate_events();
     test_ambiguous_launch_service_freezes_without_consuming_outcome();

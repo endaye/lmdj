@@ -2328,10 +2328,15 @@ foundation::Result<std::vector<domain::PatternEvent>> canonical_recovery_events(
 }  // namespace
 
 struct RuntimeProjectWriterLease::Impl {
-  explicit Impl(std::unique_ptr<project_io::ProjectWriterLease> owned)
-      : owned(std::move(owned)) {}
+  Impl(std::unique_ptr<project_io::ProjectWriterLease> owned,
+       std::filesystem::path path,
+       std::shared_ptr<const std::uint8_t> issuer)
+      : owned(std::move(owned)), path(std::move(path)), issuer(std::move(issuer)) {}
 
   std::unique_ptr<project_io::ProjectWriterLease> owned;
+  const std::filesystem::path path;
+  const std::shared_ptr<const std::uint8_t> issuer;
+  std::optional<foundation::ProjectId> live_project_id;
 };
 
 struct Application::Impl {
@@ -4184,7 +4189,8 @@ struct Application::Impl {
 
   nlohmann::json dispatch(
       const nlohmann::json& request,
-      OperationKind requested_kind) {
+      OperationKind requested_kind,
+      const foundation::ProjectId* verified_live_project = nullptr) {
     require(request.is_object(), "request must be an object");
     require(all_strings_valid(request), "request contains invalid UTF-8");
     require(request.contains("operation"), "operation is required");
@@ -4242,7 +4248,7 @@ struct Application::Impl {
       return performance_fx_gesture(request);
     }
     if (operation == "performance.live.control") {
-      return performance_live_control_command(request);
+      return performance_live_control_command(request, verified_live_project);
     }
     if (operation == "performance.record.launch-request") {
       return performance_launch_request(request);
@@ -4377,7 +4383,7 @@ struct Application::Impl {
       return performance_status(request);
     }
     if (operation == "performance.live.status") {
-      return performance_live_status(request);
+      return performance_live_status(request, verified_live_project);
     }
     if (operation == "performance.replay.status") {
       return performance_replay_status(request);
@@ -6782,19 +6788,25 @@ struct Application::Impl {
   // zero state change, zero enqueue.
   foundation::Result<std::string> verified_live_epoch(
       const std::filesystem::path &path,
-      const std::optional<std::string> &requested_epoch) {
+      const std::optional<std::string> &requested_epoch,
+      const foundation::ProjectId *verified_project_id = nullptr) {
     if (!performance_live_control) {
       return foundation::Result<std::string>::failure(sequence_error(
           ErrorCode::invalid_argument,
           "Performance live control audio producer is unavailable",
           {{"reason", "performance_live_control_unavailable"}}));
     }
-    auto loaded = projects.load(path);
-    if (!loaded.has_value()) {
-      return foundation::Result<std::string>::failure(loaded.error());
+    std::optional<foundation::ProjectId> loaded_id;
+    if (verified_project_id == nullptr) {
+      auto loaded = projects.load(path);
+      if (!loaded.has_value()) {
+        return foundation::Result<std::string>::failure(loaded.error());
+      }
+      loaded_id = loaded.value().id;
+      verified_project_id = &*loaded_id;
     }
-    auto epoch =
-        performance_live_control->bind_control_target(loaded.value().id.value());
+    auto epoch = performance_live_control->bind_control_target(
+        verified_project_id->value());
     if (!epoch.has_value()) {
       return foundation::Result<std::string>::failure(epoch.error());
     }
@@ -9463,7 +9475,9 @@ struct Application::Impl {
   // (epoch, expected_control_sequence, command_id), one inflight plus the
   // most recent completed in memory. Shares the recording route's admission
   // kernel and queue reservation.
-  nlohmann::json performance_live_control_command(const nlohmann::json &request) {
+  nlohmann::json performance_live_control_command(
+      const nlohmann::json &request,
+      const foundation::ProjectId *verified_project_id = nullptr) {
     require(exact_keys(request, {"operation", "project_path", "control_epoch",
                                  "command_id", "expected_control_sequence",
                                  "intent"}),
@@ -9488,7 +9502,7 @@ struct Application::Impl {
           "use the recording route",
           "performance_recording_route_required");
     }
-    const auto epoch = verified_live_epoch(path, control_epoch);
+    const auto epoch = verified_live_epoch(path, control_epoch, verified_project_id);
     if (!epoch.has_value()) {
       return error_envelope(epoch.error());
     }
@@ -9559,7 +9573,9 @@ struct Application::Impl {
 
   // D0/P1 live status: the Core epoch, accepted and applied state, and the
   // control sequences. Unavailable never reports a fake neutral state.
-  nlohmann::json performance_live_status(const nlohmann::json &request) {
+  nlohmann::json performance_live_status(
+      const nlohmann::json &request,
+      const foundation::ProjectId *verified_project_id = nullptr) {
     require(exact_keys(request, {"operation", "project_path"}),
             "performance.live.status request shape is invalid");
     const auto path = absolute_path_field(request, "project_path");
@@ -9576,7 +9592,7 @@ struct Application::Impl {
            {"begin_pending", false}},
           std::nullopt);
     }
-    const auto epoch = verified_live_epoch(path, std::nullopt);
+    const auto epoch = verified_live_epoch(path, std::nullopt, verified_project_id);
     if (!epoch.has_value()) {
       return error_envelope(epoch.error());
     }
@@ -11868,6 +11884,8 @@ struct Application::Impl {
   std::filesystem::path workspace_root;
   std::shared_ptr<provider::Registry> registry;
   std::shared_ptr<project_io::ProjectStoragePlatform> storage_platform;
+  const std::shared_ptr<const std::uint8_t> writer_lease_issuer =
+      std::make_shared<const std::uint8_t>(0);
   std::shared_ptr<PerformanceClock> performance_clock;
   std::shared_ptr<PerformanceInputSequencer> performance_input_sequencer;
   std::shared_ptr<PatternLaunchAcknowledger> pattern_launch_acknowledger;
@@ -12254,13 +12272,66 @@ Application::acquire_project_writer(
     return foundation::Result<RuntimeProjectWriterLease>::success(
         RuntimeProjectWriterLease{
             std::make_unique<RuntimeProjectWriterLease::Impl>(
-                std::move(acquired.value()))});
+                std::move(acquired.value()), project_path.lexically_normal(),
+                impl_->writer_lease_issuer)});
   } catch (...) {
     return foundation::Result<RuntimeProjectWriterLease>::failure(
         Error{
             ErrorCode::internal_error,
             "unexpected Application Facade Host API failure",
         });
+  }
+}
+
+foundation::Result<void> Application::prepare_performance_live_target(
+    RuntimeProjectWriterLease& lease) {
+  try {
+    if (!lease.impl_ || !lease.impl_->owned ||
+        lease.impl_->issuer != impl_->writer_lease_issuer) {
+      return foundation::Result<void>::failure(
+          Error{ErrorCode::invalid_argument, "Project writer lease is not owned by this Application"});
+    }
+    lease.impl_->live_project_id.reset();
+    testing::invoke_api_entry_hook();
+    const auto loaded = impl_->projects.load(lease.impl_->path);
+    if (!loaded.has_value()) {
+      return foundation::Result<void>::failure(loaded.error());
+    }
+    lease.impl_->live_project_id = loaded.value().id;
+    return foundation::Result<void>::success();
+  } catch (...) {
+    return foundation::Result<void>::failure(
+        Error{ErrorCode::internal_error, "Performance live target preparation failed"});
+  }
+}
+
+nlohmann::json Application::dispatch_performance_live(
+    const RuntimeProjectWriterLease& lease, const nlohmann::json& request) {
+  try {
+    testing::invoke_api_entry_hook();
+    require(lease.impl_ && lease.impl_->owned &&
+                lease.impl_->issuer == impl_->writer_lease_issuer &&
+                lease.impl_->live_project_id.has_value(),
+            "Prepare an owned Project writer lease before live dispatch");
+    require(absolute_path_field(request, "project_path").lexically_normal() ==
+                lease.impl_->path,
+            "Live dispatch Project path does not match the writer lease");
+    const auto operation = string_field(request, "operation");
+    require(operation == "performance.live.status" ||
+                operation == "performance.live.control",
+            "Prepared live dispatch accepts only live status and control");
+    if (operation == "performance.live.status") {
+      return impl_->dispatch(request, OperationKind::query,
+                             &*lease.impl_->live_project_id);
+    }
+    auto serviced = impl_->service_performance();
+    if (!serviced.has_value()) return error_envelope(serviced.error());
+    return impl_->dispatch(request, OperationKind::command,
+                           &*lease.impl_->live_project_id);
+  } catch (const InvalidRequest& error) {
+    return error_envelope(Error{ErrorCode::invalid_argument, error.what()});
+  } catch (...) {
+    return internal_error();
   }
 }
 
