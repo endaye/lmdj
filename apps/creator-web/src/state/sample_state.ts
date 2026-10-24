@@ -2,6 +2,7 @@ import {
   PUBLIC_ERROR_CODES,
   SAMPLE_PREVIEW_FAILURE,
   sampleMessage,
+  sampleSnapshotMessage,
 } from "./error_messages";
 import type {
   PadEq,
@@ -741,7 +742,7 @@ export function normalizeSampleSnapshotError(
   }
   return Object.freeze({
     code: value.code,
-    message: sampleMessage(value.code).message,
+    message: sampleSnapshotMessage(value.code).message,
     details: normalizeQuotaDetails(value.code, value.details),
   });
 }

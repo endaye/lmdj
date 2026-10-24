@@ -248,6 +248,11 @@ export const SAMPLE_PREVIEW_FAILURE: UserMessage = Object.freeze({
   nextStep: "Play a Pad to start audio, then preview again.",
 });
 
+export const SAMPLE_SAVED_PREPARATION_FAILURE: UserMessage = Object.freeze({
+  message: "The sound was saved, but Creator could not prepare it for playback.",
+  nextStep: "Details are in Developer diagnostics in System.",
+});
+
 export function sampleMessage(code: string, details: Details = {}): UserMessage {
   if (code === "IO_ERROR") {
     return Object.freeze({
@@ -262,6 +267,12 @@ export function sampleMessage(code: string, details: Details = {}): UserMessage 
     : SAMPLE_MESSAGES.INTERNAL_ERROR!;
 }
 
+// A snapshot error describes preparation of already-saved Truth. An ordinary
+// operation failure does not establish that its mutation was saved.
+export function sampleSnapshotMessage(code: string): UserMessage {
+  return code === "IO_ERROR" ? SAMPLE_SAVED_PREPARATION_FAILURE : sampleMessage(code);
+}
+
 // The next step shown under a Sample failure, keyed by what the state holds.
 export function sampleNextStep(failure: Readonly<{
   code: string;
@@ -269,6 +280,9 @@ export function sampleNextStep(failure: Readonly<{
   details?: Details;
 }>): string {
   if (failure.message === SAMPLE_PREVIEW_FAILURE.message) return SAMPLE_PREVIEW_FAILURE.nextStep;
+  if (failure.message === SAMPLE_SAVED_PREPARATION_FAILURE.message) {
+    return SAMPLE_SAVED_PREPARATION_FAILURE.nextStep;
+  }
   return sampleMessage(failure.code, failure.details ?? {}).nextStep;
 }
 
