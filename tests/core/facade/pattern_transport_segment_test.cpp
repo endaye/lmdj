@@ -511,7 +511,61 @@ void crash_child(const std::filesystem::path& root, const std::string& operation
   LMDJ_CHECK(false);
 }
 
+struct ChildTermination { bool expected_stop; int status; int observed_stop_signal; };
+
+ChildTermination collect_child(pid_t child) {
+  int status = 0;
+  pid_t observed = 0;
+  const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds{5};
+  while (observed == 0 && std::chrono::steady_clock::now() < deadline) {
+    observed = ::waitpid(child, &status, WUNTRACED | WNOHANG);
+    if (observed < 0 && errno == EINTR) observed = 0;
+    if (observed == 0) std::this_thread::sleep_for(std::chrono::milliseconds{1});
+  }
+  const bool was_stopped = observed == child && WIFSTOPPED(status);
+  const auto stop_signal = was_stopped ? WSTOPSIG(status) : 0;
+  const bool stopped = stop_signal == SIGSTOP;
+  // Clean every stopped child, including an unexpected stop signal, before
+  // asserting the barrier. A returned exit/signal status already reaped the
+  // child; never kill that PID again after it could have been reused.
+  if (observed == 0 || was_stopped) {
+    LMDJ_CHECK(::kill(child, SIGKILL) == 0);
+    pid_t reaped;
+    do { reaped = ::waitpid(child, &status, 0); } while (reaped < 0 && errno == EINTR);
+    LMDJ_CHECK(reaped == child);
+  }
+  return {stopped, status, stop_signal};
+}
+
+void failed_barrier_children_are_already_reaped() {
+  for (const auto* mode : {"stop", "exit", "signal"}) {
+    const auto child = test::process::spawn({"--cleanup-child", mode});
+    const auto result = collect_child(child);
+    int status = 0;
+    errno = 0;
+    const auto second_wait = ::waitpid(child, &status, WNOHANG);
+    const bool already_reaped = second_wait < 0 && errno == ECHILD;
+    // The red unexpected-stop probe must clean up its own observed leak
+    // before asserting; it must never leave a paused child behind.
+    if (second_wait == 0) {
+      LMDJ_CHECK(::kill(child, SIGKILL) == 0);
+      pid_t reaped;
+      do { reaped = ::waitpid(child, &status, 0); } while (reaped < 0 && errno == EINTR);
+      LMDJ_CHECK(reaped == child);
+    }
+    LMDJ_CHECK(already_reaped);
+    LMDJ_CHECK(!result.expected_stop);
+    LMDJ_CHECK(result.observed_stop_signal == (std::string_view(mode) == "stop" ? SIGTSTP : 0));
+    if (std::string_view(mode) == "exit")
+      LMDJ_CHECK(WIFEXITED(result.status) && WEXITSTATUS(result.status) == 17);
+    else LMDJ_CHECK(WIFSIGNALED(result.status) &&
+        WTERMSIG(result.status) == (std::string_view(mode) == "stop" ? SIGKILL : SIGTERM));
+    std::cout << "failed barrier child cleanup " << mode << ": PASS\n";
+  }
+}
+
 void cold_recovery_after_real_process_death() {
+  failed_barrier_children_are_already_reaped();
   std::size_t completed = 0;
   for (const auto& c : crash_cases) for (bool after : {false, true}) {
     struct OwnedDirectory {
@@ -523,23 +577,8 @@ void cold_recovery_after_real_process_death() {
     LMDJ_CHECK(std::filesystem::create_directory(owned.path));
     const auto child = test::process::spawn({"--crash-step", owned.path.string(),
         c.operation, c.kind, after ? "after" : "before"});
-    int status = 0;
-    pid_t observed = 0;
-    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds{5};
-    while (observed == 0 && std::chrono::steady_clock::now() < deadline) {
-      observed = ::waitpid(child, &status, WUNTRACED | WNOHANG);
-      if (observed < 0 && errno == EINTR) observed = 0;
-      if (observed == 0) std::this_thread::sleep_for(std::chrono::milliseconds{1});
-    }
-    const bool stopped = observed == child && WIFSTOPPED(status) && WSTOPSIG(status) == SIGSTOP;
-    // Reap before asserting so a failed precondition cannot strand a child.
-    if (observed == 0 || stopped) {
-      LMDJ_CHECK(::kill(child, SIGKILL) == 0);
-      pid_t reaped;
-      do { reaped = ::waitpid(child, &status, 0); } while (reaped < 0 && errno == EINTR);
-      LMDJ_CHECK(reaped == child);
-    }
-    LMDJ_CHECK(stopped && WIFSIGNALED(status) && WTERMSIG(status) == SIGKILL);
+    const auto result = collect_child(child);
+    LMDJ_CHECK(result.expected_stop && WIFSIGNALED(result.status) && WTERMSIG(result.status) == SIGKILL);
     const std::string label = std::string(c.operation) + ":" + c.kind + (after ? ":after" : ":before");
     std::ifstream marker(owned.path / "crash-barrier");
     LMDJ_CHECK(std::string(std::istreambuf_iterator<char>{marker}, {}) == label);
@@ -608,6 +647,20 @@ void cold_recovery_after_real_process_death() {
 int main(int argc, char** argv) {
   try {
     lmdj::test::process::initialize(argv[0]);
+    if (argc == 3 && std::string_view(argv[1]) == "--cleanup-child") {
+      const std::string_view mode{argv[2]};
+      if (mode == "stop") {
+        // A separate group with a parent in the same session is not an
+        // orphaned job-control group, so SIGTSTP really stops this child.
+        LMDJ_CHECK(::setpgid(0, 0) == 0);
+        std::raise(SIGTSTP);
+        return 2;
+      }
+      if (mode == "exit") return 17;
+      LMDJ_CHECK(mode == "signal");
+      std::raise(SIGTERM);
+      return 3;
+    }
     if (argc == 6 && std::string_view(argv[1]) == "--crash-step") {
       crash_child(argv[2], argv[3], argv[4], std::string_view(argv[5]) == "after");
       return 1;

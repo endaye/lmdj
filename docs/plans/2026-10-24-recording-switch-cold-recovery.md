@@ -115,6 +115,36 @@ ran. Final clean-head nine-case official proof remains required before shipping.
 Documentation impact: none. No Portal behavior, identity, diagram or documented
 source fact changes. The test plan is not a Portal page or candidate snapshot.
 
+## Review follow-up Task
+
+The initial source `32fba2f04d162a7ddccd12b400d81a3743f955c2` passed the full
+clean-head nine-case OPFS proof (119.008s browser / 165.887s entrypoint), original
+component plus all 32 restart cases, bare union and the same complete Native
+ASan selection. Current main remains the original integration base. Independent
+DeepSeek review40079016032/1 has three findings; retain all of them.
+
+This separate atomic follow-up declares only this plan and the Native segment
+test. Fix cleanup of a child stopped by a signal other than the expected
+SIGSTOP. A waitpid result reporting a normal/signaled exit has already reaped
+that process and must not cause a second kill against a potentially reused PID.
+Extract the current collection/cleanup path without changing its predicate,
+then add actual unexpected-stop, early-exit and signaled-exit children. The
+unexpected-stop reduction must fail against that unchanged path; the reduction
+itself cleans up before asserting so a red proof cannot strand its child.
+
+After fixing the stopped-child predicate, all three precondition probes must
+prove ECHILD from a second wait, with the actual expected final status. Preserve
+the complete original component and 32 durability journeys, rerun their Native
+and ASan selections plus bare union, commit this follow-up without rewriting
+published history, and repeat the complete nine-case clean-head OPFS proof and
+current-head independent review. Version/Documentation impact remain none.
+
+The crashed-page helper finding is contradicted by its existing try/catch and
+returned unknown-cleanup object. The bare-union finding is contradicted by
+argc==1 calling both groups and the actual retained union run; separate CTest
+registrations deliberately select one group each. Record those dispositions on
+their threads rather than adding redundant catches or duplicate execution.
+
 ## Pitfall disposition
 
 Apply the existing declared-gap, whole-journey, real-side-effect, original
