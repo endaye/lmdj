@@ -29,6 +29,7 @@ import {
   creatorReducer,
   initialCreatorState,
 } from "../src/state/creator_state";
+import {sampleNextStep} from "../src/state/error_messages";
 
 const saved = Object.freeze({
   trimStartFrame: 10,
@@ -1180,6 +1181,47 @@ describe("Creator Sample state", () => {
         },
       })).toThrow();
     }
+  });
+
+  test("a committed Sample storage preparation error does not deny the confirmed save", () => {
+    const pending = beginSamplePending(inspectedState(), {
+      kind: "update", slot: 17, expectedRevision: 42,
+    });
+    const state = applySampleCommit(pending, pending.pendingAction,
+      {...inspect, projectRevision: 43}, {
+        committedRevision: 43, runtimeRevision: 42, runtimePublished: false,
+        snapshotError: {code: "IO_ERROR", message: "opaque storage preparation failure", details: {}},
+      });
+    expect(state.savedRevision).toBe(43);
+    expect(state.runtimeRevision).toBe(42);
+    expect(state.lastError?.message).toBe("The sound was saved, but Creator could not prepare it for playback.");
+    expect(state.lastError?.retryPrepare).toBe(false);
+    expect(sampleNextStep(state.lastError!)).toBe("Details are in Developer diagnostics in System.");
+  });
+
+  test("a retry-publication storage error keeps the known saved outcome", () => {
+    const mutation = beginSamplePending(inspectedState(), {
+      kind: "update", slot: 17, expectedRevision: 42,
+    });
+    const saved = applySampleCommit(mutation, mutation.pendingAction,
+      {...inspect, projectRevision: 43}, {
+        committedRevision: 43, runtimeRevision: 42, runtimePublished: false,
+        snapshotError: {code: "COOK_FAILED", message: "prepare failed", details: {}},
+      });
+    const pending = beginSamplePending(saved, {
+      kind: "retry-prepare", slot: 17, expectedRevision: 43,
+    });
+    const state = applySampleRetryPublication(pending, pending.pendingAction, {
+      projectId: "22222222-2222-4222-8222-222222222222", projectRevision: 43,
+      patternId: "33333333-3333-4333-8333-333333333333", runtimeReady: false,
+      generation: null, runtimeRevision: 42,
+      snapshotError: {code: "IO_ERROR", message: "opaque storage preparation failure", details: {}},
+    });
+    expect(state.savedRevision).toBe(43);
+    expect(state.runtimeRevision).toBe(42);
+    expect(state.lastError?.message).toBe("The sound was saved, but Creator could not prepare it for playback.");
+    expect(state.lastError?.retryPrepare).toBe(false);
+    expect(sampleNextStep(state.lastError!)).toBe("Details are in Developer diagnostics in System.");
   });
 
   test("accepts only exact public snapshot details and stores fixed Creator messages", () => {

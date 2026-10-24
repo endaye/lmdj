@@ -1905,6 +1905,9 @@ function Workspace({
     try {
       const publication = await retryPrepareJourney(session, patternId);
       if (sampleRetryAction.current === token) {
+        if (publication.snapshotError?.code === "IO_ERROR") {
+          reportFailure("Retry Sample preparation", publication.snapshotError);
+        }
         dispatch({
           type: "sample-action",
           action: {type: "retry-published", pending, publication},

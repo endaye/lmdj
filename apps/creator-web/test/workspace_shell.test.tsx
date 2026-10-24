@@ -2658,7 +2658,8 @@ test("clears one owned Host preview when the Sample surface unmounts", async () 
   expect(clearCount).toBe(1);
 });
 
-test("shows saved and stale Runtime revisions and retries Prepare explicitly", async () => {
+test.each(["ready", "storage error"] as const)(
+  "shows saved and stale Runtime revisions and retries Prepare explicitly: %s", async outcome => {
   const fixture = mutableSampleRuntimeFixture();
   let updateCount = 0;
   let retryCount = 0;
@@ -2683,10 +2684,11 @@ test("shows saved and stale Runtime revisions and retries Prepare explicitly", a
       projectId: listedSummary.projectId,
       projectRevision: 4,
       patternId,
-      runtimeReady: true,
-      generation: 2,
-      snapshotError: null,
-      runtimeRevision: 4,
+      runtimeReady: outcome === "ready",
+      generation: outcome === "ready" ? 2 : null,
+      snapshotError: outcome === "ready" ? null
+        : {code: "IO_ERROR", message: "opaque retry preparation error", details: {}},
+      runtimeRevision: outcome === "ready" ? 4 : 3,
     };
   };
   render(<App initialState={ready} runtimeFactory={() => fixture.session} />);
@@ -2707,7 +2709,56 @@ test("shows saved and stale Runtime revisions and retries Prepare explicitly", a
   await waitFor(() => expect(screen.queryByText(
     "Saved at revision 4; Runtime is still revision 3",
   )).toBeNull());
+  if (outcome === "storage error") {
+    expect(screen.getByText("The sound was saved, but Creator could not prepare it for playback.")).toBeTruthy();
+    expect(screen.queryByRole("button", {name: "Retry Prepare"})).toBeNull();
+    await userEvent.click(screen.getByRole("button", {name: "System"}));
+    await userEvent.click(screen.getByText(/^Developer diagnostics \(\d+\)$/));
+    expect(within(screen.getByRole("region", {name: "Developer diagnostics"}))
+      .getByText("IO_ERROR")).toBeTruthy();
+    expect(updateCount).toBe(1);
+    expect(retryCount).toBe(1);
+    expect(fixture.revision).toBe(4);
+  }
 });
+
+test.each(["committed", "refused"] as const)(
+  "Sample storage error presentation preserves the %s save outcome", async (outcome) => {
+    const fixture = mutableSampleRuntimeFixture();
+    const update = vi.spyOn(fixture.session, "updatePad").mockImplementation(async request => {
+      if (outcome === "refused") throw Object.assign(new Error("storage failure"), {
+        code: "IO_ERROR", details: {},
+      });
+      fixture.playbacks.set(request.slot, Object.freeze({...request.playback}));
+      fixture.revision = 4;
+      return {committedRevision: 4, runtimeRevision: 3, runtimePublished: false,
+        snapshotError: {code: "IO_ERROR", message: "opaque preparation error", details: {}}};
+    });
+    const retry = vi.spyOn(fixture.session, "retryPrepare");
+    render(<App initialState={ready} runtimeFactory={() => fixture.session} />);
+    await waitFor(() => expect(fixture.calls).toContain("reloadSnapshot"));
+    await userEvent.click(screen.getByRole("button", {name: "Sample"}));
+    await expectSelectedAsset("33333333-3333-4333-8333-333333333333");
+    selectSamplePage("Playback");
+    await userEvent.click(screen.getByRole("button", {name: "Mute"}));
+    expect(await screen.findByText(outcome === "committed"
+      ? "The sound was saved, but Creator could not prepare it for playback."
+      : "Creator could not save the sound on this device.")).toBeTruthy();
+    if (outcome === "committed") expect(screen.getByText(
+      "Details are in Developer diagnostics in System.")).toBeTruthy();
+    expect(screen.queryByRole("button", {name: "Retry Prepare"})).toBeNull();
+    await userEvent.click(screen.getByRole("button", {name: "Project"}));
+    await waitFor(() => expect(revisionCell()?.textContent).toBe(outcome === "committed" ? "4" : "3"));
+    await flushAsyncTurns();
+    expect(update).toHaveBeenCalledTimes(1);
+    expect(retry).not.toHaveBeenCalled();
+    expect(fixture.inspectSample(0).playback.muted).toBe(outcome === "committed");
+    await userEvent.click(screen.getByRole("button", {name: "System"}));
+    await userEvent.click(screen.getByText(/^Developer diagnostics \(\d+\)$/));
+    expect(within(screen.getByRole("region", {name: "Developer diagnostics"}))
+      .getByText("IO_ERROR")).toBeTruthy();
+  },
+);
 
 test("gates Project actions while the Runtime is booting", async () => {
   let finishStart: ((started: boolean) => void) | undefined;
