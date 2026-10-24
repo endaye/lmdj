@@ -17,7 +17,7 @@ if (dirname(ownedRoot) !== expectedParent || !/^candidate\.[A-Za-z0-9]{6}$/.test
 }
 export default defineConfig({
   testDir: resolve(fixtureRoot, ".."),
-  testMatch: "creator_count_in_opfs.spec.mjs",
+  testMatch: ["creator_count_in_opfs.spec.mjs", "creator_recording_switch_opfs.spec.mjs"],
   fullyParallel: false,
   workers: 1,
   retries: 0,

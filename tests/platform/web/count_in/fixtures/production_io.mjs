@@ -154,6 +154,12 @@ export async function prepareProductionProject(page, {muted = false} = {}) {
   // This is the existing trusted Creator UI activation, using its existing SDK.
   await clickCreatorSystemAction(page, "Enable MIDI");
   await expect(page.getByTestId("audio-state")).toHaveText("Audio running", {timeout: 30_000});
+  const startup = await observeProductionStartup(page);
+  return {projectId, patternId, sessionId: await page.evaluate(() => crypto.randomUUID()),
+    baseline: await inspectTruth(page), startup};
+}
+
+async function observeProductionStartup(page) {
   const startup = await page.evaluate(async () => {
     const host = window.lmdjWebRuntimeHost;
     const session = host.session;
@@ -189,8 +195,16 @@ export async function prepareProductionProject(page, {muted = false} = {}) {
     sessionDescriptor: {writable: false, configurable: false}, gateExport: "function"});
   expect(startup.sha).toBe(startup.injectedSha);
   expect(startup.manifest.host_id).toBe("creator-web");
-  return {projectId, patternId, sessionId: await page.evaluate(() => crypto.randomUUID()),
-    baseline: await inspectTruth(page), startup};
+  return startup;
+}
+
+export async function rebindProductionProof(page) {
+  await page.evaluate(() => {
+    if (window.__creatorIoProof !== undefined)
+      throw new Error("why: proof rebind requires a fresh document; remedy: reload before binding a new Session anchor");
+  });
+  await installTrace(page);
+  return observeProductionStartup(page);
 }
 
 async function observeGate(page, action) {
