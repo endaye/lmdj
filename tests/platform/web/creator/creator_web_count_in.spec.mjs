@@ -1,3 +1,4 @@
+import {writeFile} from "node:fs/promises";
 import {expect, test} from "@playwright/test";
 import {decodeLegacyPatternTransportStatus} from
   "../../../../packages/web-runtime-platform/test/fixtures/legacy_pattern_transport_status.mjs";
@@ -21,13 +22,26 @@ test.beforeEach(async ({page, browserName}) => {
   await installCountInAudioObserver(page);
 });
 
-test.afterEach(async ({page}, testInfo) => {
+async function retainCountInRpcProof(page, testInfo) {
+  const name = "count-in-original-rpc-and-stall-proof";
+  if (testInfo.attachments.some(attachment => attachment.name === name)) return;
   // Keep original RPC identities, actual Native dispatch deadlines and stall
-  // intervals in the private test result even when the musical proof fails.
+  // intervals on disk even with the standard line reporter. A reopening case
+  // captures before the old window disappears; afterEach is the fallback.
   const proof = await page.evaluate(() => window.__countInRpcProof ?? null).catch(() => null);
-  if (proof !== null) await testInfo.attach("count-in-original-rpc-and-stall-proof", {
-    body: Buffer.from(JSON.stringify(proof, null, 2)), contentType: "application/json",
-  });
+  if (proof === null) return;
+  const path = testInfo.outputPath(`${name}.json`);
+  await writeFile(path, JSON.stringify(proof, null, 2));
+  await testInfo.attach(name, {path, contentType: "application/json"});
+}
+
+test.afterEach(async ({page}, testInfo) => {
+  await retainCountInRpcProof(page, testInfo);
+  if (testInfo.status === "passed") expect(testInfo.attachments
+    .filter(({name}) => name === "count-in-original-rpc-and-stall-proof")
+    .map(({path}) => typeof path === "string" && path.endsWith(".json")),
+  "Successful COUNT-IN journeys must retain one original RPC JSON file; save it before reopening and attach its path.")
+    .toEqual([true]);
 });
 
 async function inspectOrdinary(page, sessionId) {
@@ -188,7 +202,7 @@ for (const scenario of [
     });
 }
 
-test("winning packaged count-in cancellation has no origin and changes no Project bytes", async ({page}) => {
+test("winning packaged count-in cancellation has no origin and changes no Project bytes", async ({page}, testInfo) => {
   test.setTimeout(PROJECT_TRANSITION_TIMEOUT_MS + 10_000);
   const setup = await prepareCountInProject(page, 40, {silentPattern: true});
   await attachCountInPcmObserver(page);
@@ -224,13 +238,14 @@ test("winning packaged count-in cancellation has no origin and changes no Projec
   const pcm = await readCountInPcm(page);
   expect(pcm.planes[2].energy).toBeGreaterThan(0);
   expect(pcm.planes[0].energy).toBe(0);
+  await retainCountInRpcProof(page, testInfo);
   await page.reload();
   await waitForProjectReopen(page, "00000000", {timeout: PROJECT_TRANSITION_TIMEOUT_MS});
   expect(await countInProjectInventory(page, setup.projectId), "reopen retains the complete byte inventory")
     .toEqual(before);
 });
 
-test("packaged silent held input retains its real release duration through Record-off and reopen", async ({page}) => {
+test("packaged silent held input retains its real release duration through Record-off and reopen", async ({page}, testInfo) => {
   test.setTimeout(PROJECT_TRANSITION_TIMEOUT_MS + 20_000);
   const setup = await prepareCountInProject(page, 120, {silentPattern: true});
   await attachCountInPcmObserver(page);
@@ -291,13 +306,14 @@ test("packaged silent held input retains its real release duration through Recor
     const stopped = (await inspectOrdinary(page, setup.sessionId)).legacy;
     return stopped.phase === "idle" && !stopped.playing && !stopped.recording && stopped.error === null;
   }, {timeout: 1_000, intervals: [10]}).toBe(true);
+  await retainCountInRpcProof(page, testInfo);
   await page.reload();
   await waitForProjectReopen(page, "00000000", {timeout: PROJECT_TRANSITION_TIMEOUT_MS});
   expect((await sendCountInHost(page, "project.inspect", {})).project).toEqual(truth);
 });
 
 
-test("pre-S live Bank audio overlaps a forced cue without recording its later real release", async ({page}) => {
+test("pre-S live Bank audio overlaps a forced cue without recording its later real release", async ({page}, testInfo) => {
   test.setTimeout(PROJECT_TRANSITION_TIMEOUT_MS + 20_000);
   const setup = await prepareCountInProject(page, 40, {silentPattern: true});
   await attachCountInPcmObserver(page);
@@ -354,6 +370,7 @@ test("pre-S live Bank audio overlaps a forced cue without recording its later re
   // Only after real e2/F and durable owner settlement, install the same actual
   // captured PCM through the existing importer and public Performance path.
   const resampledTruth = await resampleCountInMasterCapture(page, setup, markers);
+  await retainCountInRpcProof(page, testInfo);
   await page.reload();
   await waitForProjectReopen(page, "00000000", {timeout: PROJECT_TRANSITION_TIMEOUT_MS});
   expect((await sendCountInHost(page, "project.inspect", {})).project).toEqual(resampledTruth);
