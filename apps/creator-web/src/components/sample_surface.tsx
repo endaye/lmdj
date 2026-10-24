@@ -689,7 +689,7 @@ export function SampleSurface({
     if (operationPending.current !== pending) return;
     operationPending.current = null;
     if (importPending.current === pending) importPending.current = null;
-    if (resolution.kind === "committed" && resolution.commit.snapshotError?.code === "IO_ERROR") {
+    if (resolution.kind === "committed" && resolution.commit.snapshotError !== null) {
       reportFailure("Prepare saved Sample", resolution.commit.snapshotError);
     }
     dispatch({
@@ -756,7 +756,7 @@ export function SampleSurface({
       });
       if (previewOwner.current?.session === session) previewOwner.current = null;
       if (pendingUpdate.current !== update) return;
-      if (resolution.kind === "committed" && resolution.commit.snapshotError?.code === "IO_ERROR") {
+      if (resolution.kind === "committed" && resolution.commit.snapshotError !== null) {
         reportFailure("Prepare saved Sample", resolution.commit.snapshotError);
       }
       update.result = {kind: "resolution", resolution};

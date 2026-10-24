@@ -2722,6 +2722,88 @@ test.each(["ready", "storage error"] as const)(
   }
 });
 
+test.each((["update", "reset", "import", "retry"] as const).flatMap(operation =>
+  (["IO_ERROR", "INVALID_PROJECT", "COOK_FAILED"] as const).map(code => ({operation, code}))),
+)("records accepted Sample preparation diagnostics once: $operation / $code", async ({operation, code}) => {
+  const fixture = mutableSampleRuntimeFixture();
+  const snapshotError = {code, message: "Original preparation failure",
+    details: {actual_revision: 4, expected_revision: 3}};
+  const expectedMessage = code === "IO_ERROR"
+    ? "The sound was saved, but Creator could not prepare it for playback."
+    : code === "INVALID_PROJECT" ? "This Project could not be read."
+      : "The sound was saved but is not ready to play yet.";
+  const commit = () => {
+    fixture.revision = 4;
+    return {committedRevision: 4, runtimeRevision: 3, runtimePublished: false,
+      snapshotError: operation === "retry"
+        ? {code: "COOK_FAILED", message: "Initial preparation failure", details: {}} : snapshotError};
+  };
+  const update = vi.spyOn(fixture.session, "updatePad").mockImplementation(async request => {
+    fixture.playbacks.set(request.slot, Object.freeze({...request.playback}));
+    return commit();
+  });
+  const reset = vi.spyOn(fixture.session, "resetPad").mockImplementation(async request => {
+    fixture.playbacks.set(request.slot, {...fixture.inspectSample(request.slot).playback,
+      triggerMode: "one_shot"});
+    return commit();
+  });
+  const importedAsset = "44444444-4444-4444-8444-444444444444";
+  const imported = vi.spyOn(fixture.session, "importAssignSample").mockImplementation(async (_file, options) => {
+    fixture.assigned.set(options.slot, importedAsset);
+    return commit();
+  });
+  const retry = vi.spyOn(fixture.session, "retryPrepare").mockImplementation(async patternId => ({
+    projectId: listedSummary.projectId, projectRevision: 4, patternId,
+    runtimeReady: false, generation: null, runtimeRevision: 3, snapshotError,
+  }));
+  const {container} = render(<App initialState={ready} runtimeFactory={() => fixture.session} />);
+  await waitFor(() => expect(fixture.calls).toContain("reloadSnapshot"));
+  await userEvent.click(screen.getByRole("button", {name: "Sample"}));
+  await expectSelectedAsset("33333333-3333-4333-8333-333333333333");
+  if (operation === "reset" || operation === "import") {
+    selectSamplePage("Pad");
+    if (operation === "reset") {
+      await userEvent.click(screen.getByRole("button", {name: "Reset Pad to Defaults"}));
+      await userEvent.click(screen.getByRole("button", {name: "Confirm reset"}));
+    } else {
+      await userEvent.click(screen.getByRole("button", {name: "Replace Sample"}));
+      await userEvent.upload(container.querySelector<HTMLInputElement>(".sample-file-input")!, wavFile("replace.wav"));
+      await userEvent.click(screen.getByRole("button", {name: "Confirm replace"}));
+      await commitLongSourceSelection();
+    }
+  } else {
+    selectSamplePage("Playback");
+    await userEvent.click(screen.getByRole("button", {name: "Mute"}));
+    if (operation === "retry") {
+      await userEvent.click(await screen.findByRole("button", {name: "Retry Prepare"}));
+    }
+  }
+  await waitFor(() => expect(fixture.revision).toBe(4));
+  await screen.findByText(expectedMessage);
+  await waitFor(() => expect(screen.queryByRole("button", {name: "Retry Prepare"}) !== null)
+    .toBe(code === "COOK_FAILED"));
+  const savedTruth = structuredClone(fixture.inspectProject());
+  const savedSample = structuredClone(fixture.inspectSample(0));
+  await userEvent.click(screen.getByRole("button", {name: "System"}));
+  await userEvent.click(screen.getByText(/^Developer diagnostics \(\d+\)$/));
+  const diagnostics = screen.getByRole("region", {name: "Developer diagnostics"});
+  const record = within(diagnostics).getByText(operation === "retry"
+    ? "Retry Sample preparation" : "Prepare saved Sample").closest("li")!;
+  expect(within(record).getByText(code, {exact: true})).toBeTruthy();
+  expect(within(record).getByText(expectedMessage, {exact: true})).toBeTruthy();
+  expect(JSON.parse(record.querySelector("pre")!.textContent!)).toEqual(snapshotError.details);
+  expect(within(diagnostics).getAllByRole("listitem")).toHaveLength(operation === "retry" ? 2 : 1);
+  await userEvent.click(screen.getByRole("button", {name: "Back to music"}));
+  await userEvent.click(screen.getByRole("button", {name: "Project"}));
+  await waitFor(() => expect(revisionCell()?.textContent).toBe("4"));
+  expect(fixture.inspectProject()).toEqual(savedTruth);
+  expect(fixture.inspectSample(0)).toEqual(savedSample);
+  expect(update).toHaveBeenCalledTimes(operation === "update" || operation === "retry" ? 1 : 0);
+  expect(reset).toHaveBeenCalledTimes(operation === "reset" ? 1 : 0);
+  expect(imported).toHaveBeenCalledTimes(operation === "import" ? 1 : 0);
+  expect(retry).toHaveBeenCalledTimes(operation === "retry" ? 1 : 0);
+});
+
 test.each(["committed", "refused"] as const)(
   "Sample storage error presentation preserves the %s save outcome", async (outcome) => {
     const fixture = mutableSampleRuntimeFixture();

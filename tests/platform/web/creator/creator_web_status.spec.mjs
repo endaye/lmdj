@@ -110,8 +110,8 @@ async function retainProof(testInfo, name, value) {
 // Consumer seam only: Native really commits and publishes the Pad update. Keep
 // that original receipt separately, then substitute a typed publication error
 // for Creator. This does not establish a Native storage error or stale audio.
-async function installSamplePublicationErrorProbe(page) {
-  await page.addInitScript(() => {
+async function installSamplePublicationErrorProbe(page, snapshotError) {
+  await page.addInitScript(snapshotError => {
     let exposed;
     const rows = [];
     let pending = false;
@@ -132,7 +132,7 @@ async function installSamplePublicationErrorProbe(page) {
               }
               consumed = {...response, result: {...response.result,
                 runtime_published: false, runtime_revision: request.payload.expected_revision,
-                snapshot_error: {code: "IO_ERROR", message: "Reduced publication storage error", details: {}}}};
+                snapshot_error: snapshotError}};
             }
             rows.push(structuredClone({request, original: response, consumed}));
             return consumed;
@@ -149,17 +149,19 @@ async function installSamplePublicationErrorProbe(page) {
       },
     });
     window.__sampleStatusProof = {arm() {pending = true;}, snapshot: () => rows};
-  });
+  }, snapshotError);
 }
 
-for (const viewport of [{width: 648, height: 364}, {width: 1440, height: 900}]) {
-  test(`saved Sample storage preparation error preserves the commit ${viewport.width}x${viewport.height}`, async ({page, browserName}, testInfo) => {
+for (const code of ["IO_ERROR", "INVALID_PROJECT"]) for (const viewport of [{width: 648, height: 364}, {width: 1440, height: 900}]) {
+  test(`saved Sample ${code === "IO_ERROR" ? "storage" : "project"} preparation error preserves the commit ${viewport.width}x${viewport.height}`, async ({page, browserName}, testInfo) => {
     test.skip(browserName !== "chromium");
     test.setTimeout(300_000);
     const errors = [];
     page.on("pageerror", error => errors.push(String(error.message)));
     await page.setViewportSize(viewport);
-    await installSamplePublicationErrorProbe(page);
+    const snapshotError = {code, message: code === "IO_ERROR"
+      ? "Reduced publication storage error" : "Reduced publication project error", details: {}};
+    await installSamplePublicationErrorProbe(page, snapshotError);
     await page.goto("/index.html");
     await openProjectPageAfterBoot(page);
     const chooser = page.waitForEvent("filechooser");
@@ -184,8 +186,12 @@ for (const viewport of [{width: 648, height: 364}, {width: 1440, height: 900}]) 
     await page.evaluate(() => window.__sampleStatusProof.arm());
     await page.getByRole("button", {name: "Mute", exact: true}).click();
     const alert = page.getByRole("alert");
-    await expect(alert).toContainText("The sound was saved, but Creator could not prepare it for playback.");
-    await expect(alert).toContainText("Details are in Developer diagnostics in System.");
+    const message = code === "IO_ERROR"
+      ? "The sound was saved, but Creator could not prepare it for playback."
+      : "This Project could not be read.";
+    await expect(alert).toContainText(message);
+    await expect(alert).toContainText(code === "IO_ERROR"
+      ? "Details are in Developer diagnostics in System." : "Reopen it from the Project library.");
     await expect(alert).not.toContainText("could not save the sound");
     await expect(page.getByRole("button", {name: "Retry Prepare", exact: true})).toHaveCount(0);
     const expected = structuredClone(before);
@@ -207,12 +213,16 @@ for (const viewport of [{width: 648, height: 364}, {width: 1440, height: 900}]) 
     await expect(system).toBeFocused();
     await page.keyboard.press("Enter");
     await page.getByText(/^Developer diagnostics \(\d+\)$/).click();
-    await expect(page.getByRole("region", {name: "Developer diagnostics"})).toContainText("IO_ERROR");
+    const record = page.getByRole("region", {name: "Developer diagnostics"})
+      .getByRole("listitem").filter({hasText: "Prepare saved Sample"});
+    await expect(record).toHaveCount(1);
+    await expect(record.locator("code")).toHaveText(code);
+    await expect(record.locator("pre")).toHaveText("{}");
     const screenshot = testInfo.outputPath("saved-sample-diagnostics.png");
     await page.screenshot({path: screenshot});
     await testInfo.attach("saved-sample-diagnostics", {path: screenshot, contentType: "image/png"});
     await page.getByRole("button", {name: "Back to music", exact: true}).click();
-    await expect(alert).toContainText("The sound was saved, but Creator could not prepare it for playback.");
+    await expect(alert).toContainText(message);
     expect(await truth(page)).toEqual(expected);
     const rows = await page.evaluate(() => window.__sampleStatusProof.snapshot());
     const mutations = rows.filter(row => row.request.operation === "sample.update_pad");
@@ -223,7 +233,7 @@ for (const viewport of [{width: 648, height: 364}, {width: 1440, height: 900}]) 
       runtime_revision: expected.revision, runtime_published: true});
     expect(mutations[0].consumed.result).toEqual({committed_revision: expected.revision,
       runtime_revision: before.revision, runtime_published: false,
-      snapshot_error: {code: "IO_ERROR", message: "Reduced publication storage error", details: {}}});
+      snapshot_error: snapshotError});
     expect(rows.some(row => row.request.operation === "snapshot.retry")).toBe(false);
     await page.reload();
     await waitForProjectReopen(page, "00000000");
@@ -234,7 +244,7 @@ for (const viewport of [{width: 648, height: 364}, {width: 1440, height: 900}]) 
     const reopenedInventory = await countInProjectInventory(page, before.project_id);
     expect(reopenedInventory).toEqual(committedInventory);
     expect(errors).toEqual([]);
-    await retainProof(testInfo, "saved-sample-preparation", {viewport, before, expected,
+    await retainProof(testInfo, "saved-sample-preparation", {viewport, code, snapshotError, before, expected,
       beforeSamples, expectedSamples, committedSamples, reopenedSamples,
       committedInventory, beforeInventory, reopened, reopenedInventory, rows});
   });
