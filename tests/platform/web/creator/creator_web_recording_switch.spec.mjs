@@ -3,7 +3,7 @@ import {expect, test} from "@playwright/test";
 import {waitForProjectReopen} from "./fixtures/creator_boot.mjs";
 import {createSequencePattern, sequencePattern, showSequenceLayer} from "./fixtures/creator_navigation.mjs";
 import {wakeAudioWithPad} from "./fixtures/creator_audio.mjs";
-import {prepareCountInProject, countInProjectInventory, sendCountInHost} from "./fixtures/count_in_helpers.mjs";
+import {prepareCountInProject, countInProjectInventory, readCountInJournal, sendCountInHost} from "./fixtures/count_in_helpers.mjs";
 import {pcm16Wav, PROJECT_TRANSITION_TIMEOUT_MS} from "./fixtures/perform_helpers.mjs";
 
 async function retainJson(testInfo, name, value) {
@@ -117,14 +117,18 @@ async function prepare(page) {
     .locator(`[data-pattern-choice="${setup.patternId}"]`).click();
   await expect(sequencePattern(page)).toHaveAttribute("data-pattern-id", setup.patternId);
   await showSequenceLayer(page, "SETUP");
-  // COUNT-IN remains withdrawn; ordinary recording uses the retained producer.
-  await expect(page.getByRole("group", {name: "Count-in"})).toHaveCount(0);
+  // COUNT-IN is restored; this ordinary-recording journey explicitly chooses
+  // Off. Its final trace must still contain no scheduled count-in request.
+  const countInOff = page.getByRole("group", {name: "Count-in", exact: true})
+    .getByRole("button", {name: "Count-in Off", exact: true});
+  await countInOff.click();
+  await expect(countInOff).toHaveAttribute("aria-pressed", "true");
   await page.getByRole("group", {name: "Sequence snap"}).getByRole("button", {name: "1 BAR", exact: true}).click();
   await showSequenceLayer(page, "EDIT");
   return {...setup, target, baseline: await truth(page), inventory: await countInProjectInventory(page, setup.projectId)};
 }
 
-async function waitInput(page, since, kind, authority, retained = true) {
+async function waitInput(page, setup, since, kind, authority, retained = true) {
   let completed;
   await expect.poll(async () => {
     const trace = await rows(page, "pattern.transport.input.request");
@@ -147,18 +151,35 @@ async function waitInput(page, since, kind, authority, retained = true) {
   expect(status.native_result.acceptance_ordinal).toBe(status.admission.acceptance_ordinal);
   expect(status.native_result.authority).toEqual(status.admission.authority);
   expect(status.native_result.disposition).toBe(kind === "press" ? "voice_started" : "release_applied");
-  return status.native_result;
+  const native = status.native_result;
+  if (!retained) return native;
+  // Recording retains the original Host ingress frame. Native completion is
+  // later queue consumption; crossing a callback can make those frames differ.
+  // Derive exact Truth independently from the checksum-verified Journal input,
+  // while preserving the genuine Native completion and correlation assertions.
+  const records = await readCountInJournal(page, setup);
+  const candidates = records.filter(record => record.kind === "admission-candidate" &&
+    record.data.kind === (kind === "press" ? "0" : "1") &&
+    record.data.press_sequence === (kind === "press" ? native.sequence : native.held_press_sequence));
+  expect(candidates, "one durable candidate for this Native input identity").toHaveLength(1);
+  const candidate = candidates[0];
+  expect(candidate.session_id).toBe(setup.sessionId);
+  expect(candidate.identity.runtime_generation).toBe(native.runtime_generation);
+  expect(candidate.data.slot).toEqual({bank: "0", pad: "0"});
+  expect(candidate.data.velocity).toBe(kind === "press" ? "100" : "0");
+  await retainJson(test.info(), `recorded-${kind}-${native.sequence}`, {native, candidate});
+  return {...native, recording_frame: candidate.data.runtime_frame};
 }
 
-async function press(page, authority) {
+async function press(page, setup, authority) {
   const since = (await rows(page, "pattern.transport.input.request")).length;
   await page.keyboard.down("KeyZ");
-  return waitInput(page, since, "press", authority);
+  return waitInput(page, setup, since, "press", authority);
 }
-async function release(page, pressed, retained = true) {
+async function release(page, setup, pressed, retained = true) {
   const since = (await rows(page, "pattern.transport.input.request")).length;
   await page.keyboard.up("KeyZ");
-  const released = await waitInput(page, since, "release", pressed.authority, retained);
+  const released = await waitInput(page, setup, since, "release", pressed.authority, retained);
   expect(released.held_press_sequence).toBe(pressed.sequence);
   expect(BigInt(released.acceptance_ordinal)).toBeGreaterThan(BigInt(pressed.acceptance_ordinal));
   return released;
@@ -219,9 +240,10 @@ async function applied(page, sessionId, target, queued) {
   return actual;
 }
 function eventFor(pressed, released, origin, bars, fallback = false) {
-  const attack = Math.floor((pressed.runtime_frame - origin) / 25);
-  const onset = attack % (bars * 3840);
-  const duration = fallback ? 240 : Math.max(1, Math.floor((released.runtime_frame - origin) / 25) - attack);
+  const attack = (BigInt(pressed.recording_frame) - BigInt(origin)) / 25n;
+  const onset = Number(attack % BigInt(bars * 3840));
+  const duration = fallback ? 240 : Math.max(1,
+    Number((BigInt(released.recording_frame) - BigInt(origin)) / 25n - attack));
   return {slot: {bank: 0, pad: 0}, onset_tick: onset,
     duration_tick: Math.min(duration, bars * 3840 - onset), velocity: 100};
 }
@@ -241,6 +263,7 @@ for (const terminalB of [false, true]) test(`Creator S3 immediate recording swit
       sessionId = requests.at(-1)?.request.payload.session_id;
       return typeof sessionId === "string";
     }).toBe(true);
+    setup.sessionId = sessionId;
     await expect(record(page)).toHaveClass(/is-active/, {timeout: 5_000});
     await expect(picker(page)).toBeEnabled({timeout: 5_000});
     const initial = await ordinary(page, sessionId);
@@ -251,7 +274,7 @@ for (const terminalB of [false, true]) test(`Creator S3 immediate recording swit
     // proves real Core admission.
     const authority = {recording: false, schedule_serial: null, transport_epoch: null};
     await earlyBar(page, sessionId, setup.patternId);
-    const first = await press(page, authority);
+    const first = await press(page, setup, authority);
     const firstSwitch = await switchByGesture(page, sessionId, setup.patternId, setup.target,
       () => choose(page, setup.target));
     expect(firstSwitch.response).toMatchObject({ok: true, result: {pattern_id: setup.target}});
@@ -264,7 +287,7 @@ for (const terminalB of [false, true]) test(`Creator S3 immediate recording swit
     await expect(sequencePattern(page)).toHaveAttribute("data-pattern-id", setup.target);
     // The old prefix is already durable: this matching late release consumes
     // its real physical owner, with retained=false rather than another event.
-    const oldRelease = await release(page, first, false);
+    const oldRelease = await release(page, setup, first, false);
     expect(oldRelease.runtime_frame).toBeGreaterThanOrEqual(currentB.origin_frame);
     expect(oldRelease.authority).toEqual(first.authority);
     const aSaved = await truth(page);
@@ -272,9 +295,9 @@ for (const terminalB of [false, true]) test(`Creator S3 immediate recording swit
     expect(aSaved.patterns[setup.patternId].events).toEqual([
       eventFor(first, oldRelease, initial.origin_frame, setup.baseline.patterns[setup.patternId].bars, true),
     ]);
-    const middle = await press(page, authority);
+    const middle = await press(page, setup, authority);
     await page.waitForTimeout(40);
-    const middleRelease = await release(page, middle);
+    const middleRelease = await release(page, setup, middle);
     expect(middle.runtime_frame).toBeGreaterThanOrEqual(currentB.origin_frame);
     // Ordinary Perform Launch joins the same global recording, not a second
     // Performance event journal. Its UI is a distinct consumer of the switch.
@@ -289,9 +312,9 @@ for (const terminalB of [false, true]) test(`Creator S3 immediate recording swit
     expect((await rows(page, "performance.record.launch-request")).length).toBe(0);
     await page.getByRole("button", {name: "Sequence", exact: true}).click();
     await expect(sequencePattern(page)).toHaveAttribute("data-pattern-id", setup.patternId);
-    const last = await press(page, authority);
+    const last = await press(page, setup, authority);
     await page.waitForTimeout(40);
-    const lastRelease = await release(page, last);
+    const lastRelease = await release(page, setup, last);
     const expected = structuredClone(setup.baseline);
     expected.revision += 3;
     expected.patterns[setup.target].events = [eventFor(middle, middleRelease, currentB.origin_frame, 1)];
