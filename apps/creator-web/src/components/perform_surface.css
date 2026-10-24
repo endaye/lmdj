@@ -97,6 +97,15 @@
 .hardware-workspace .perform-surface[data-page] .perform-pad-gate-summary { display: grid; gap: 8px; margin: 0; }
 .hardware-workspace .perform-surface[data-page] .perform-pad-gate-summary dd { margin: 4px 0 0; overflow-wrap: anywhere; }
 
+/* A short touch panel cannot reserve a sticky tab row and a full 44px
+   recovery action. Keep navigation and content in its one native scroller. */
+@media (orientation: landscape) and (min-width: 648px) and (min-height: 364px) and (max-height: 599px) {
+  .hardware-workspace .perform-surface[data-page] > .perform-page-nav { position: static; }
+  .hardware-workspace .hardware-console > [aria-label="Touch workspace"]:has(.perform-surface) {
+    scroll-padding-block-start: 0;
+  }
+}
+
 /* Perform-specific typography inside the common narrow console. */
 @media (max-width: 480px) and (orientation: portrait) {
   .hardware-workspace .perform-surface[data-page] .perform-live-faders .perform-fader { padding: 4px; }
