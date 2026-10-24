@@ -144,7 +144,9 @@ if(BUILD_TESTING)
   lmdj_target_warnings(lmdj_pattern_transport_segment_tests)
   lmdj_target_sanitizers(lmdj_pattern_transport_segment_tests)
   lmdj_add_test(NAME facade.pattern_transport_segment TIER component
-    COMMAND lmdj_pattern_transport_segment_tests)
+    COMMAND lmdj_pattern_transport_segment_tests --component)
+  lmdj_add_test(NAME facade.pattern_transport_segment_restart TIER component
+    COMMAND lmdj_pattern_transport_segment_tests --restart)
   add_executable(lmdj_pattern_transport_switch_tests
     "${CMAKE_SOURCE_DIR}/tests/core/facade/pattern_transport_switch_test.cpp")
   target_include_directories(lmdj_pattern_transport_switch_tests PRIVATE "${CMAKE_SOURCE_DIR}")

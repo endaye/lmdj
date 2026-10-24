@@ -380,3 +380,99 @@ for (const bars of [0, 1]) for (const intent of ["record", "play_stop"])
       expect(failures, "the real Runtime does not trap").toEqual([]);
     }
   });
+
+for (const bars of [0, 1])
+  test(`Creator ${bars ? "COUNT-IN" : "immediate"} cold renderer restart recovers the original Pattern after a held switch`, async ({page, context}, testInfo) => {
+    const report = {scope: "actual renderer crash and fresh OPFS recovery; conformance-only", bars};
+    let fresh;
+    await installNativeNodeWitness(page);
+    try {
+      const setup = report.setup = await prepare(page, bars);
+      const [a, b] = setup.patterns;
+      await record(page).click();
+      let start;
+      await expect.poll(async () => {
+        start = (await trace(page)).find(row => row.request.operation ===
+          (bars ? "pattern.transport.count-in.request" : "pattern.transport.request"));
+        return start?.response?.ok === true;
+      }, {timeout: 1_000, intervals: [10]}).toBe(true);
+      const sessionId = start.request.payload.session_id;
+      report.start = start;
+      await expect(record(page)).toHaveClass(/is-active/, {timeout: 5_000});
+      await expect(picker(page)).toBeEnabled({timeout: 5_000});
+      const initial = report.initial = await inspectCreator(page, sessionId);
+      await page.keyboard.down("KeyZ");
+      const source = report.source = await observedInput(page, "press", 0, value => value.consumed.length === 1);
+      expect(source.latest).toMatchObject({complete: true, retained: true, durable_settled: true, error: null,
+        native_result: {slot: 0, disposition: "voice_started"}});
+      const authority = bars ? {recording: true, schedule_serial: start.request.payload.schedule_serial,
+        transport_epoch: start.request.payload.expected_epoch}
+        : {recording: false, schedule_serial: null, transport_epoch: null};
+      expect(source.latest.native_result.authority).toEqual(authority);
+      expect(await gate(page, 4)).toBe(1);
+      const chosen = report.switch = await admitSwitchGesture(page, sessionId, a, b, () => choose(page, b));
+      expect(chosen.response).toMatchObject({ok: true, result: {pattern_id: b}});
+      const applied = report.applied = await current(page, sessionId, b);
+      expect(applied.status.originFrame).toBe(chosen.response.result.activation_frame);
+      expect(applied.status.transportEpoch).toBe(initial.status.transportEpoch);
+      await expect.poll(() => gate(page), {timeout: 1_000, intervals: [10]}).toBe(10);
+      const written = report.beforeCrash = await projectInventory(page, setup.projectId);
+      const records = checkedWholeJournal(written);
+      expect(records.at(-1)).toMatchObject({kind: "admission-switch", session_id: sessionId,
+        data: {pattern_id: b, frame: applied.status.originFrame}});
+      const expected = report.expected = structuredClone(setup.baseline);
+      expected.revision += 1;
+      expected.patterns[a].events = [heldEvent(records, source, 0, initial.status.originFrame)];
+      expect(await inspectTruth(page), "the held switch has not committed the source segment").toEqual(setup.baseline);
+      report.originalProof = await collectProof(page);
+
+      // Terminate the actual renderer with its I/O worker still in flush.
+      // Do not release the gate or replay the old controller's work request.
+      const cdp = await context.newCDPSession(page);
+      const crashed = page.waitForEvent("crash", {timeout: 5_000});
+      const crashCommand = cdp.send("Page.crash").catch(error => ({error: String(error)}));
+      await crashed;
+      report.rendererCrashed = true;
+      await page.close();
+      report.crashCommand = await crashCommand;
+      fresh = await context.newPage();
+      expect(fresh, "recovery starts in a different page/document").not.toBe(page);
+      const freshErrors = [];
+      fresh.on("pageerror", error => freshErrors.push({message: error.message, stack: error.stack}));
+      await fresh.goto("/");
+      await waitForProjectReopen(fresh, setup.projectId.slice(0, 8));
+      report.coldTruth = await inspectTruth(fresh);
+      report.coldInventory = await projectInventory(fresh, setup.projectId);
+      const candidates = report.candidates = await fresh.evaluate(() =>
+        window.lmdjWebRuntimeHost.session.listSequenceRecovery());
+      expect(candidates).toHaveLength(1);
+      expect(candidates[0]).toMatchObject({sessionId, patternId: a, reason: "owner_lost"});
+      const prompt = fresh.getByRole("region", {name: "Interrupted recording"});
+      await expect(prompt).toBeVisible({timeout: 60_000});
+      await prompt.getByRole("button", {name: "Keep recording"}).click();
+      await expect(prompt).toContainText("The interrupted recording is back in this Project.", {timeout: 60_000});
+      const recovered = report.recoveredTruth = await inspectTruth(fresh);
+      expect(recovered, "durable source data recovers once into A despite actual B before the crash").toEqual(expected);
+      expect(await fresh.evaluate(() => window.lmdjWebRuntimeHost.session.listSequenceRecovery())).toEqual([]);
+      const inventory = report.recoveredInventory = await projectInventory(fresh, setup.projectId);
+      expect(inventory.files.some(file => file.path === JOURNAL_PATH)).toBe(false);
+      const assets = value => value.files.filter(file => file.path.startsWith("assets/"));
+      expect(assets(inventory)).toEqual(assets(setup.inventory));
+      await fresh.reload();
+      await waitForProjectReopen(fresh, setup.projectId.slice(0, 8));
+      report.reopenedTruth = await inspectTruth(fresh);
+      expect(report.reopenedTruth, "a further cold open keeps the complete recovered Truth and exact revision").toEqual(expected);
+      report.reopenedInventory = await projectInventory(fresh, setup.projectId);
+      expect(report.reopenedInventory, "all paths, lengths and hashes survive the repeated reopen").toEqual(inventory);
+      expect(await fresh.evaluate(() => window.lmdjWebRuntimeHost.session.listSequenceRecovery())).toEqual([]);
+      report.freshErrors = freshErrors;
+      expect(freshErrors).toEqual([]);
+    } finally {
+      // A failed pre-crash assertion must not leave a live blocked worker.
+      // After the real crash this is only cleanup, never a durability ACK.
+      report.cleanup = page.isClosed() ? {originalPageClosed: true}
+        : await releaseGateFinally(page);
+      await retain(testInfo, "recording-switch-cold-recovery", report);
+      if (fresh) await fresh.close();
+    }
+  });
