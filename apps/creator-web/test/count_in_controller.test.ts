@@ -8,6 +8,9 @@ import type {
 } from "@lmdj/web-runtime-platform/runtime_types";
 import {
   countInBeatsRemaining,
+  countInLocksPatternSelection,
+  initialCountInState,
+  type CountInState,
   createCountInController,
   isCountInSession,
   type CountInController,
@@ -30,7 +33,7 @@ function fixture() {
   const capability = {supported: true, negotiated: true, outputReady: true,
     runtimeGeneration: "9007199254740993", frameEpoch: "9007199254740995",
     nextSerial: "9007199254740997", inputCapacity: 64};
-  const ordinary = {engaged: false, phase: "idle", playing: false,
+  const ordinary = {engaged: false, phase: "idle", playing: false as boolean,
     recording: false, runtimeGeneration: 1, transportEpoch: 0, originFrame: 0,
     runtimeFrame: 0, observedAtMilliseconds: 0, commandId: null,
     publicationPending: false, currentPatternId: null, pendingSwitch: null, error: null} satisfies PatternTransportStatus;
@@ -251,6 +254,82 @@ test("a lost cancellation reply is retried only by the user's same original iden
   expect(f.session.cancelPatternCountIn.mock.calls[1]![0]).toEqual(f.session.cancelPatternCountIn.mock.calls[0]![0]);
 });
 
+test("a consumed caller cannot accept another cancellation during its final projection", async () => {
+  const f = fixture();
+  await f.controller.start(1, 4);
+  f.status = {...f.status, startReceipt: f.receipt("applied"), openingComplete: true};
+  await f.controller.observe();
+  await f.controller.cancel("record");
+  f.status = {...f.status, cancelReceipt: {...f.receipt("applied", true), playing: true}};
+  const projection = deferred<typeof f.ordinary>();
+  f.session.inspectPatternTransport.mockReturnValue(projection.promise);
+  const observed = f.controller.observe();
+  try {
+    for (let turn = 0; turn < 30; turn++) await Promise.resolve();
+    expect(f.session.inspectPatternCountIn.mock.calls.filter(([, consume]) => consume)).toHaveLength(1);
+    await f.controller.cancel("play_stop");
+    expect(f.session.cancelPatternCountIn, "positive consume seals the original cancellation lane")
+      .toHaveBeenCalledOnce();
+    expect(f.controller.getState()).toMatchObject({active: true, phase: "handoff", recording: false});
+  } finally {
+    projection.resolve({...f.ordinary, playing: true, transportEpoch: 2});
+    await observed;
+  }
+  expect(f.controller.getState().active).toBe(false);
+  expect(f.onTransport).toHaveBeenLastCalledWith(expect.objectContaining({playing: true, transportEpoch: 2}));
+});
+
+test("an outstanding consume fences cancellation without retiring a refused caller", async () => {
+  const f = fixture();
+  await f.controller.start(1, 4);
+  await f.controller.cancel("record");
+  f.status = {...f.status, startReceipt: f.receipt("cancelled"), cancelReceipt: f.receipt("cancelled", true)};
+  const consume = deferred<PatternCountInStatus>();
+  const inspect = f.session.inspectPatternCountIn.getMockImplementation()!;
+  f.session.inspectPatternCountIn.mockImplementation((ticket, consuming) => consuming
+    ? consume.promise : inspect(ticket, consuming));
+  const observed = f.controller.observe();
+  try {
+    for (let turn = 0; turn < 30; turn++) await Promise.resolve();
+    expect(f.session.inspectPatternCountIn.mock.calls.filter(([, consuming]) => consuming)).toHaveLength(1);
+    await f.controller.cancel("play_stop");
+    expect(f.session.cancelPatternCountIn).toHaveBeenCalledOnce();
+    expect(f.controller.getState().active).toBe(true);
+  } finally {
+    consume.reject(Object.assign(new Error("physical release pending"), {code: "HOST_STATE_INVALID"}));
+    await observed;
+  }
+  expect(f.controller.getState().active).toBe(true);
+  expect(f.onError).not.toHaveBeenCalled();
+  await f.controller.cancel("play_stop");
+  expect(f.session.cancelPatternCountIn).toHaveBeenCalledTimes(2);
+  expect(f.session.cancelPatternCountIn.mock.calls[1]![0]).toEqual(f.session.cancelPatternCountIn.mock.calls[0]![0]);
+});
+
+test("a foreign consumed reply preserves the original caller for genuine cancellation", async () => {
+  const f = fixture();
+  await f.controller.start(1, 4);
+  const original = structuredClone(f.ticket());
+  f.status = {...f.status, startReceipt: f.receipt("cancelled"), cancelReceipt: f.receipt("cancelled", true)};
+  const inspect = f.session.inspectPatternCountIn.getMockImplementation()!;
+  let foreign = true;
+  f.session.inspectPatternCountIn.mockImplementation(async (ticket, consume) => {
+    if (consume && foreign) return {...f.status, ticket: {...original, scheduleSerial: "18"}};
+    return inspect(ticket, consume);
+  });
+  await f.controller.observe();
+  expect(f.onError).toHaveBeenCalledWith(expect.objectContaining({code: "HOST_PROTOCOL_MISMATCH"}));
+  expect(f.controller.getState()).toMatchObject({active: true, ticket: original});
+  foreign = false;
+  await f.controller.cancel("play_stop");
+  expect(f.session.cancelPatternCountIn).toHaveBeenCalledOnce();
+  expect(f.session.cancelPatternCountIn.mock.calls[0]![0].ticket).toEqual(original);
+  expect(f.session.inspectPatternCountIn.mock.calls.filter(([, consume]) => consume)).toEqual([
+    [original, true], [original, true],
+  ]);
+  expect(f.controller.getState().active).toBe(false);
+});
+
 test("Record-off waits for opening/closure and preserves Native's S for the JS handoff", async () => {
   const f = fixture();
   await f.controller.start(1, 4);
@@ -386,3 +465,52 @@ test("127 BPM countdown follows Native's actual cue at 23677, not the ordinary b
   expect(countInBeatsRemaining(f.status, 23676)).toBe(4);
   expect(countInBeatsRemaining(f.status, 23677)).toBe(3);
 });
+
+test("Pattern selection waits for durable opening while retaining the original COUNT-IN caller", async () => {
+  const f = fixture();
+  expect(countInLocksPatternSelection(f.controller.getState())).toBe(false);
+  await f.controller.start(1, 4);
+  const original = structuredClone(f.controller.getState().ticket);
+  expect(countInLocksPatternSelection(f.controller.getState())).toBe(true);
+  f.status = {...f.status, startReceipt: f.receipt("applied"), openingPending: true};
+  await f.controller.observe();
+  expect(f.controller.getState().recording).toBe(true);
+  expect(countInLocksPatternSelection(f.controller.getState())).toBe(true);
+  f.status = {...f.status, openingPending: false, openingComplete: true};
+  await f.controller.observe();
+  expect(countInLocksPatternSelection(f.controller.getState())).toBe(false);
+  expect(f.controller.getState()).toMatchObject({active: true, phase: "recording",
+    ticket: original, nativeDownbeatFrame: 100000});
+  expect(f.session.inspectPatternCountIn.mock.calls.some(([, consume]) => consume)).toBe(false);
+  await f.controller.cancel("record");
+  expect(countInLocksPatternSelection(f.controller.getState())).toBe(true);
+  expect(f.controller.getState().ticket).toEqual(original);
+});
+
+test.each([
+  {phase: "preparing"}, {phase: "counting"}, {phase: "cancelling"}, {phase: "settling"}, {phase: "handoff"},
+  {recording: false}, {errorCode: "IO_ERROR"}, {status: null},
+] satisfies Partial<CountInState>[])("Pattern selection stays closed for retained $phase $recording $errorCode $status", async (change) => {
+  const f = fixture();
+  await f.controller.start(1, 4);
+  const ready: CountInState = {...initialCountInState, active: true, phase: "recording", recording: true,
+    ticket: f.ticket(), status: {...f.status, openingComplete: true,
+      startReceipt: f.receipt("applied")}};
+  expect(countInLocksPatternSelection(ready)).toBe(false);
+  expect(countInLocksPatternSelection({...ready, ...change})).toBe(true);
+});
+
+test.each(["openingPending", "openingIncomplete", "noReceipt", "refused", "cancelled", "error"] as const)(
+  "Pattern selection rejects $0 even when the COUNT-IN lamp says recording", async (condition) => {
+    const f = fixture(); await f.controller.start(1, 4);
+    const status: PatternCountInStatus = {...f.status, startReceipt: f.receipt("applied"), openingComplete: true};
+    if (condition === "openingPending") Object.assign(status, {openingPending: true});
+    if (condition === "openingIncomplete") Object.assign(status, {openingComplete: false});
+    if (condition === "noReceipt") Object.assign(status, {startReceipt: null});
+    if (condition === "refused") Object.assign(status, {startReceipt: f.receipt("refused")});
+    if (condition === "cancelled") Object.assign(status, {cancelReceipt: f.receipt("applied", true)});
+    if (condition === "error") Object.assign(status, {error: {code: "IO_ERROR", message: "held failure", retryable: false}});
+    expect(countInLocksPatternSelection({...initialCountInState, active: true, phase: "recording",
+      recording: true, status})).toBe(true);
+  },
+);

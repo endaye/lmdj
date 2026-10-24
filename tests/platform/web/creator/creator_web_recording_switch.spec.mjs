@@ -53,7 +53,7 @@ const stop = page => key(page, /^Play\/Stop/);
 const picker = page => page.getByRole("button", {name: "Choose Pattern", exact: true});
 const ordinary = (page, sessionId) => sendCountInHost(page, "pattern.transport.inspect", {session_id: sessionId});
 
-async function prepare(page) {
+async function prepare(page, bars) {
   const setup = await prepareCountInProject(page, 120, {silentPattern: true});
   // A real loop-Gate voice stays owned across S until its original release;
   // a loaded browser cannot turn this into a naturally expired sample. Keep
@@ -117,12 +117,10 @@ async function prepare(page) {
     .locator(`[data-pattern-choice="${setup.patternId}"]`).click();
   await expect(sequencePattern(page)).toHaveAttribute("data-pattern-id", setup.patternId);
   await showSequenceLayer(page, "SETUP");
-  // COUNT-IN is restored; this ordinary-recording journey explicitly chooses
-  // Off. Its final trace must still contain no scheduled count-in request.
-  const countInOff = page.getByRole("group", {name: "Count-in", exact: true})
-    .getByRole("button", {name: "Count-in Off", exact: true});
-  await countInOff.click();
-  await expect(countInOff).toHaveAttribute("aria-pressed", "true");
+  const countInChoice = page.getByRole("group", {name: "Count-in", exact: true})
+    .getByRole("button", {name: bars ? "Count-in 1 bar" : "Count-in Off", exact: true});
+  await countInChoice.click();
+  await expect(countInChoice).toHaveAttribute("aria-pressed", "true");
   await page.getByRole("group", {name: "Sequence snap"}).getByRole("button", {name: "1 BAR", exact: true}).click();
   await showSequenceLayer(page, "EDIT");
   return {...setup, target, baseline: await truth(page), inventory: await countInProjectInventory(page, setup.projectId)};
@@ -253,31 +251,39 @@ function eventFor(pressed, released, origin, bars, fallback = false) {
     duration_tick: Math.min(duration, bars * 3840 - onset), velocity: 100};
 }
 
-for (const terminalB of [false, true]) test(`Creator S3 immediate recording switches GROOVE and Perform A-B-A${terminalB ? "-B" : ""} with exact Truth and reopen`,
+for (const {bars, terminalB} of [{bars: 0, terminalB: false}, {bars: 0, terminalB: true},
+  {bars: 1, terminalB: false}, {bars: 1, terminalB: true}]) test(`Creator S3 ${bars ? "COUNT-IN" : "immediate"} recording switches GROOVE and Perform A-B-A${terminalB ? "-B" : ""} with exact Truth and reopen`,
   async ({page, browserName}, testInfo) => {
     test.skip(browserName !== "chromium");
     test.setTimeout(PROJECT_TRANSITION_TIMEOUT_MS + 40_000);
     const failures = [];
     page.on("pageerror", error => failures.push(error.message));
     await installTrace(page);
-    const prepared = await prepare(page);
+    const prepared = await prepare(page, bars);
     await record(page).click();
     let sessionId;
     await expect.poll(async () => {
-      const requests = await rows(page, "pattern.transport.request");
+      const requests = await rows(page, bars ? "pattern.transport.count-in.request" : "pattern.transport.request");
       sessionId = requests.at(-1)?.request.payload.session_id;
       return typeof sessionId === "string";
     }).toBe(true);
     const setup = {...prepared, sessionId};
+    if (bars) {
+      await expect(picker(page)).toBeDisabled();
+      await expect(key(page, "Pattern forward — →")).toBeDisabled();
+    }
     await expect(record(page)).toHaveClass(/is-active/, {timeout: 5_000});
     await expect(picker(page)).toBeEnabled({timeout: 5_000});
     const initial = await ordinary(page, sessionId);
     expect(initial).toMatchObject({recording: true, playing: true, current_pattern_id: setup.patternId});
     const beforeInput = (await rows(page, "pattern.transport.input.request")).length;
-    // Ordinary recording is bounded by the Facade's acknowledged fence. Its
-    // Native input has no scheduled authority; retained=true below separately
-    // proves real Core admission.
-    const authority = {recording: false, schedule_serial: null, transport_epoch: null};
+    const originalRequest = bars
+      ? (await rows(page, "pattern.transport.count-in.request"))[0].request.payload : null;
+    // Ordinary recording uses its acknowledged fence; COUNT-IN keeps the
+    // actual original schedule stamp even after later Pattern publications.
+    const authority = bars ? {recording: true, schedule_serial: originalRequest.schedule_serial,
+      transport_epoch: String(originalRequest.expected_epoch)}
+      : {recording: false, schedule_serial: null, transport_epoch: null};
     await earlyBar(page, sessionId, setup.patternId);
     const first = await press(page, setup, authority);
     const firstSwitch = await switchByGesture(page, sessionId, setup.patternId, setup.target,
@@ -342,6 +348,9 @@ for (const terminalB of [false, true]) test(`Creator S3 immediate recording swit
     }, {timeout: 5_000, intervals: [20]}).toBe(true);
     expect(closed.current_pattern_id).toBe(terminalB ? setup.target : setup.patternId);
     expect(await truth(page), "complete committed Project Truth after final segment").toEqual(expected);
+    if (bars) await expect.poll(async () => (await rows(page, "pattern.transport.count-in.inspect"))
+      .some(row => row.request.payload.consume === true && row.response?.ok === true),
+    {timeout: 1_000, intervals: [20]}).toBe(true);
     await expect(stop(page)).toBeEnabled();
     await stop(page).click();
     await expect.poll(async () => {
@@ -351,7 +360,16 @@ for (const terminalB of [false, true]) test(`Creator S3 immediate recording swit
     expect(await truth(page), "Stop does not rewrite a committed segment").toEqual(expected);
     const inputs = (await rows(page, "pattern.transport.input.request")).slice(beforeInput);
     expect(inputs.map(row => row.request.payload.kind)).toEqual(["press", "release", "press", "release", "press", "release"]);
-    expect((await rows(page, "pattern.transport.count-in.request")).length).toBe(0);
+    expect((await rows(page, "pattern.transport.count-in.request")).length).toBe(bars ? 1 : 0);
+    if (bars) {
+      const original = (await rows(page, "pattern.transport.count-in.request"))[0].response.result;
+      const terminal = (await rows(page, "pattern.transport.count-in.inspect"))
+        .findLast(row => row.request.payload.consume && row.response?.ok);
+      expect(terminal.response.result.ticket).toEqual(original.ticket);
+      expect(terminal.response.result.start_receipt).toMatchObject({pattern_id: setup.patternId,
+        effective_frame: initial.origin_frame, origin_frame: initial.origin_frame});
+      expect(terminal.response.result.cancel_receipt).toMatchObject({result: "applied", pattern_id: setup.patternId});
+    }
     const assetFiles = files => files.filter(file => file.path.startsWith("assets/"));
     expect(assetFiles(setup.inventory).length).toBeGreaterThan(0);
     const finalAssets = assetFiles(await countInProjectInventory(page, setup.projectId));

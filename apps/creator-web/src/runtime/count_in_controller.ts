@@ -24,7 +24,7 @@ export function isCountInSession(value: unknown): value is CreatorCountInSession
 
 export interface CountInState {
   readonly active: boolean;
-  readonly phase: "idle" | "preparing" | "counting" | "recording" | "cancelling" | "settling";
+  readonly phase: "idle" | "preparing" | "counting" | "recording" | "cancelling" | "settling" | "handoff";
   readonly recording: boolean;
   readonly ticket: PatternCountInTicket | null;
   readonly status: PatternCountInStatus | null;
@@ -38,6 +38,18 @@ export const initialCountInState: CountInState = Object.freeze({
   active: false, phase: "idle", recording: false, ticket: null, status: null,
   nativeDownbeatFrame: null, errorCode: null, errorMessage: null,
 });
+
+// Selection joins an opened recording without retiring its original caller.
+// Applied lights Record before durable opening completes; cancellation/error
+// closes the gate synchronously, independently of the next transport poll.
+export function countInLocksPatternSelection(state: CountInState): boolean {
+  if (!state.active) return false;
+  const status = state.status;
+  return state.phase !== "recording" || !state.recording || state.errorCode !== null ||
+    status === null || status.error !== null || status.openingPending ||
+    !status.openingComplete || status.startReceipt?.result !== "applied" ||
+    status.cancelReceipt !== null;
+}
 
 // #2394: where the JS metronome may run before any poll has seen `playing`.
 // While a count-in is planned and not refused or cancelled, the click loop
@@ -57,7 +69,7 @@ export function countInMetronomeArm(
   if (!state.active || status == null || planned == null) return null;
   // A cancellation the user asked for disarms at once, before its receipt:
   // no JS click may be scheduled for a count-in that is being cancelled.
-  if (state.phase === "cancelling" || state.phase === "settling") return null;
+  if (state.phase === "cancelling" || state.phase === "settling" || state.phase === "handoff") return null;
   if (status.cancelReceipt != null) return null;
   if (status.startReceipt != null && status.startReceipt.result !== "applied") return null;
   return Object.freeze({originFrame: planned, downbeatFrame: state.nativeDownbeatFrame ?? planned});
@@ -83,6 +95,7 @@ interface Owner {
   observing: boolean;
   projecting: boolean;
   consuming: boolean;
+  consumed: boolean;
 }
 
 // The public SDK owns native schedules, durable input and lifecycle retirement.
@@ -145,7 +158,7 @@ export function createCountInController(options: Readonly<{
     if (owns(candidate)) options.onTransport(status);
   };
   const refreshProjection = (candidate: Owner) => {
-    if (!owns(candidate) || candidate.projecting || state.status?.error != null ||
+    if (!owns(candidate) || candidate.consumed || candidate.projecting || state.status?.error != null ||
         session.diagnostics().state !== "running") return;
     candidate.projecting = true;
     // Ordinary SDK queries can wait behind lifecycle work that itself needs
@@ -155,7 +168,7 @@ export function createCountInController(options: Readonly<{
     }).finally(() => {candidate.projecting = false;});
   };
   const consumeIfReady = async (candidate: Owner) => {
-    if (!owns(candidate) || candidate.ticket === null || candidate.consuming) return;
+    if (!owns(candidate) || candidate.ticket === null || candidate.consuming || candidate.consumed) return;
     const status = state.status;
     if (status === null || status.openingPending) return;
     if (status.error === null) {
@@ -172,7 +185,12 @@ export function createCountInController(options: Readonly<{
       // may still refuse while a Pad release or durable closure is retained.
       const consumed = await session.inspectPatternCountIn(candidate.ticket, true);
       if (!owns(candidate)) return;
+      // Positive consumption seals this caller before any awaited projection.
+      // Keep transport locked until that projection can drive an ordinary
+      // gesture; another key press must never resend the now-stale cancel.
       accept(candidate, consumed);
+      candidate.consumed = true;
+      publish({phase: "handoff"});
       try {
         await refreshTransport(candidate);
       } catch (error) {
@@ -197,11 +215,11 @@ export function createCountInController(options: Readonly<{
   };
   const observe = async () => {
     const candidate = owner;
-    if (disposed || candidate === null || candidate.ticket === null || candidate.observing) return;
+    if (disposed || candidate === null || candidate.ticket === null || candidate.observing || candidate.consumed) return;
     candidate.observing = true;
     try {
       const status = await session.inspectPatternCountIn(candidate.ticket);
-      if (!owns(candidate)) return;
+      if (!owns(candidate) || candidate.consumed) return;
       accept(candidate, status);
       await consumeIfReady(candidate);
       refreshProjection(candidate);
@@ -213,7 +231,7 @@ export function createCountInController(options: Readonly<{
     }
   };
   const sendCancel = async (candidate: Owner) => {
-    if (!owns(candidate) || candidate.ticket === null || candidate.request === null ||
+    if (!owns(candidate) || candidate.consuming || candidate.consumed || candidate.ticket === null || candidate.request === null ||
         candidate.cancelIntent === null || candidate.cancelInFlight) return;
     candidate.cancel ??= Object.freeze({
       ticket: candidate.ticket, projectId: options.projectId,
@@ -223,7 +241,7 @@ export function createCountInController(options: Readonly<{
     candidate.cancelInFlight = true;
     try {
       const admission = await session.cancelPatternCountIn(candidate.cancel);
-      if (!owns(candidate)) return;
+      if (!owns(candidate) || candidate.consumed) return;
       if (!ticketMatches(admission.ticket, candidate.ticket)) {
         throw failure("HOST_PROTOCOL_MISMATCH", "Count-in cancellation belongs to another request.");
       }
@@ -248,7 +266,7 @@ export function createCountInController(options: Readonly<{
       if (disposed || owner !== null) return;
       const candidate: Owner = {ticket: null, request: null, cancel: null,
         cancelIntent: null, cancelInFlight: false, capabilityReady: false,
-        observing: false, projecting: false, consuming: false};
+        observing: false, projecting: false, consuming: false, consumed: false};
       owner = candidate;
       publish({...initialCountInState, active: true, phase: "preparing"});
       try {
@@ -308,7 +326,7 @@ export function createCountInController(options: Readonly<{
     },
     async cancel(intent: PatternTransportIntent) {
       const candidate = owner;
-      if (disposed || candidate === null) return;
+      if (disposed || candidate === null || candidate.consuming || candidate.consumed) return;
       candidate.cancelIntent ??= intent;
       publish({phase: "cancelling"});
       // A press before capability/admission settles is retained and sent once

@@ -114,13 +114,15 @@ SETUP 的 COUNT-IN 为本设备的 Off／1／2 小节偏好，默认 Off，不�
 设置读取不覆盖刚做出的选择。数拍固定由 Native 发出，不受 METRONOME 开关影响；
 METRONOME 决定实际 S 的原生下拍和开录后的 JS 节拍器。JS 不补播或重复 S。
 不支持预定开录或 cue 输出时保留选择并显示拒绝原因，不降级为立即录音。
+原 COUNT-IN 票据消费成功后，Record／Play/Stop 暂时等待普通播放状态刷新；
+显示 Finishing，刷新完成后按键恢复，不会向已消费的票据重复取消。
 
 | 状态 | Play 灯 | Record 灯 | 此时的限制 |
 | --- | --- | --- | --- |
 | 停止 | 灭 | 灭 | 只有此时能改 Pattern 长度和结构、切 Pattern 立即生效。 |
 | 播放 | 亮 | 灭 | 可以打 Pad，可以改 Tempo／Swing，也可以按 SEQ SNAP 的 1 BEAT／1 BAR／SEQ END 边界切 Pattern；默认 1 BAR。不能改长度或结构。 |
 | 录音 | 亮 | 亮 | Pad 事件按实际切换边界分段录入所属 Pattern，支持 A→B→A。箭头、GROOVE 和普通 Perform Launch 共用 SEQ SNAP；网格、Tempo／Swing／Quantize、Pad 改色和结构编辑仍锁定。 |
-| COUNT-IN | 尚未开始播放 | 闪烁 | 上屏显示实际预备拍及剩余拍；锁定 BPM 和 Pattern，Pad 仍可演奏。到达计划 S 不算开录，只有 Native Applied 回执才转为录音常亮。 |
+| COUNT-IN | 尚未开始播放 | 闪烁 | 上屏显示实际预备拍及剩余拍；锁定 BPM 和 Pattern，Pad 仍可演奏。到达计划 S 不算开录，只有 Native Applied 回执才转为录音常亮；Pattern 选择还须等待 opening 耐久确认。 |
 | 命令处理中 | 等结果 | 等结果 | Play/Stop、Record、切 Pattern 和相关设置暂不可用；以灯的最终状态为准；COUNT-IN 取消遵循上一行，以实际回执为准。 |
 
 | 当前状态 | 按键 | 结果 |
@@ -135,6 +137,7 @@ METRONOME 决定实际 S 的原生下拍和开录后的 JS 节拍器。JS 不补
 | 没有 Project、音频未就绪、命令处理中或另一种录音进行中 | 任一键 | 按键不可用。Play 与 Record 的条件不完全相同，见[附录 A.2](#conditions)。 |
 
 - 录音切换在实际 S 保存旧段，最后一段在 Record-off／Stop 的实际 F 保存；排队或当前 Pattern 显示不是保存确认。
+- COUNT-IN 的 Applied 和 opening ACK 均完整后，箭头、GROOVE 与普通 Perform Launch 可加入同一录音；准备、错误、取消和结算期间仍锁定。原 COUNT-IN 票据保留至真实终止消费，BPM／网格／结构编辑锁不随选择门禁开放。
 - 前次切换仍在结算而拒绝新选择时，保留真实排队／播放显示，稍后由用户重新选择；不自动重放被拒绝的选择，也不要求先停止录音。
 - 按 Play/Stop 或 Record 会清除 SHIFT。
 
@@ -861,7 +864,7 @@ System 打开时仍可操作。标题、候选数量和阶段标签来自实际�
 - Bank：`selectBank` 先取消旋钮草稿、清按压与 SHIFT，再 dispatch；`isCreatorActionAllowed` 不允许时 reducer 拒绝。Runtime／Project 未就绪或 `transfer.phase !== "idle"` 时拒绝；播放／录音本身不拒绝。Bank 不 dispatch `slot-selected`，保留 `sample.selectedSlot`；`selectCurrentPad` 以它作为全机当前 Pad，尚未选中时回退到当前 Bank 首槽。
 - ↑↓ 与 Bank 使用同一允许条件（`padNavigationAvailable`）。
 - 历史 hook 用 `navigationKey` 区分页面切换与权威刷新；ready history 可保留，blocked/unknown、失败或曾访问本地 authoring owner 的保守路径仍 inspect。Project/session/revision、publication pending、Performance recovery 变化和窗口 focus 保留各自重新核对，不把修复理解成缓存所有历史结果。
-- ← → 切 Pattern：`patternStepOpen` 要求 Sequence 页、未锁定设置（transport busy 或录音）、步进基准 Pattern 索引有效；播放中不再关闭。步进基准在播放中取排队的切换目标，否则 `currentPatternId`，停止时取所选 Pattern；播放中的按下走 `requestTransportPatternSwitch`，停止时走 `snapshot.reload`。SHIFT 关且非 Sequence 时，Undo/Redo 键保持禁用。
+- ← → 切 Pattern：`patternStepOpen` 要求 Sequence 页、Pattern 选择门禁开放、步进基准 Pattern 索引有效；播放和已耐久开启的录音中保持可用。COUNT-IN 还须实际 Applied、opening 完整且没有错误／取消／结算，不能只看录音灯。步进基准在播放中取排队的切换目标，否则 `currentPatternId`，停止时取所选 Pattern；播放中的按下走 `requestTransportPatternSwitch`，停止时走 `snapshot.reload`。SHIFT 关且非 Sequence 时，Undo/Redo 键保持禁用。
 
 **旋钮**（`state/encoder_input.ts`、`sample_encoder.ts`、`monitor_volume_preference.ts`、`app.tsx`）
 

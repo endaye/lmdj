@@ -77,8 +77,11 @@ lease 释放与 Native 最终 quiescence 分别完成。Sequence 与 Performance
 recording Journal 的现有互斥保持；普通 Perform Launch 走同一 Pattern switch，
 既有 Performance-record Launch/clock/event 路径保持。Creator C4 的箭头、GROOVE
 与普通 Launch 共用此请求，录音中开放选择，命令处理中、失败或结算未完成时锁定。
-COUNT-IN UI 继续撤回，恢复与验收债仍在 #2394／#2395；consumer、完整故障组合、
-候选和设备／听感分别验收。
+COUNT-IN UI 已恢复；其选择门禁同时要求 Native Applied、opening 完整且不在等待、
+错误或取消／结算中，原 caller 仍保留到真实终止消费。BPM／网格／结构编辑继续锁定。
+正向消费 ACK 立即封闭原取消／观察通道；Creator 等普通 transport 投影刷新完成
+才重新开放 Record／Play/Stop，下一次显式手势使用普通 transport。
+完整故障组合、候选和设备／听感分别验收。
 
 已有录音的 Record-off 与 Stop 不借用开始录音的排队门禁：即使后继仍在排队，
 它们也先取得真实 F，再处理 `S < F` 的旧段或 `S >= F` 的取消，不为目标写入假事件。
@@ -134,8 +137,9 @@ metronome/S7 及真实设备/听感分别验证。实际 Worklet 旅程从最终
 S6 的 scheduled Record、生产 Facade I/O owner、strict Host/SDK companion 与
 monitoring-only 双输出未在真实 MIDI 硬件或物理设备上验收，也未做听感验收。
 S7 的 global Record Creator 控件、Off/1/2 偏好、COUNT-IN 倒计时/灯、
-JS metronome handoff 与 scheduler exclusion 已由 #2359 接入。本层增加 S3
-Host 录音切换 producer；其 Creator C4、多切换 packaged 与设备验收仍独立。
+JS metronome handoff 与 scheduler exclusion 已由 #2359 接入。S3 Host producer
+保留实际分段边界；Creator C4 仅在 Applied 与耐久 opening 都完成后开放选择，
+保留原 COUNT-IN caller 及 A/S0 至终止消费。完整故障组合、候选与设备验收仍独立。
 
 Session 的 additive 公共方法为 `queryPatternCountInCapabilities`、
 `requestPatternCountIn`、`inspectPatternCountIn`、`cancelPatternCountIn`、
