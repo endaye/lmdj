@@ -13,6 +13,11 @@ void install_pattern_transport_io_work_hook_for_testing(
     const PatternTransportIoWorkHook* hook) noexcept {
   work_hook.store(hook, std::memory_order_release);
 }
+void observe_pattern_transport_closing_receipt_for_testing(
+    const audio::PatternTransportReceipt& receipt) noexcept {
+  const auto* hook = work_hook.load(std::memory_order_acquire);
+  if (hook && hook->closing_receipt) hook->closing_receipt(hook->context, receipt);
+}
 }  // namespace lmdj::facade::testing
 #endif
 

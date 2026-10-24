@@ -9,6 +9,10 @@
 #include <lmdj/domain/project.hpp>
 #include <utility>
 
+#if defined(LMDJ_PATTERN_TRANSPORT_TESTING) && LMDJ_PATTERN_TRANSPORT_TESTING
+#include <lmdj/facade/pattern_transport_io_testing.hpp>
+#endif
+
 namespace lmdj::facade::detail {
 namespace {
 
@@ -899,6 +903,9 @@ struct PatternTransportCoordinator::Async {
     origin = seen->origin_frame;
     if (closing) {
       close_cutoff = receipt;
+#if defined(LMDJ_PATTERN_TRANSPORT_TESTING) && LMDJ_PATTERN_TRANSPORT_TESTING
+      testing::observe_pattern_transport_closing_receipt_for_testing(*close_cutoff);
+#endif
       // Preserve the entire real F receipt before native e2 acknowledgment can
       // consume its ordinary cell through the scheduled companion capability.
       if (!audio.acknowledge(config.runtime_generation, seen->epoch)) {

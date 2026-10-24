@@ -175,4 +175,5 @@ LMDJ_CREATOR_COUNT_IN_IO_ARTIFACT_ROOT="$run_root" \
   --config "$web_root/count_in/fixtures/playwright.config.mjs" \
   --project=creator-count-in-io-chromium --workers=1 \
   "$web_root/count_in/creator_count_in_opfs.spec.mjs" \
+  "$web_root/count_in/creator_recording_switch_opfs.spec.mjs" \
   >"$run_root/playwright.log" 2>&1
