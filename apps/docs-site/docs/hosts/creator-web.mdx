@@ -767,6 +767,10 @@ was saved and points to Developer diagnostics in System. It does not describe
 the authoring change as unsaved or suggest importing it again. Ordinary failed
 mutations retain their separate save-failure wording. This presentation does
 not add a retry action for non-COOK_FAILED preparation errors.
+Every accepted preparation failure is recorded once for that operation in
+Developer diagnostics, including `COOK_FAILED` and `INVALID_PROJECT`, with its
+code and allowed details. An explicit Retry Prepare failure has its own record;
+reporting does not repeat the saved authoring change or add an automatic retry.
 Recovery More options／Open Sequence／Open Perform 通过同一导航入口离开 System；拒绝恢复的 take 仍保留，导航不额外 apply 或 discard。
 P1 预览被播放音频暂停拒绝时，下一步提示为先演奏 Pad 启动音频，再重试预览；没有单独的音频激活按钮。
 
