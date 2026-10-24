@@ -171,10 +171,23 @@ async function inspectProjectTruth(page) {
     window.lmdjWebRuntimeHost.inspection.inspectProject());
 }
 
+async function finishRecoveryObservation(primaryFailures, retainEvidence, restoreViewport) {
+  const failures = [...primaryFailures];
+  for (const finish of [retainEvidence, restoreViewport]) {
+    try { await finish(); } catch (error) { failures.push(error); }
+  }
+  if (failures.length === 1) throw failures[0];
+  if (failures.length > 1) throw new AggregateError(failures,
+    "Recovery reachability and cleanup failures:\n" +
+      failures.map(error => error?.stack ?? String(error)).join("\n\n"),
+    {cause: failures[0]});
+}
+
 async function expectRecoveryItemsReachable(page, testInfo, decision) {
   const originalViewport = await page.evaluate(() => ({width: innerWidth, height: innerHeight}));
   const before = await inspectProjectTruth(page);
   const observations = [];
+  const failures = [];
   const reportPath = testInfo.outputPath(`performance-recovery-${decision}-reachability.json`);
   const recovery = page.getByRole("group", {name: "Performance recovery"});
   const candidate = recovery.getByRole("article");
@@ -272,15 +285,19 @@ async function expectRecoveryItemsReachable(page, testInfo, decision) {
       }
     }
     expect(await inspectProjectTruth(page), "view/focus/scroll must not author Project Truth").toEqual(before);
-  } finally {
+  } catch (error) {
+    failures.push(error);
+  }
+  await finishRecoveryObservation(failures, async () => {
     await writeFile(reportPath, JSON.stringify(observations, null, 2));
     await testInfo.attach(`performance-recovery-${decision}-reachability`,
       {path: reportPath, contentType: "application/json"});
+  }, async () => {
     await page.setViewportSize(originalViewport);
     await expect.poll(() => page.evaluate(() => ({width: innerWidth, height: innerHeight})))
       .toEqual(originalViewport);
     await page.evaluate(() => new Promise(resolveFrame => requestAnimationFrame(resolveFrame)));
-  }
+  });
 }
 
 async function observeMasterCaptureBatches(page) {

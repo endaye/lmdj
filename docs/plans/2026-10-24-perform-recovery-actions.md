@@ -166,3 +166,34 @@ that explicit input binding. Version impact: none for this test-only Task;
 Documentation impact: none for this follow-up; the PR's original required
 Portal declaration still applies. Repeat current-head independent review and
 the unchanged guarded shipping procedure for the resulting published head.
+
+## Review failure-retention Task
+
+Head `bd94de46d49e348d3304b4a707854a1ff16a28d2` passes the same complete two
+journeys again (67.262s browser / 68.208s wrapper). Authenticated DeepSeek
+review40094780414/1 is eligible with two findings; do not call that clean.
+
+One additional atomic test-only Task owns this plan and the existing browser
+spec. The first finding is valid: a failing report/restore in `finally` can
+replace the original geometry error. Retain the primary failure, attempt
+evidence and viewport restoration independently, and fail with the original
+object when it is the only failure. Multiple failures use an AggregateError
+whose message includes every original stack, preserving the primary cause
+and cleanup failures in the actual reporter. No cleanup failure is swallowed.
+
+Reject the second finding's claimed downstream continuation: the caller
+awaits the helper, so a rejected restore aborts that journey before Apply or
+Discard. A non-throwing restore would hide verification failure. Prove this
+control flow with direct fault injection into the actual finishing helper:
+single primary error, actual evidence-write failure plus restore rejection,
+restore-only rejection and all-success. Check exact error identities/order,
+both reported causes, attempted restore and whether the caller reached its
+later leg. This harness proof is not Native/physical recovery evidence.
+
+Node syntax plus that reduced failure proof precede this commit; rerun the
+same complete two-case official packaged selection on the resulting clean
+head. Production/Portal inputs stay identical and retain their earlier input
+binding. Version impact: none and Documentation impact: none for this
+test-only Task; the original PR's required Portal impact remains. Preserve
+published history, reply with evidence to both findings, resolve discussions,
+and obtain new current-head review before the same guarded merge procedure.
