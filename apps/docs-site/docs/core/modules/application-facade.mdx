@@ -37,6 +37,21 @@ owner 仍在的记录返回 `sequence_admission_unresolved`，保留原始 seale
 candidates 经同一转换器 finalize（未释放按压止于 attack tail 的 240-tick 默认
 形态）后并入恢复投影，apply 直接落地表演者已听到的 take，不再永久拒绝。
 
+### Live control 的已验证 writer 身份
+
+Host 在较长的 Project create/open 轮次调用
+`prepare_performance_live_target`，沿原完整 Project/Artifact 验证路径，把不可变
+Project UUID 保留在本 Application 发放的 opaque writer lease 中。
+`dispatch_performance_live` 只接受该 lease 对应路径的
+`performance.live.status` / `performance.live.control`；未准备、已移动或来自另一
+Application 的 lease 均拒绝，准备失败会撤销先前保留的身份。
+
+实时调用复用原 dispatcher、BPM admission 门禁、Engine epoch 绑定、CAS、原 ID
+重试和录音路由排斥，不再为身份校验重复加载完整 Project。命令原有的
+Performance service 仍保留；这不是所有命令都无 I/O 的声明。UUID 的保留范围
+只到独占 writer lease 结束，Project 替换/释放随 lease 结束，不建立全局路径缓存。
+原 `command` / `query` 入口仍执行原完整身份解析；Host 不解析 Project bundle。
+
 ## 3. 所有权与依赖
 
 现有 Sequence 的 Pad 事件计算由内部 `PatternEventReducer` 统一实现：

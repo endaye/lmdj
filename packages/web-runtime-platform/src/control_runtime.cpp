@@ -5559,9 +5559,14 @@ Json ControlRuntime::dispatch(
       request["operation"] = operation;
       request["project_path"] =
           impl_->retained_project_path->generic_string();
-      const auto response = found->second
-          ? impl_->application.query(request)
-          : impl_->application.command(request);
+      // The long Project open/create turn verified this exclusive lease's
+      // immutable identity. Live turns retain the normal admission kernel
+      // without rereading/replaying the complete Project for each control.
+      const auto response = operation == "performance.live.status" ||
+                                    operation == "performance.live.control"
+          ? impl_->application.dispatch_performance_live(*impl_->writer_lease, request)
+          : found->second ? impl_->application.query(request)
+                          : impl_->application.command(request);
       if (!response.value("ok", false)) {
         return normalized_facade_error(response);
       }
@@ -5767,6 +5772,9 @@ Json ControlRuntime::dispatch(
       if (impl_->cancel_if_expired()) {
         return timeout_error();
       }
+      const auto live_target = impl_->application.prepare_performance_live_target(lease.value());
+      if (!live_target.has_value()) return normalized_error(live_target.error());
+      if (impl_->cancel_if_expired()) return timeout_error();
       impl_->recording_metadata.retire();
       impl_->writer_lease.emplace(std::move(lease.value()));
       impl_->retained_project_path = path;
@@ -5882,6 +5890,9 @@ Json ControlRuntime::dispatch(
       const auto switched =
           !impl_->runtime_bank_project_id.has_value() ||
           *impl_->runtime_bank_project_id != selected_id;
+      const auto live_target = impl_->application.prepare_performance_live_target(lease.value());
+      if (!live_target.has_value()) return normalized_error(live_target.error());
+      if (impl_->cancel_if_expired()) return timeout_error();
       impl_->recording_metadata.retire();
       impl_->writer_lease.emplace(std::move(lease.value()));
       impl_->retained_project_path = path;

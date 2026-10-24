@@ -630,6 +630,18 @@ class Application {
       const RuntimeContentExportRequest& request);
   foundation::Result<RuntimeProjectWriterLease> acquire_project_writer(
       const std::filesystem::path& project_path);
+  // A long owner turn verifies complete committed Project/Artifact identity
+  // once. The Project UUID is immutable for this exclusive writer lease.
+  // Failed preparation clears any earlier prepared identity.
+  foundation::Result<void> prepare_performance_live_target(
+      RuntimeProjectWriterLease& lease);
+  // Only performance.live.status/control; the prepared lease must come from
+  // this Application and match project_path. Serialize with the lease owner
+  // and Engine. Lease replacement/release ends this identity's lifetime.
+  // Reuses the ordinary admission/status kernel and command service, while
+  // identity resolution needs no repeated Project load on the live turn.
+  nlohmann::json dispatch_performance_live(
+      const RuntimeProjectWriterLease& lease, const nlohmann::json& request);
   // Independent read state over this exact platform. Move the idle reader to
   // a worker; it does not borrow Application or its mutable authoring history.
   std::unique_ptr<PerformanceRecordingMetadataReader>
