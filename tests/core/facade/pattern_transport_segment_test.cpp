@@ -1,14 +1,25 @@
+#include <array>
+#include <cerrno>
 #include <chrono>
+#include <csignal>
 #include <filesystem>
+#include <fstream>
 #include <iostream>
 #include <memory>
 #include <span>
 #include <string>
+#include <string_view>
 #include <thread>
 #include <vector>
 
+#include <sys/wait.h>
+#include <unistd.h>
+
+#include <lmdj/facade/application.hpp>
+
 #include "packages/application-facade/src/pattern_transport_io_owner.hpp"
 #include "tests/core/support/test.hpp"
+#include "tests/core/support/child_process.hpp"
 
 namespace {
 using namespace lmdj;
@@ -34,6 +45,17 @@ class FaultStorage final : public lmdj::project_io::ProjectStoragePlatform {
   bool after_write = false;
   bool fault_hit = false;
   bool fail_sync = false;
+  std::filesystem::path crash_marker;
+  std::string crash_label;
+
+  lmdj::foundation::Result<void> selected_fault() {
+    if (!crash_marker.empty()) {
+      { std::ofstream marker(crash_marker); marker << crash_label; marker.flush();
+        LMDJ_CHECK(static_cast<bool>(marker)); }
+      std::raise(SIGSTOP);
+    }
+    return fault();
+  }
 
   lmdj::foundation::Result<std::unique_ptr<lmdj::project_io::ProjectWriterLease>>
   acquire_writer(const std::filesystem::path& path) override {
@@ -65,9 +87,9 @@ class FaultStorage final : public lmdj::project_io::ProjectStoragePlatform {
       std::span<const std::byte> bytes) override {
     const bool hit = fault_kind == "manifest" && path.filename() == "manifest.json";
     if (hit) { fault_kind.clear(); fault_hit = true; }
-    if (hit && !after_write) return fault();
+    if (hit && !after_write) return selected_fault();
     const auto result = inner->replace_complete(path, bytes);
-    return hit && result.has_value() ? fault() : result;
+    return hit && result.has_value() ? selected_fault() : result;
   }
   lmdj::foundation::Result<void> append_durable(
       const std::filesystem::path& path, std::uint64_t prefix,
@@ -77,13 +99,18 @@ class FaultStorage final : public lmdj::project_io::ProjectStoragePlatform {
     const bool hit = !fault_kind.empty() && fault_kind != "manifest" &&
         text.find("\"kind\":\"" + fault_kind + "\"") != std::string::npos;
     if (hit) { fault_kind.clear(); fault_hit = true; }
-    if ((hit && !after_write) || (fail_sync && bytes.empty())) return fault();
+    if (hit && !after_write) return selected_fault();
+    if (fail_sync && bytes.empty()) return fault();
     const auto result = inner->append_durable(path, prefix, bytes);
-    return hit && result.has_value() ? fault() : result;
+    return hit && result.has_value() ? selected_fault() : result;
   }
   lmdj::foundation::Result<void> remove(
       const std::filesystem::path& path) override {
-    return inner->remove(path);
+    const bool hit = fault_kind == "remove" && path.filename() == "sequence.jsonl";
+    if (hit) { fault_kind.clear(); fault_hit = true; }
+    if (hit && !after_write) return selected_fault();
+    const auto result = inner->remove(path);
+    return hit && result.has_value() ? selected_fault() : result;
   }
   lmdj::foundation::Result<std::vector<std::string>> list_names(
       const std::filesystem::path& path) const override {
@@ -98,9 +125,7 @@ class FaultStorage final : public lmdj::project_io::ProjectStoragePlatform {
 
 struct Fixture {
   std::shared_ptr<FaultStorage> platform = std::make_shared<FaultStorage>();
-  std::filesystem::path root = std::filesystem::temp_directory_path() /
-      ("lmdj-recording-segments-" + std::to_string(
-          std::chrono::steady_clock::now().time_since_epoch().count()));
+  std::filesystem::path root;
   std::filesystem::path bundle = root / "project.lmdj";
   project_io::ProjectStore store{platform};
   project_io::SequenceJournal journals{platform};
@@ -110,7 +135,10 @@ struct Fixture {
   facade::PatternTransportControllerConfig config{bundle, session, project, a, 7};
   std::unique_ptr<PatternTransportIoOwner> io;
   std::uint64_t step = 1;
-  Fixture() {
+  explicit Fixture(std::filesystem::path owned_root =
+      std::filesystem::temp_directory_path() / ("lmdj-recording-segments-" +
+          std::to_string(std::chrono::steady_clock::now().time_since_epoch().count())))
+      : root(std::move(owned_root)) {
     auto created = domain::create_project(project, 120);
     LMDJ_CHECK(created.has_value());
     auto state = std::move(created.value());
@@ -426,10 +454,169 @@ void retained_segment_cell_prevents_close_from_removing_its_journal() {
   f.reopened_truth(source_notes, {}, 1);
 }
 
+struct CrashCase { const char* operation; const char* kind; };
+constexpr std::array<CrashCase, 16> crash_cases{{
+    {"segment", "admission-switch"}, {"segment", "admission-transfer"},
+    {"segment", "flush"}, {"segment", "manifest"}, {"segment", "complete"},
+    {"segment", "switch"}, {"segment", "admission-profile"},
+    {"admit", "admission-candidate"}, {"cutoff", "admission-fence"},
+    {"close", "admission-close"}, {"close", "admission-transfer"},
+    {"close", "flush"}, {"close", "manifest"}, {"close", "complete"},
+    {"close", "admission-complete"}, {"close", "remove"},
+}};
+
+PatternTransportWorkRequest cutoff_work(Fixture& f) {
+  const project_io::SequenceAdmissionFence fence{
+      project_io::SequenceFenceKind::cutoff, foundation::CommandId{uuid(500)},
+      12, 100000, 70000, f.a, 23, 120, false, {},
+      project_io::SequenceSwitchOutcome::none, {}};
+  return f.work(501, {{"op", "cutoff"},
+      {"fence", facade::detail::encode_transport_fence(fence)}}, 12);
+}
+
+void crash_child(const std::filesystem::path& root, const std::string& operation,
+                 const std::string& kind, bool after) {
+  LMDJ_CHECK(root.filename().string().starts_with("lmdj-segment-crash-") &&
+      std::filesystem::canonical(root.parent_path()) ==
+          std::filesystem::canonical(std::filesystem::temp_directory_path()) &&
+      std::filesystem::is_directory(root) && !std::filesystem::is_symlink(root));
+  Fixture f{root};
+  f.source();
+  f.run(f.segment(100, f.b, 22, 40000));
+  f.target();
+  auto request = f.segment(101, f.a, 23, 70000);
+  if (operation != "segment") {
+    f.run(request);
+    if (operation == "admit") {
+      request = f.work(2000, {{"op", "admit"}, {"candidate", {
+          {"watermark", 14}, {"frame", 76000}, {"bank", 0}, {"pad", 3},
+          {"pressed", true}, {"velocity", 100}, {"correlation", 90}}}});
+    } else {
+      f.input(14, 76000, 3, true, 90, 100);
+      f.input(15, 88000, 3, false, 90);
+      request = cutoff_work(f);
+      if (operation == "close") {
+        f.run(request);
+        request = f.work(502, {{"op", "close"}, {"switched", false}}, 12);
+      } else LMDJ_CHECK(operation == "cutoff");
+    }
+  }
+  f.platform->fault_kind = kind;
+  f.platform->after_write = after;
+  f.platform->crash_marker = root / "crash-barrier";
+  f.platform->crash_label = operation + ":" + kind + (after ? ":after" : ":before");
+  (void)f.io->execute(request);
+  // Returning normally, an exception, or missing the requested storage call
+  // cannot stand in for a process stopped at that exact durable boundary.
+  LMDJ_CHECK(false);
+}
+
+void cold_recovery_after_real_process_death() {
+  std::size_t completed = 0;
+  for (const auto& c : crash_cases) for (bool after : {false, true}) {
+    struct OwnedDirectory {
+      std::filesystem::path path = std::filesystem::temp_directory_path() /
+          ("lmdj-segment-crash-" + std::to_string(
+              std::chrono::steady_clock::now().time_since_epoch().count()));
+      ~OwnedDirectory() { std::error_code ignored; std::filesystem::remove_all(path, ignored); }
+    } owned;
+    LMDJ_CHECK(std::filesystem::create_directory(owned.path));
+    const auto child = test::process::spawn({"--crash-step", owned.path.string(),
+        c.operation, c.kind, after ? "after" : "before"});
+    int status = 0;
+    pid_t observed = 0;
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds{5};
+    while (observed == 0 && std::chrono::steady_clock::now() < deadline) {
+      observed = ::waitpid(child, &status, WUNTRACED | WNOHANG);
+      if (observed < 0 && errno == EINTR) observed = 0;
+      if (observed == 0) std::this_thread::sleep_for(std::chrono::milliseconds{1});
+    }
+    const bool stopped = observed == child && WIFSTOPPED(status) && WSTOPSIG(status) == SIGSTOP;
+    // Reap before asserting so a failed precondition cannot strand a child.
+    if (observed == 0 || stopped) {
+      LMDJ_CHECK(::kill(child, SIGKILL) == 0);
+      pid_t reaped;
+      do { reaped = ::waitpid(child, &status, 0); } while (reaped < 0 && errno == EINTR);
+      LMDJ_CHECK(reaped == child);
+    }
+    LMDJ_CHECK(stopped && WIFSIGNALED(status) && WTERMSIG(status) == SIGKILL);
+    const std::string label = std::string(c.operation) + ":" + c.kind + (after ? ":after" : ":before");
+    std::ifstream marker(owned.path / "crash-barrier");
+    LMDJ_CHECK(std::string(std::istreambuf_iterator<char>{marker}, {}) == label);
+
+    const auto bundle = owned.path / "project.lmdj";
+    const foundation::PatternId a{uuid(2)}, b{uuid(9)};
+    const foundation::SequenceSessionId session{uuid(1)};
+    auto expected = domain::create_project(foundation::ProjectId{uuid(4)}, 120).value();
+    auto a_events = source_notes;
+    const bool terminal = std::string_view(c.operation) == "cutoff" || std::string_view(c.operation) == "close";
+    if (terminal || (std::string_view(c.operation) == "admit" && after))
+      a_events.insert(a_events.begin(), {{0, 3}, 240, terminal ? 480U : 240U, 100});
+    expected.patterns.emplace(a, domain::Pattern{a, 1, a_events});
+    expected.patterns.emplace(b, domain::Pattern{b, 1, target_notes});
+    expected.revision = a_events.size() == 1 ? 2 : 3;
+    const facade::ApplicationConfig config{owned.path, nullptr, {}, {},
+        audio::RuntimePreparationLimits{1'048'576, 240'000, 67'108'864, 134'217'728},
+        nullptr, nullptr, nullptr, nullptr, facade::make_unavailable_performance_replay_controller()};
+    {
+      facade::Application recovery{config};
+      const auto active_before_listing = project_io::SequenceJournal{}.read_active(bundle);
+      const auto listed = recovery.list_sequence_recovery({bundle});
+      LMDJ_CHECK(listed.has_value());
+      if (listed.value().empty()) {
+        LMDJ_CHECK(std::string_view(c.operation) == "close" &&
+            ((after && std::string_view(c.kind) == "admission-complete") ||
+             std::string_view(c.kind) == "remove"));
+        if (std::string_view(c.kind) == "remove" && after) {
+          LMDJ_CHECK(!active_before_listing.has_value() &&
+              active_before_listing.error().code == foundation::ErrorCode::not_found);
+        } else {
+          LMDJ_CHECK(active_before_listing.has_value() && active_before_listing.value().admission &&
+              active_before_listing.value().admission->completed);
+        }
+      } else {
+        LMDJ_CHECK(listed.value().size() == 1 && listed.value().front().session_id == session);
+        LMDJ_CHECK(active_before_listing.has_value() &&
+            listed.value().front().pattern_id == active_before_listing.value().pattern_id &&
+            listed.value().front().reason == "owner_lost");
+        const auto applied = recovery.apply_sequence_recovery({bundle, session, {}});
+        if (!applied.has_value()) std::cerr << label << ' ' << applied.error().message << ' '
+            << applied.error().details.dump() << '\n';
+        LMDJ_CHECK(applied.has_value());
+      }
+      LMDJ_CHECK(project_io::ProjectStore{}.load(bundle).value() == expected);
+      LMDJ_CHECK(recovery.list_sequence_recovery({bundle}).value().empty());
+      const auto absent = project_io::SequenceJournal{}.read_active(bundle);
+      LMDJ_CHECK(!absent.has_value() && absent.error().code == foundation::ErrorCode::not_found);
+    }
+    {
+      facade::Application reopened{config};
+      LMDJ_CHECK(project_io::ProjectStore{}.load(bundle).value() == expected);
+      LMDJ_CHECK(reopened.list_sequence_recovery({bundle}).value().empty());
+      LMDJ_CHECK(!reopened.apply_sequence_recovery({bundle, session, {}}).has_value());
+      LMDJ_CHECK(project_io::ProjectStore{}.load(bundle).value() == expected);
+    }
+    ++completed;
+    std::cout << "cold segment recovery " << label << ": PASS\n";
+  }
+  LMDJ_CHECK(completed == 32);
+  std::cout << "cold segment recovery matrix: PASS (32 actual SIGKILL boundaries)\n";
+}
+
 }  // namespace
 
-int main() {
+int main(int argc, char** argv) {
   try {
+    lmdj::test::process::initialize(argv[0]);
+    if (argc == 6 && std::string_view(argv[1]) == "--crash-step") {
+      crash_child(argv[2], argv[3], argv[4], std::string_view(argv[5]) == "after");
+      return 1;
+    }
+    if (argc == 2 && std::string_view(argv[1]) == "--restart") {
+      cold_recovery_after_real_process_death();
+      return 0;
+    }
+    LMDJ_CHECK(argc == 1 || (argc == 2 && std::string_view(argv[1]) == "--component"));
     continuous_a_b_a_keeps_full_truth_and_new_generation_clock();
     empty_segments_keep_equal_frontiers_and_no_empty_flushes();
     durable_partial_steps_replay_original_work_after_owner_reconstruction();
@@ -437,6 +624,7 @@ int main() {
     legitimate_settings_rebase_preserves_terminal_switch_close();
     changed_project_revision_cannot_become_segment_authority();
     retained_segment_cell_prevents_close_from_removing_its_journal();
+    if (argc == 1) cold_recovery_after_real_process_death();
     std::cout << "pattern transport segment tests: PASS\n";
   } catch (const std::exception& error) {
     std::cerr << error.what() << '\n';
