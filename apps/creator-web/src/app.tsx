@@ -151,8 +151,9 @@ import {
 import {beatsInWindow} from "./runtime/metronome_scheduler";
 import {createMetronomeClickLoop} from "./runtime/metronome_click";
 import {
-  createCountInController, initialCountInState, isCountInSession,
-  type CountInController, countInMetronomeArm} from "./runtime/count_in_controller";
+  countInLocksPatternSelection, countInMetronomeArm, createCountInController,
+  initialCountInState, isCountInSession, type CountInController,
+} from "./runtime/count_in_controller";
 import {
   readCountInPreference, writeCountInPreference, type CountInBars,
 } from "./state/count_in_preference";
@@ -2876,7 +2877,8 @@ function Workspace({
   }, [session, reportFailure]);
 
   const selectSequencePattern = async (patternId: string) => {
-    if (!session || countInControllerRef.current?.getState().active) return;
+    if (!session || countInLocksPatternSelection(
+      countInControllerRef.current?.getState() ?? initialCountInState)) return;
     const current = transportRef.current;
     if (isPatternTransportSession(session) && current.sessionId !== null) {
       if (selectTransportBusy(current)) return;
@@ -3009,13 +3011,13 @@ function Workspace({
   const playing = selectTransportPlaying(transport);
   // Tempo and Swing lock while recording or while a transport command
   // settles, as the touch controls do; a turn in progress is dropped.
-  // A count-in owns the transport from request to settle: the workspace
-  // (settings and Pattern selection alike) stays locked throughout.
-  const sequenceWorkspaceLocked = countIn.active || transportBusy || state.project.phase !== "ready" ||
+  // Settings stay locked through the retained COUNT-IN caller's lifetime.
+  // Pattern selection may join its Applied, durably opened recording.
+  const sequenceWorkspaceLocked = transportBusy || state.project.phase !== "ready" ||
     state.runtime.phase !== "ready" || state.projectProjectionRefresh !== null ||
     state.transfer.phase !== "idle";
-  const sequenceSettingsLocked = recording || sequenceWorkspaceLocked;
-  const patternSelectionLocked = sequenceWorkspaceLocked ||
+  const sequenceSettingsLocked = countIn.active || recording || sequenceWorkspaceLocked;
+  const patternSelectionLocked = countInLocksPatternSelection(countIn) || sequenceWorkspaceLocked ||
     transport.status?.phase === "error" || transport.lastFailed !== null;
   // Core refuses a Pad colour change while recording or while the transport
   // settles; playing is fine. A pending Project change would leave the
@@ -3267,7 +3269,7 @@ function Workspace({
                   }
                 });
               }}
-              recordEnabled={countIn.active || (transportReady && !transportBusy &&
+              recordEnabled={countIn.active ? countIn.phase !== "handoff" : (transportReady && !transportBusy &&
                 (padCaptureState === null || padCaptureState.phase === "idle") &&
                 ["idle", "permission-error"].includes(capturePhase) &&
                 ["idle", "saved", "discarded"].includes(historyPerformPhase))}
@@ -3290,7 +3292,7 @@ function Workspace({
                   }
                 });
               }}
-              playEnabled={countIn.active || (transportReady && !transportBusy)}
+              playEnabled={countIn.active ? countIn.phase !== "handoff" : (transportReady && !transportBusy)}
               playing={playing}
               onOpenSystem={openSystem}
               systemOpen={systemOpen}

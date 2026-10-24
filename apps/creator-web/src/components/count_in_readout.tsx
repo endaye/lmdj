@@ -33,7 +33,7 @@ export function CountInReadout({state, transport, running}: {
   }, [state.active, state.recording, running, anchorFrame, observedAt]);
   const beats = frame === null ? null : countInBeatsRemaining(state.status, frame);
   const label = state.phase === "cancelling" ? "COUNT-IN · Cancelling"
-    : state.phase === "settling" ? "COUNT-IN · Finishing"
+    : state.phase === "settling" || state.phase === "handoff" ? "COUNT-IN · Finishing"
     : beats === null ? "COUNT-IN · Preparing"
     : beats === 0 ? "COUNT-IN · Starting"
     : `COUNT-IN · ${beats} ${beats === 1 ? "beat" : "beats"} left`;
