@@ -949,9 +949,10 @@ test("Sample Editor WebKit capability boundary is explicit, private, and non-phy
   await expect(alert).toContainText("This browser cannot run Creator.");
 });
 
-test("re-importing a diverged Project Bundle recovers through Open local Project without a reload", async ({page, browserName}) => {
+test("re-importing a diverged Project Bundle recovers through Open local Project without a reload", async ({page, browserName}, testInfo) => {
   test.skip(browserName !== "chromium");
   test.setTimeout(300_000);
+  const noErrors = recordPageErrors(page);
   await installHostProofRecorder(page);
   await page.goto("/index.html");
   await importV1SampleProject(page);
@@ -972,6 +973,19 @@ test("re-importing a diverged Project Bundle recovers through Open local Project
     .toBeVisible({timeout: 120_000});
   await expectProjectRevision(page, 47);
 
+  const inspected = await rawRequest(page, "project.inspect", {});
+  expect(inspected.ok, JSON.stringify(inspected.error ?? null)).toBe(true);
+  const before = inspected.result.project;
+  const inventory = await countInProjectInventory(page, before.project_id);
+  expect(inventory.some(entry => entry.path.startsWith("assets/") && entry.bytes > 0)).toBe(true);
+  const expectRetainedProject = async () => {
+    const response = await rawRequest(page, "project.inspect", {});
+    expect(response.ok, JSON.stringify(response.error ?? null)).toBe(true);
+    expect(response.result.project).toEqual(before);
+    expect(await countInProjectInventory(page, before.project_id)).toEqual(inventory);
+    return response.result.project;
+  };
+
   // Re-importing the original bundle is refused as DUPLICATE_ID: the local
   // copy of the same Project has newer changes. The refusal must present as
   // a recoverable situation, not as "Creator unavailable".
@@ -990,10 +1004,91 @@ test("re-importing a diverged Project Bundle recovers through Open local Project
     "The import was refused because the local copy of this Project has newer changes. Nothing was lost.",
   );
   await expect(alert).not.toContainText("Creator unavailable");
+  await expectRetainedProject();
+
+  const observations = [];
+  for (const viewport of [
+    {width: 648, height: 364}, {width: 667, height: 375},
+    {width: 844, height: 390}, {width: 768, height: 1024},
+    {width: 1440, height: 900},
+  ]) {
+    await page.setViewportSize(viewport);
+    await page.waitForFunction(({width, height}) => innerWidth === width && innerHeight === height, viewport);
+    await page.evaluate(() => document.fonts.ready);
+    await page.evaluate(() => new Promise(resolve => requestAnimationFrame(resolve)));
+    const geometry = await alert.evaluate(panel => {
+      const box = element => element.getBoundingClientRect().toJSON();
+      const textRects = element => {
+        const range = document.createRange(); range.selectNodeContents(element);
+        return [...range.getClientRects()].map(rect => rect.toJSON());
+      };
+      return {viewport: {width: innerWidth, height: innerHeight}, panel: box(panel),
+        copy: [...panel.querySelectorAll(":scope > strong, :scope > span")]
+          .map(element => ({text: element.textContent, rects: textRects(element)})),
+        actions: [...panel.querySelectorAll("button")].map(button => {
+          const rect = button.getBoundingClientRect();
+          const points = [[rect.x + rect.width / 2, rect.y + rect.height / 2],
+            [rect.left + 1, rect.y + rect.height / 2], [rect.right - 1, rect.y + rect.height / 2],
+            [rect.x + rect.width / 2, rect.top + 1], [rect.x + rect.width / 2, rect.bottom - 1]];
+          return {text: button.textContent.trim(), ...box(button), textRects: textRects(button),
+            hits: points.map(([x, y]) => {
+              const hit = document.elementFromPoint(x, y);
+              return hit === button || button.contains(hit);
+            })};
+        })};
+    });
+    observations.push(geometry);
+    const geometryPath = testInfo.outputPath("duplicate-project-geometry.json");
+    await writeFile(geometryPath, JSON.stringify(observations, null, 2));
+    const image = testInfo.outputPath(`duplicate-project-${viewport.width}x${viewport.height}.png`);
+    await page.screenshot({path: image});
+    await testInfo.attach(`duplicate-project-${viewport.width}x${viewport.height}`, {path: image, contentType: "image/png"});
+    const insideViewport = rect => {
+      expect(rect.width).toBeGreaterThan(0); expect(rect.height).toBeGreaterThan(0);
+      expect(rect.left).toBeGreaterThanOrEqual(0); expect(rect.top).toBeGreaterThanOrEqual(0);
+      expect(rect.right).toBeLessThanOrEqual(viewport.width); expect(rect.bottom).toBeLessThanOrEqual(viewport.height);
+    };
+    insideViewport(geometry.panel);
+    expect(geometry.copy.map(copy => copy.text)).toEqual([
+      "Project already on this device",
+      "The import was refused because the local copy of this Project has newer changes. Nothing was lost.",
+      "Open the local Project to keep working on it.",
+    ]);
+    for (const copy of geometry.copy) {
+      expect(copy.rects.length).toBeGreaterThan(0);
+      copy.rects.forEach(insideViewport);
+    }
+    expect(geometry.actions.map(action => action.text)).toEqual(["Open local Project", "Dismiss"]);
+    for (const action of geometry.actions) {
+      insideViewport(action);
+      expect(action.width).toBeGreaterThanOrEqual(44); expect(action.height).toBeGreaterThanOrEqual(44);
+      expect(action.hits).toEqual([true, true, true, true, true]);
+      expect(action.textRects.length).toBeGreaterThan(0);
+      for (const rect of action.textRects) {
+        insideViewport(rect);
+        expect(rect.left).toBeGreaterThanOrEqual(action.left); expect(rect.top).toBeGreaterThanOrEqual(action.top);
+        expect(rect.right).toBeLessThanOrEqual(action.right); expect(rect.bottom).toBeLessThanOrEqual(action.bottom);
+      }
+      const button = alert.getByRole("button", {name: action.text, exact: true});
+      await button.focus(); await expect(button).toBeFocused();
+    }
+  }
+  const geometryPath = testInfo.outputPath("duplicate-project-geometry.json");
+  await testInfo.attach("duplicate-project-geometry", {path: geometryPath, contentType: "application/json"});
+  await page.setViewportSize({width: 648, height: 364});
+  await page.waitForFunction(() => innerWidth === 648 && innerHeight === 364);
+  await page.evaluate(() => new Promise(resolve => requestAnimationFrame(resolve)));
+  await openCreatorSystem(page);
+  await page.getByText(/^Developer diagnostics \(\d+\)$/).click();
+  await expect(page.getByRole("region", {name: "Developer diagnostics"})).toContainText("DUPLICATE_ID");
+  await page.getByRole("button", {name: "Back to music", exact: true}).click();
+  await expectRetainedProject();
 
   // The recovery control dismisses the panel and leads to the local Projects
   // list — the same destination as Open local — without a reload.
-  await page.getByRole("button", {name: "Open local Project"}).click();
+  const recover = alert.getByRole("button", {name: "Open local Project", exact: true});
+  await recover.focus(); await expect(recover).toBeFocused();
+  await page.keyboard.press("Enter");
   await expect(alert).toHaveCount(0);
   await expect(page.getByRole("heading", {name: "Local Projects"}))
     .toBeVisible();
@@ -1005,6 +1100,15 @@ test("re-importing a diverged Project Bundle recovers through Open local Project
   await expect(page.getByRole("heading", {name: "Project 00000000"}))
     .toBeVisible({timeout: 120_000});
   await expect(page.locator(".creator-details-facts")).toContainText("Rev47");
+  const recovered = await expectRetainedProject();
+
+  await page.reload();
+  await waitForProjectReopen(page, "00000000");
+  const reopened = await expectRetainedProject();
+  const result = testInfo.outputPath("duplicate-project-recovery.json");
+  await writeFile(result, JSON.stringify({before, inventory, observations, recovered, reopened}, null, 2));
+  await testInfo.attach("duplicate-project-recovery", {path: result, contentType: "application/json"});
+  noErrors();
 });
 
 test("Creator history preserves sound identity across modes, cancelled edits and persisted reopen", async ({page, browserName}) => {
