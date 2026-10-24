@@ -275,6 +275,28 @@ export function sampleNextStep(failure: Readonly<{
 export const NO_ROOM_MESSAGE =
   "There is no room left for more sound in this Bank. Free a Pad or use another Bank.";
 
+// Presentation only: the original candidate reason remains available through
+// the SDK. An active/switching journal does not itself establish owner loss.
+export function recordingRecoveryReasonMessage(reason: string): string {
+  switch (reason) {
+    case "active":
+    case "switching":
+      return "Unfinished recording";
+    case "stopped":
+      return "Stopped recording";
+    case "recovery_required":
+      return "Recording needs recovery";
+    case "owner_lost":
+      return "Recording session ended";
+    case "abandoned":
+      return "Recording left unfinished";
+    case "interrupted":
+      return "Interrupted recording";
+    default:
+      return "Recording needs review";
+  }
+}
+
 // Why Performance recording is unavailable, by the platform's capture code.
 export function performCaptureUnavailableMessage(code: string): string {
   switch (code) {

@@ -1,5 +1,5 @@
 import "./perform_surface.css";
-import {performCaptureUnavailableMessage} from "../state/error_messages";
+import {performCaptureUnavailableMessage, recordingRecoveryReasonMessage} from "../state/error_messages";
 import {useEffect, useId, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore} from "react";
 import type {PerformanceFx} from "@lmdj/web-runtime-platform/runtime_types";
 import type {ContextualEncoders, ContextualNavigation} from "./physical_controls";
@@ -277,7 +277,7 @@ function ReplayPanel(props: {
       {state.recovery.length > 0 ? <h2 className="perform-take-heading">Recording recovery</h2> : null}
       {state.recovery.map((candidate) => (
         <article className="perform-replay-recovery-card" key={candidate.sessionId}>
-          <span>{candidate.reason}</span>
+          <span>{recordingRecoveryReasonMessage(candidate.reason)}</span>
           <button type="button"
             onClick={() => props.onRecover(candidate.sessionId)}>Apply recovery</button>
           <button type="button"

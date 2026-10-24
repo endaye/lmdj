@@ -1,4 +1,4 @@
-import {userMessage} from "../state/error_messages";
+import {recordingRecoveryReasonMessage, userMessage} from "../state/error_messages";
 import {useEffect, useRef, useState} from "react";
 
 import {ValueSlider} from "./value_slider";
@@ -388,7 +388,7 @@ export function SequenceTouchWorkspace(props: SequenceTouchWorkspaceProps) {
           <h2>Recovery</h2>
           {state.recovery.map((candidate) => (
             <article key={candidate.sessionId}>
-              <p>{candidate.reason} · {candidate.eventCount} events</p>
+              <p>{recordingRecoveryReasonMessage(candidate.reason)} · {candidate.eventCount} events</p>
               <button type="button" onClick={() => props.onRecover(candidate, null)}>
                 Recover original Pattern
               </button>
