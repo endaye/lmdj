@@ -237,8 +237,7 @@ async function expectRecoveryItemsReachable(page, testInfo, decision) {
               intersectionRatio: entry.intersectionRatio, clip, clippingAncestors,
               textRects: [...range.getClientRects()].map(rectangle),
               hits: points.map(([x, y]) => ({x, y,
-                owned: node.contains(document.elementFromPoint(x, y))})),
-              navigation: getComputedStyle(document.querySelector(".perform-page-nav")).position});
+                owned: node.contains(document.elementFromPoint(x, y))}))});
           });
           observer.observe(node);
         }));

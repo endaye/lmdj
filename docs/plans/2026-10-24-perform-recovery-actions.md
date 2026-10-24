@@ -140,3 +140,29 @@ replacement oracle before accepting the corrected candidate.
 That original-package recheck exits 1 in 24.726s at the strict Apply bottom
 edge: 354px exceeds the actual 348px clip boundary. This independently retains
 the same missing 6px of the 44px action without a rounded-ratio threshold.
+
+## Independent-review follow-up Task
+
+The published source `3a5b19340e220b883a3fe08cf44b1c4953922c9a` passes both
+complete owning journeys (66.989s browser, 67.907s observed wrapper), including
+40 strict geometry records and their path-backed JSON/PNG attachments. Its
+authenticated GLM review40093679605/1 has zero structured findings, but the
+substantive review also names two advisory test-robustness points; dispose
+both rather than treating the empty structured list as the whole review.
+
+One separate Conventional Commit owns only this plan and
+`tests/platform/web/creator/creator_web_perform.spec.mjs`. Remove the unused
+navigation-position diagnostic query: a missing navigation could otherwise
+throw inside the observer callback before resolving its promise. Do not add
+a CSS-property assertion: full clipping, text containment, 44px dimensions,
+focus and actual centre/edge ownership are the user-facing invariant and
+must stay implementation-independent. No assertion, viewport or journey leg
+is removed. Preserve the already-pushed source and use a normal follow-up.
+
+Lowest-tier checks are Node syntax and the same complete two-case packaged
+journey selection on the final head. Production inputs and both Portal pages
+are byte-identical, so their existing types/build/Portal evidence retains
+that explicit input binding. Version impact: none for this test-only Task;
+Documentation impact: none for this follow-up; the PR's original required
+Portal declaration still applies. Repeat current-head independent review and
+the unchanged guarded shipping procedure for the resulting published head.
