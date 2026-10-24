@@ -150,7 +150,7 @@ test("the open Project is served for takeover under its own identity", async () 
   expect(takeover.holder().projectId).toBe(LISTED.projectId);
 });
 
-test("an accepted takeover closes this Runtime and shows the Project continued elsewhere", async () => {
+test("a confirmed takeover close shows that this tab released the Project", async () => {
   const {first, takeover} = await bootHolder();
   let decision: TakeoverDecision | undefined;
   act(() => { decision = takeover.holder().decide(); });
@@ -158,8 +158,36 @@ test("an accepted takeover closes this Runtime and shows the Project continued e
   await expect(decision?.accepted ? decision.released : null).resolves.toBe(true);
   expect(first.calls.filter((call) => call === "close")).toHaveLength(1);
   const alert = await screen.findByRole("alert");
-  expect(alert.textContent).toContain("Project open in another tab");
+  expect(alert.textContent).toContain("Project released from this tab");
   expect(screen.getByRole("button", {name: "Continue here"})).toBeTruthy();
+});
+
+test.each([true, false])("the holder reports the original release result after a pending close (%s)", async clean => {
+  const {first, takeover, created} = await bootHolder();
+  let finish!: (clean: boolean) => void;
+  const closing = new Promise<boolean>(resolve => { finish = resolve; });
+  first.session.close = async () => { first.calls.push("close"); return closing; };
+  let decision: TakeoverDecision | undefined;
+  try {
+    await act(async () => { decision = takeover.holder().decide(); });
+    expect(decision?.accepted).toBe(true);
+    expect(screen.getByText("Releasing Project from this tab")).toBeTruthy();
+    expect(screen.queryByText("Project open in another tab")).toBeNull();
+    expect(screen.queryByText(/Changes made here are saved/)).toBeNull();
+    expect(screen.getByRole("button", {name: "Continue here"})).toBeTruthy();
+    expect(created()).toBe(1);
+    await act(async () => { finish(clean); await closing; });
+    await expect(decision?.accepted ? decision.released : null).resolves.toBe(clean);
+    expect(await screen.findByText(clean
+      ? "Project released from this tab" : "Project release could not be confirmed")).toBeTruthy();
+    expect(screen.queryByText("Releasing Project from this tab")).toBeNull();
+    expect(screen.queryByText("Project open in another tab")).toBeNull();
+    expect(Boolean(screen.queryByText(/Changes made here are saved/))).toBe(clean);
+    expect(created()).toBe(1);
+    expect(first.calls.filter(call => call === "close")).toHaveLength(1);
+  } finally {
+    await act(async () => { finish(clean); await closing; });
+  }
 });
 
 test("a holder playing audio refuses and keeps its Runtime", async () => {
@@ -170,7 +198,7 @@ test("a holder playing audio refuses and keeps its Runtime", async () => {
   act(() => { decision = takeover.holder().decide(); });
   expect(decision).toEqual({accepted: false});
   expect(first.calls).not.toContain("close");
-  expect(screen.queryByText("Project open in another tab")).toBeNull();
+  expect(screen.queryByText("Project released from this tab")).toBeNull();
 });
 
 test("a closed holder's Continue here waits for release, then reopens on a fresh Runtime", async () => {
@@ -184,7 +212,7 @@ test("a closed holder's Continue here waits for release, then reopens on a fresh
   act(() => takeover.requests[0]!.resolve("released"));
   await waitFor(() => expect(second.calls).toContain(`openProject:${LISTED.projectId}`));
   expect(created()).toBe(2);
-  await waitFor(() => expect(screen.queryByText("Project open in another tab")).toBeNull());
+  await waitFor(() => expect(screen.queryByText("Project released from this tab")).toBeNull());
 });
 
 test("a take-back whose fresh reopen is still busy offers Continue here again", async () => {
@@ -198,7 +226,7 @@ test("a take-back whose fresh reopen is still busy offers Continue here again", 
   const busy = await screen.findByText(BUSY);
   expect(busy.closest("[role=alert]")?.textContent).toMatch(/did not respond/);
   expect(screen.getByRole("button", {name: "Continue here"})).toBeTruthy();
-  expect(screen.queryByText("Project open in another tab")).toBeNull();
+  expect(screen.queryByText("Project released from this tab")).toBeNull();
 });
 
 test("a refused take-back keeps this Runtime closed and says why", async () => {
@@ -236,7 +264,7 @@ test("a busy open offers Continue here and opens once the holder releases", asyn
 
 test.each([
   ["unanswered", /did not respond/],
-  ["release-failed", /still closing/],
+  ["release-failed", /did not confirm a clean release/],
   ["released", /let go, but the Project is still busy/],
 ] as const)("an open still busy after %s names that outcome", async (outcome, note) => {
   const {fixture, takeover} = await bootRequester(["busy", "busy"]);
@@ -308,10 +336,10 @@ test("pending take-back shows one status and cancellation restores the closed ow
   act(() => { takeover.holder().decide(); });
   await userEvent.click(await screen.findByRole("button", {name: "Continue here"}));
   expect(screen.getByText("Asking the other tab to hand over this Project…")).toBeTruthy();
-  expect(screen.queryByText("Project open in another tab")).toBeNull();
+  expect(screen.queryByText("Project released from this tab")).toBeNull();
   expect(screen.queryByRole("alert")).toBeNull();
   await userEvent.click(screen.getByRole("button", {name: "Cancel"}));
-  await screen.findByText("Project open in another tab");
+  await screen.findByText("Project released from this tab");
   expect(screen.getByRole("button", {name: "Continue here"})).toBeTruthy();
   expect(screen.queryByText("Asking the other tab to hand over this Project…")).toBeNull();
   expect(created()).toBe(1);

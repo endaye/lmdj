@@ -812,6 +812,8 @@ Slice 入口只在 Pattern 停止时可用，见 [4.5](#pad-page)。
 | Project 正被占用 | Retry project | 重试原来的读取或打开，不强行占用。只有此重试动作而没有接管动作时，提示先关闭仍占有它的 Project，再重试；不指向未提供的 Continue here。 |
 | Project 被另一标签页占用，或本页已让出 | Continue here | 请求另一标签页让出 Project，对方同意后在本页打开。对方正在播放、录音或保存时可以拒绝；没有回应不等于同意。 |
 | 正在请求接管 | Cancel | 等待期间只呈现进度卡片；暂时收起先前的忙碌或已让出卡片，避免覆盖仍可聚焦的旧动作。取消恢复原状态与恢复入口，不打开 Project 或替换 Runtime。 |
+| 本页接受让出，原关闭尚未结算 | Releasing Project from this tab | 只说明正在释放；不提前声称已保存、已释放或另一标签页已打开。Continue here 保留原安全关闭与同 Session 重开守卫。 |
+| 原关闭已确认成功／未确认 | Project released from this tab／Project release could not be confirmed | 按原始关闭结果显示。只有成功才确认保存与释放；均不推断新持有方。请求方的释放失败只说明没有确认干净释放，不猜测对方仍在关闭。 |
 | 错误卡片的恢复动作 | 原有按钮 | 按原键盘顺序共用一行可用宽度，必要时换行；在已声明的矮横屏范围保留完整提示和 44px 命中框。动作条件、处理与非按钮内容的指针穿透规则不变。 |
 | 等待对方回应 | Cancel | 取消请求。不会关闭对方。 |
 | Runtime 故障导致需要重启 | Retry runtime | 重新启动 Runtime 并重新打开内容。未保存的草稿不保证保留。普通 Pad 的等待超时且 Runtime 仍正常运行时，不单凭这次超时要求重启。 |

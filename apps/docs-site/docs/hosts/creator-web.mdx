@@ -673,8 +673,14 @@ transport to be idle. While it is playing, recording, capturing, saving or runni
 another Project action, it refuses, and the requesting tab explains why. When it
 accepts, it closes its Runtime through the same barrier as closing the page:
 pending Performance saves finish, then `host.close` commits and releases the writer.
-It then shows that the Project is open in another tab, with its own Continue
-here to take it back; its controls stay unavailable until then.
+During that close it shows **Releasing Project from this tab**. Only a clean
+result shows **Project released from this tab** and confirms saved changes.
+A false or rejected close shows **Project release could not be confirmed**.
+None of these messages claims another tab already opened the Project: the
+requester can cancel after acceptance. Continue here retains the existing
+safe-close and exact-session replacement checks; controls stay unavailable
+until this tab safely reopens. A requester whose release wait fails is told
+that a clean release was not confirmed, without guessing the holder's state.
 
 The requesting tab waits a bounded time for an answer and for the release, and
 can cancel the wait. A holder that is gone, frozen or does not answer counts as

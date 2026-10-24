@@ -1,5 +1,6 @@
 import {showSamplePage} from "./fixtures/creator_navigation.mjs";
 import {wakeAudioWithPad} from "./fixtures/creator_audio.mjs";
+import {countInProjectInventory} from "./fixtures/count_in_helpers.mjs";
 import {readFile, writeFile} from "node:fs/promises";
 
 import {expect, test} from "./fixtures/refusal_diagnostics.mjs";
@@ -26,7 +27,7 @@ const AUDIO_TRANSITION_TIMEOUT_MS = 30_000 + 5_000;
 // then runs the three bounded Project-open operations.
 const TAKEOVER_TIMEOUT_MS = 2_000 + 30_000 + PROJECT_OPEN_TIMEOUT_MS;
 const BUSY = "The local Project is busy in another tab or process.";
-const TAKEN_OVER = "Project open in another tab";
+const TAKEN_OVER = "Project released from this tab";
 
 function pcm16Wav(frames) {
   const bytes = Buffer.alloc(44 + frames * 2);
@@ -98,6 +99,180 @@ async function expectTakenOver(page) {
   await expect(page.getByRole("alert").filter({hasText: TAKEN_OVER}))
     .toBeVisible({timeout: TAKEOVER_TIMEOUT_MS});
   await expect(page.getByTestId("creator-phase")).toHaveText("closed");
+}
+
+// Hold only delivery of the original close request, before Native sees it.
+// No reply, clean-close result, lease release or clock is manufactured. This
+// models a delayed control delivery, not a Native crash or physical owner loss.
+async function installCloseDeliveryDelay(page) {
+  await page.addInitScript(() => {
+    let exposed;
+    let armed = false;
+    let release = null;
+    let held = null;
+    let owner = null;
+    Object.defineProperty(window, "lmdjWebRuntimeHost", {
+      configurable: true,
+      get: () => exposed,
+      set(host) {
+        const native = host.transport;
+        owner = native;
+        async function forward(lane, args) {
+          const request = args[0];
+          let proof = null;
+          if (armed && request.operation === "host.close") {
+            armed = false;
+            proof = {request: structuredClone(request), forwarded: false, response: null};
+            held = proof;
+            await new Promise(resolve => { release = resolve; });
+            proof.forwarded = true;
+          }
+          const response = await native[lane](...args);
+          if (proof !== null) proof.response = structuredClone(response);
+          return response;
+        }
+        host.transport = Object.freeze({
+          send(...args) { return forward("send", args); },
+          get sendRetained() {
+            return typeof native.sendRetained === "function"
+              ? (...args) => forward("sendRetained", args) : undefined;
+          },
+          subscribe(...args) { return native.subscribe(...args); },
+          subscribeFailure(...args) { return native.subscribeFailure(...args); },
+          terminate(...args) { return native.terminate(...args); },
+          get terminated() { return native.terminated; },
+          get terminalOwnerReleased() { return native.terminalOwnerReleased; },
+        });
+        exposed = host;
+      },
+    });
+    window.__creatorCloseDelivery = {
+      arm() { armed = true; },
+      release() { const done = release; release = null; done?.(); },
+      snapshot: () => ({held, terminated: owner?.terminated,
+        terminalOwnerReleased: owner?.terminalOwnerReleased}),
+    };
+  });
+}
+
+for (const scenario of [
+  {outcome: "cancel", viewport: {width: 648, height: 364}},
+  {outcome: "release-timeout", viewport: {width: 1440, height: 900}},
+]) {
+  test(`holder release stays truthful through ${scenario.outcome} and reopen`, async ({page, context, browserName}, testInfo) => {
+    test.skip(browserName !== "chromium");
+    test.setTimeout(300_000);
+    const noErrors = recordPageErrors(page);
+    await page.setViewportSize(scenario.viewport);
+    await installCloseDeliveryDelay(page);
+    await page.goto("/index.html");
+    await waitForBootProject(page);
+    const shortId = (await overviewProjectId(page).textContent()).trim();
+    await wakeAudioWithPad(page);
+    const chooser = page.waitForEvent("filechooser");
+    await page.getByRole("button", {name: "Add Sample to Pad A01"}).click();
+    await (await chooser).setFiles({name: "release-status.wav", mimeType: "audio/wav", buffer: pcm16Wav(4_800)});
+    await page.getByRole("dialog", {name: /Pad A01 Long Source/})
+      .getByRole("button", {name: "Commit selection"}).click();
+    await expectProjectRevision(page, 1);
+    await page.getByRole("button", {name: "System", exact: true}).click();
+    await page.getByRole("button", {name: "Suspend audio"}).click();
+    await expect(page.getByTestId("audio-state")).toHaveText("Audio suspended", {
+      timeout: AUDIO_TRANSITION_TIMEOUT_MS,
+    });
+    await page.getByRole("button", {name: "Back to music", exact: true}).click();
+    await page.getByRole("button", {name: "Project", exact: true}).click();
+    const before = await projectTruth(page);
+    const inventory = await countInProjectInventory(page, before.project_id);
+    expect(inventory.some(entry => entry.path.startsWith("assets/") && entry.bytes > 0)).toBe(true);
+    const requester = await context.newPage();
+    const requesterErrors = recordPageErrors(requester);
+    await requester.setViewportSize(scenario.viewport);
+    await requester.goto("/index.html");
+    const busy = requester.getByRole("alert").filter({hasText: BUSY});
+    await expect(busy).toBeVisible({timeout: PROJECT_OPEN_TIMEOUT_MS});
+    await page.evaluate(() => window.__creatorCloseDelivery.arm());
+    try {
+      await busy.getByRole("button", {name: "Continue here"}).click();
+      await expect.poll(() => page.evaluate(() => window.__creatorCloseDelivery.snapshot().held !== null))
+        .toBe(true);
+      const pending = page.getByRole("status").filter({hasText: "Releasing Project from this tab"});
+      await expect(pending).toBeVisible();
+      await expect(page.getByText("Project open in another tab", {exact: true})).toHaveCount(0);
+      await expect(pending).not.toContainText("Changes made here are saved");
+      await expect(page.getByRole("button", {name: "New Project", exact: true})).toBeDisabled();
+      const held = await page.evaluate(() => window.__creatorCloseDelivery.snapshot());
+      expect(held).toMatchObject({terminated: false, terminalOwnerReleased: false,
+        held: {forwarded: false, response: null, request: {operation: "host.close"}}});
+      expect(await projectTruth(page)).toEqual(before);
+      const geometry = await pending.evaluate(panel => {
+        const action = panel.querySelector("button");
+        const box = element => {const r = element.getBoundingClientRect();
+          return {left: r.left, right: r.right, top: r.top, bottom: r.bottom,
+            width: r.width, height: r.height};};
+        const r = action.getBoundingClientRect();
+        return {panel: box(panel), action: box(action),
+          hit: document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2) === action};
+      });
+      for (const rect of [geometry.panel, geometry.action]) {
+        expect(rect.left).toBeGreaterThanOrEqual(0);
+        expect(rect.top).toBeGreaterThanOrEqual(0);
+        expect(rect.right).toBeLessThanOrEqual(scenario.viewport.width);
+        expect(rect.bottom).toBeLessThanOrEqual(scenario.viewport.height);
+      }
+      expect(geometry.action.width).toBeGreaterThanOrEqual(44);
+      expect(geometry.action.height).toBeGreaterThanOrEqual(44);
+      expect(geometry.hit).toBe(true);
+      const pendingPath = testInfo.outputPath("holder-release-pending.png");
+      await page.screenshot({path: pendingPath});
+      await testInfo.attach("holder-release-pending", {path: pendingPath, contentType: "image/png"});
+
+      if (scenario.outcome === "cancel") {
+        const cancel = requester.getByRole("status").filter({hasText: "Asking the other tab"})
+          .getByRole("button", {name: "Cancel", exact: true});
+        await cancel.focus();
+        await expect(cancel).toBeFocused();
+        await requester.keyboard.press("Enter");
+        await expect(busy).toBeVisible();
+      } else {
+        // Exercise the actual coordinator's original 20-second release bound.
+        // Keep the original SDK close deadline and the held request unchanged.
+        await expect(busy).toContainText("The other tab did not confirm a clean release.", {
+          timeout: 20_000 + PROJECT_OPEN_TIMEOUT_MS,
+        });
+      }
+      expect(await page.evaluate(() => window.__creatorCloseDelivery.snapshot()))
+        .toMatchObject({terminated: false, terminalOwnerReleased: false, held: {forwarded: false}});
+      await expect(pending).toBeVisible();
+      await page.evaluate(() => window.__creatorCloseDelivery.release());
+      await expectTakenOver(page);
+      const released = await page.evaluate(() => window.__creatorCloseDelivery.snapshot());
+      expect(released).toMatchObject({terminated: true, terminalOwnerReleased: true,
+        held: {forwarded: true, response: {ok: true}}});
+      expect(released.held.response.request_id).toBe(released.held.request.request_id);
+      await expect(page.getByRole("alert")).not.toContainText("Project open in another tab");
+
+      const retry = busy.getByRole("button", {name: "Retry project", exact: true});
+      await retry.focus();
+      await expect(retry).toBeFocused();
+      await requester.keyboard.press("Enter");
+      await expect(requester.getByTestId("creator-phase")).toHaveText("ready", {timeout: PROJECT_OPEN_TIMEOUT_MS});
+      await expect(overviewProjectId(requester)).toHaveText(shortId);
+      expect(await projectTruth(requester)).toEqual(before);
+      expect(await countInProjectInventory(requester, before.project_id)).toEqual(inventory);
+      await requester.reload();
+      await waitForProjectReopen(requester, shortId);
+      expect(await projectTruth(requester)).toEqual(before);
+      expect(await countInProjectInventory(requester, before.project_id)).toEqual(inventory);
+      const proofPath = testInfo.outputPath("holder-release-proof.json");
+      await writeFile(proofPath, `${JSON.stringify({scenario, geometry, held, released, before, inventory}, null, 2)}\n`);
+      await testInfo.attach("holder-release-proof", {path: proofPath, contentType: "application/json"});
+      noErrors();
+      requesterErrors();
+    } finally {
+      if (!page.isClosed()) await page.evaluate(() => window.__creatorCloseDelivery.release());
+    }
+  });
 }
 
 test("a second tab takes over the open Project and the first takes it back", async ({page, context, browserName}) => {
