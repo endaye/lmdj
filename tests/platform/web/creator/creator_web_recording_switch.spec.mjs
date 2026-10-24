@@ -240,8 +240,13 @@ async function applied(page, sessionId, target, queued) {
   return actual;
 }
 function eventFor(pressed, released, origin, bars, fallback = false) {
-  const attack = (BigInt(pressed.recording_frame) - BigInt(origin)) / 25n;
+  const pressFrame = BigInt(pressed.recording_frame);
+  expect(pressFrame, "retained press belongs to this actual recording segment")
+    .toBeGreaterThanOrEqual(BigInt(origin));
+  const attack = (pressFrame - BigInt(origin)) / 25n;
   const onset = Number(attack % BigInt(bars * 3840));
+  if (!fallback) expect(BigInt(released.recording_frame), "retained release follows its original press")
+    .toBeGreaterThanOrEqual(pressFrame);
   const duration = fallback ? 240 : Math.max(1,
     Number((BigInt(released.recording_frame) - BigInt(origin)) / 25n - attack));
   return {slot: {bank: 0, pad: 0}, onset_tick: onset,
@@ -255,7 +260,7 @@ for (const terminalB of [false, true]) test(`Creator S3 immediate recording swit
     const failures = [];
     page.on("pageerror", error => failures.push(error.message));
     await installTrace(page);
-    const setup = await prepare(page);
+    const prepared = await prepare(page);
     await record(page).click();
     let sessionId;
     await expect.poll(async () => {
@@ -263,7 +268,7 @@ for (const terminalB of [false, true]) test(`Creator S3 immediate recording swit
       sessionId = requests.at(-1)?.request.payload.session_id;
       return typeof sessionId === "string";
     }).toBe(true);
-    setup.sessionId = sessionId;
+    const setup = {...prepared, sessionId};
     await expect(record(page)).toHaveClass(/is-active/, {timeout: 5_000});
     await expect(picker(page)).toBeEnabled({timeout: 5_000});
     const initial = await ordinary(page, sessionId);

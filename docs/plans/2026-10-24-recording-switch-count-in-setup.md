@@ -96,6 +96,38 @@ production mutation or rebuilding unchanged product code. Node syntax and
 staged new-file ownership77 pass. Full Creator/candidate/COUNT-IN-enabled
 switching, fault composition, devices and human listening remain unverified.
 
+## Review follow-up Task (same PR, separate atomic commit)
+
+Base `593d0a7648517cbe69e09ae978edc559229caa23`; declared files remain this
+plan and the same browser spec. Independent DeepSeek review40053059265/1 raised
+four observations. Preserve the original review and its later dispositions.
+
+- Keep the strict single-active-Journal identity checks: filtering foreign
+  session candidates away would hide malformed active input. Candidate count,
+  session and generation assertions already fail before expected Truth is
+  computed. Each current page runs one recording; stale session collision is
+  not a permitted input to this reader. First two findings require a reasoned
+  disposition, not weaker filtering.
+- Make the recording oracle's legal frame domain explicit before BigInt
+  division: press is at/after its actual segment origin and a retained release
+  is at/after that press. Reject negative deltas instead of accepting truncated
+  zero; no floor/tolerance change or production clock policy.
+- Construct a separate immutable recording setup once the actual App session
+  is observed, rather than overwriting the preparation object's session field.
+
+Verification: rerun the complete original two-case browser selection and syntax;
+use the extracted calculator probe to check the independent positive literal
+and a negative-frame refusal; inspect/stage only these two files, commit the
+review follow-up separately (no published history rewrite), then repeat
+committed-range ownership and exact-head review. Version and Documentation
+impact remain none for this test-only follow-up.
+
+Review follow-up verification: original two full cases PASS again, wrapper
+exit0/62.466s; all10 distribution/two fixture hashes unchanged, both whole
+Truth/Assets/reopen and14 path-backed JSON attachments match. The actual
+calculator probe passes its positive literal and refuses negative press/release
+frames. No production change, widened deadline or published history rewrite.
+
 ## Version Management
 
 Version impact: none
