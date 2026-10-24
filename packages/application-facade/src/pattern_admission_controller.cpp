@@ -551,7 +551,7 @@ foundation::Result<void> PatternAdmissionOwner::reconcile_switch(
 foundation::Result<void> PatternAdmissionOwner::continue_segment(
     project_io::ProjectStore& store,
     const project_io::SequencePublicationAuthority& authority,
-    std::uint16_t bpm, foundation::CommandId transfer_id,
+    std::uint16_t bpm, std::uint64_t tick_numerator, foundation::CommandId transfer_id,
     foundation::CommandId flush_id, foundation::CommandId profile_id) {
   if (!identity_) return owner_error("admission_identity_missing");
   auto journal = journals_.read_active(bundle_);
@@ -566,7 +566,7 @@ foundation::Result<void> PatternAdmissionOwner::continue_segment(
     if (profile.command_id != profile_id) continue;
     if (profile.pattern_id != authority.pattern_id ||
         profile.publication_generation != authority.generation ||
-        profile.runtime_frame != authority.frame || profile.tick_numerator != 0 ||
+        profile.runtime_frame != authority.frame || profile.tick_numerator != tick_numerator ||
         profile.bpm != bpm || std::ranges::find(admission.applied_switches, authority) ==
             admission.applied_switches.end())
       return owner_error("segment_work_identity_collision");
@@ -641,7 +641,7 @@ foundation::Result<void> PatternAdmissionOwner::continue_segment(
       ? current.preparation.swing_percent : current.timing_profiles.back().swing_percent;
   return journals_.retain_admission_timing_profile(bundle_, session_, *identity_,
       {profile_id, first, authority.pattern_id, authority.generation,
-       journal.value().expected_revision, authority.frame, 0, bpm, quantize, swing});
+       journal.value().expected_revision, authority.frame, tick_numerator, bpm, quantize, swing});
 }
 
 foundation::Result<void> PatternAdmissionOwner::drain_source_prefix(

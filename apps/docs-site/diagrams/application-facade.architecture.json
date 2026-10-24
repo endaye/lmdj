@@ -180,7 +180,7 @@
     {
       "from": "controller",
       "to": "io",
-      "label": "actual S · ordered segments"
+      "label": "actual S/N · ordered segments"
     },
     {
       "from": "io",
