@@ -171,6 +171,119 @@ async function inspectProjectTruth(page) {
     window.lmdjWebRuntimeHost.inspection.inspectProject());
 }
 
+async function expectRecoveryItemsReachable(page, testInfo, decision) {
+  const originalViewport = await page.evaluate(() => ({width: innerWidth, height: innerHeight}));
+  const before = await inspectProjectTruth(page);
+  const observations = [];
+  const reportPath = testInfo.outputPath(`performance-recovery-${decision}-reachability.json`);
+  const recovery = page.getByRole("group", {name: "Performance recovery"});
+  const candidate = recovery.getByRole("article");
+  await expect(candidate).toHaveCount(1);
+  const items = [
+    recovery.getByRole("heading", {name: "Recording recovery", exact: true}),
+    candidate.getByText("Unfinished recording", {exact: true}),
+    recovery.getByRole("button", {name: "Apply recovery", exact: true}),
+    recovery.getByRole("button", {name: "Discard recovery", exact: true}),
+  ];
+  try {
+    for (const viewport of [
+      {width: 648, height: 364}, {width: 667, height: 375},
+      {width: 844, height: 390}, {width: 768, height: 1024},
+      {width: 1440, height: 900},
+    ]) {
+      await page.setViewportSize(viewport);
+      await expect.poll(() => page.evaluate(() => ({width: innerWidth, height: innerHeight})))
+        .toEqual(viewport);
+      // setViewportSize precedes the resize-driven console refit (#2304).
+      await page.evaluate(() => new Promise(resolveFrame => requestAnimationFrame(resolveFrame)));
+      for (const [index, item] of items.entries()) {
+        await item.scrollIntoViewIfNeeded();
+        if (index >= 2) {
+          await item.focus();
+          await expect(item).toBeFocused();
+        }
+        const observation = await item.evaluate(node => new Promise(resolveObservation => {
+          const observer = new IntersectionObserver(([entry]) => {
+            observer.disconnect();
+            const rectangle = rect => ({x: rect.x, y: rect.y, right: rect.right,
+              bottom: rect.bottom, width: rect.width, height: rect.height});
+            const rect = node.getBoundingClientRect();
+            const range = document.createRange();
+            range.selectNodeContents(node);
+            // Keep the strict clipping calculation in the DOMRect coordinate
+            // pipeline. IntersectionObserver's transformed ratio is rounded.
+            const clip = {x: 0, y: 0, right: innerWidth, bottom: innerHeight};
+            const clippingAncestors = [];
+            for (let parent = node.parentElement; parent; parent = parent.parentElement) {
+              const style = getComputedStyle(parent);
+              if (!/auto|scroll|hidden|clip/.test(style.overflowX + style.overflowY)) continue;
+              const bounds = parent.getBoundingClientRect();
+              clippingAncestors.push({rect: rectangle(bounds),
+                overflowX: style.overflowX, overflowY: style.overflowY});
+              clip.x = Math.max(clip.x, bounds.x);
+              clip.y = Math.max(clip.y, bounds.y);
+              clip.right = Math.min(clip.right, bounds.right);
+              clip.bottom = Math.min(clip.bottom, bounds.bottom);
+            }
+            const points = node instanceof HTMLButtonElement ? [
+              [rect.x + rect.width / 2, rect.y + rect.height / 2],
+              [rect.x + rect.width / 2, rect.y + 1],
+              [rect.x + rect.width / 2, rect.bottom - 1],
+              [rect.x + 1, rect.y + rect.height / 2],
+              [rect.right - 1, rect.y + rect.height / 2],
+            ] : [[rect.x + rect.width / 2, rect.y + rect.height / 2]];
+            resolveObservation({text: node.textContent, button: node instanceof HTMLButtonElement,
+              rect: rectangle(rect), visible: rectangle(entry.intersectionRect),
+              intersectionRatio: entry.intersectionRatio, clip, clippingAncestors,
+              textRects: [...range.getClientRects()].map(rectangle),
+              hits: points.map(([x, y]) => ({x, y,
+                owned: node.contains(document.elementFromPoint(x, y))})),
+              navigation: getComputedStyle(document.querySelector(".perform-page-nav")).position});
+          });
+          observer.observe(node);
+        }));
+        const screenshot = testInfo.outputPath(
+          `performance-recovery-${decision}-${viewport.width}x${viewport.height}-${index}.png`);
+        await page.screenshot({path: screenshot});
+        await testInfo.attach(`performance-recovery-${decision}-${viewport.width}x${viewport.height}-${index}`,
+          {path: screenshot, contentType: "image/png"});
+        observations.push({viewport, ...observation});
+        const context = `${decision} ${viewport.width}x${viewport.height}: ${observation.text}`;
+        // A bounding box alone misses native scroller clipping; a centre alone
+        // misses a sticky tab covering the top or bottom of a 44px target.
+        expect(observation.rect.x, `${context}: complete item left`).toBeGreaterThanOrEqual(observation.clip.x);
+        expect(observation.rect.y, `${context}: complete item top`).toBeGreaterThanOrEqual(observation.clip.y);
+        expect(observation.rect.right, `${context}: complete item right`).toBeLessThanOrEqual(observation.clip.right);
+        expect(observation.rect.bottom, `${context}: complete item bottom`).toBeLessThanOrEqual(observation.clip.bottom);
+        expect(observation.textRects.length, `${context}: painted text exists`).toBeGreaterThan(0);
+        // The whole element fits the actual clipping ancestors above; complete
+        // text must also fit the element, with no pixel or ratio tolerance.
+        for (const text of observation.textRects) {
+          expect(text.x, `${context}: complete text left`).toBeGreaterThanOrEqual(observation.rect.x);
+          expect(text.y, `${context}: complete text top`).toBeGreaterThanOrEqual(observation.rect.y);
+          expect(text.right, `${context}: complete text right`).toBeLessThanOrEqual(observation.rect.right);
+          expect(text.bottom, `${context}: complete text bottom`).toBeLessThanOrEqual(observation.rect.bottom);
+        }
+        if (observation.button) {
+          expect(observation.rect.width, `${context}: effective target width`).toBeGreaterThanOrEqual(44);
+          expect(observation.rect.height, `${context}: effective target height`).toBeGreaterThanOrEqual(44);
+        }
+        for (const hit of observation.hits) expect(hit.owned,
+          `${context}: target owns actual hit ${hit.x},${hit.y}`).toBe(true);
+      }
+    }
+    expect(await inspectProjectTruth(page), "view/focus/scroll must not author Project Truth").toEqual(before);
+  } finally {
+    await writeFile(reportPath, JSON.stringify(observations, null, 2));
+    await testInfo.attach(`performance-recovery-${decision}-reachability`,
+      {path: reportPath, contentType: "application/json"});
+    await page.setViewportSize(originalViewport);
+    await expect.poll(() => page.evaluate(() => ({width: innerWidth, height: innerHeight})))
+      .toEqual(originalViewport);
+    await page.evaluate(() => new Promise(resolveFrame => requestAnimationFrame(resolveFrame)));
+  }
+}
+
 async function observeMasterCaptureBatches(page) {
   await page.addInitScript(() => {
     const NativeAudioWorkletNode = window.AudioWorkletNode;
@@ -965,7 +1078,9 @@ async function applyRecoveryAfterOwnerRelease(page) {
   const status = page.getByRole("status", {name: "Performance recovery status"});
   const apply = page.getByRole("button", {name: "Apply recovery"});
   for (let attempt = 0; attempt < 10; attempt += 1) {
-    await apply.click();
+    await apply.focus();
+    await expect(apply).toBeFocused();
+    await page.keyboard.press("Enter");
     await page.waitForTimeout(250);
     if (/applied.*closed.*Pad/i.test(await status.textContent() ?? "")) return;
   }
@@ -1954,6 +2069,7 @@ test("discard deletes its temporary WAV and owner-loss recovery applies or disca
       visibleText: await recovery.innerText()}, null, 2));
     await testInfo.attach("performance-recovery-reason", {path: reasonEvidence,
       contentType: "application/json"});
+    await expectRecoveryItemsReachable(applyingPage, testInfo, "apply");
     await recovery.scrollIntoViewIfNeeded();
     await applyingPage.screenshot({path: testInfo.outputPath("performance-recovery-reason.png")});
     const beforeApply = await projectRevision(applyingPage);
@@ -2030,6 +2146,7 @@ test("discard deletes its temporary WAV and owner-loss recovery applies or disca
     );
     const beforeDiscard = await projectRevision(discardingPage);
     await showPerformPage(discardingPage, "Replay");
+    await expectRecoveryItemsReachable(discardingPage, testInfo, "discard");
     await discardingPage.getByRole("button", {name: "Discard recovery"}).click();
     await expect(discardingPage.getByRole("status", {name: "Performance recovery status"}))
       .toContainText("discarded");
