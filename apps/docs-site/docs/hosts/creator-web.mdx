@@ -705,6 +705,14 @@ It names how many recordings there are and where each was made. A revision
 change within the same open never asks again. A recording interrupted while
 the Project stays open appears only in its existing list.
 
+Sequence and Perform recovery lists describe the reason in plain language.
+**Recording session ended** describes a recorded owner-loss reason;
+**Unfinished recording** describes an active or switching journal without
+claiming its owner has ended. An unknown reason shows **Recording needs review**.
+The original reason remains available through the SDK recovery list. These
+labels do not apply or discard a recording; the explicit recovery actions and
+their results determine what is saved.
+
 **Keep recording** is the primary action. It restores each recording to its
 original destination through the existing recovery commands: Sequence apply
 to the original Pattern, and Performance apply through the Perform controller.

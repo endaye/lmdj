@@ -1770,7 +1770,27 @@ test("blocks a second recording while owner-loss recovery is actionable", async 
     .hasAttribute("disabled")).toBe(true));
   selectPerformPage("Replay");
   expect(screen.getByRole("status", {name: "Performance recovery status"}).textContent)
-    .toContain("owner lost");
+    .toBe("Recording session ended");
+});
+
+test.each([
+  ["owner_lost", "Recording session ended"],
+  ["/Users/private/unrecognized_reason", "Recording needs review"],
+])("recovery card and status explain %s while retaining the raw candidate", async (reason, label) => {
+  const fixture = controllerFixture();
+  (fixture.runtime.session.listPerformanceRecovery as ReturnType<typeof vi.fn>)
+    .mockResolvedValue([{sessionId: ids.session, performanceId: ids.performance,
+      reason, durableEventCount: 1, pendingEventCount: 1, fingerprint: "f".repeat(64)}]);
+  renderSurface(fixture);
+  await fixture.controller.refreshRecovery();
+  selectPerformPage("Replay");
+  const region = screen.getByRole("group", {name: "Performance recovery"});
+  expect(within(within(region).getByRole("article")).getByText(label)).toBeTruthy();
+  expect(region.textContent).not.toContain(reason);
+  expect(screen.getByRole("status", {name: "Performance recovery status"}).textContent).toBe(label);
+  expect(fixture.controller.getState().recovery[0]?.reason).toBe(reason);
+  expect(within(region).getByRole("button", {name: "Apply recovery"})).toBeTruthy();
+  expect(within(region).getByRole("button", {name: "Discard recovery"})).toBeTruthy();
 });
 
 test("unmount closes an active recording once without saving", async () => {

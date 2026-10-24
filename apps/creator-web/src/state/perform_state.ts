@@ -1,4 +1,4 @@
-import {userMessage} from "./error_messages";
+import {recordingRecoveryReasonMessage, userMessage} from "./error_messages";
 import type {
   PerformanceFilterTypeName,
   PerformanceFx,
@@ -1265,13 +1265,12 @@ export function createPerformController(options: PerformControllerOptions): Perf
     }
   };
 
-  const formatReason = (reason: string) => reason.replaceAll("_", " ");
   const loadRecovery = async (message?: string) => {
     const values = await session.listPerformanceRecovery() as
       readonly PerformanceRecoverySummary[];
     dispatch({type: "recovery", values});
     dispatch({type: "recovery-status", message: message ??
-      (values[0] === undefined ? "idle" : formatReason(values[0].reason))});
+      (values[0] === undefined ? "idle" : recordingRecoveryReasonMessage(values[0].reason))});
   };
 
   const runFinalization = (operation: () => Promise<void>): Promise<void> => {

@@ -1898,7 +1898,7 @@ test("a recorded rotary FX survives touch takeover and closes the same Core gest
   expect(await inspect()).toEqual(saved);
 });
 
-test("discard deletes its temporary WAV and owner-loss recovery applies or discards durable truth", async ({browserName}) => {
+test("discard deletes its temporary WAV and owner-loss recovery applies or discards durable truth", async ({browserName}, testInfo) => {
   test.skip(browserName !== "chromium");
   test.setTimeout(420_000);
   const applyProfile = await mkdtemp(join(tmpdir(), "lmdj-perform-owner-loss-apply-"));
@@ -1939,6 +1939,23 @@ test("discard deletes its temporary WAV and owner-loss recovery applies or disca
     );
     await showPerformPage(applyingPage, "Replay");
     await expect(applyingPage.getByRole("button", {name: "Apply recovery"})).toBeVisible();
+    const originalCandidates = await applyingPage.evaluate(() =>
+      window.lmdjWebRuntimeHost.session.listPerformanceRecovery());
+    // Listing an active Journal has not yet reconciled its original owner.
+    // Keep that raw fact; this UI must not infer a new owner state from a crash.
+    expect(originalCandidates).toEqual(expect.arrayContaining([
+      expect.objectContaining({reason: "active"}),
+    ]));
+    const recovery = applyingPage.getByRole("group", {name: "Performance recovery"});
+    await expect(recovery).toContainText("Unfinished recording");
+    await expect(recovery).not.toContainText("owner_lost");
+    const reasonEvidence = testInfo.outputPath("performance-recovery-reason.json");
+    await writeFile(reasonEvidence, JSON.stringify({candidates: originalCandidates,
+      visibleText: await recovery.innerText()}, null, 2));
+    await testInfo.attach("performance-recovery-reason", {path: reasonEvidence,
+      contentType: "application/json"});
+    await recovery.scrollIntoViewIfNeeded();
+    await applyingPage.screenshot({path: testInfo.outputPath("performance-recovery-reason.png")});
     const beforeApply = await projectRevision(applyingPage);
     await applyRecoveryAfterOwnerRelease(applyingPage);
     await expectRevisionAfter(applyingPage, beforeApply);

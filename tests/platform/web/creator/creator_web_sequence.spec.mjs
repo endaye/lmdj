@@ -879,7 +879,7 @@ test("reopening after owner loss asks once and keeps the heard take", async ({pa
   await expect(page.getByRole("region", {name: "Interrupted recording"})).toHaveCount(0);
 });
 
-test("owner loss surfaces the interrupted recording and recovers the heard take", async ({page, browserName}) => {
+test("owner loss surfaces the interrupted recording and recovers the heard take", async ({page, browserName}, testInfo) => {
   test.skip(browserName !== "chromium");
   test.setTimeout(240_000);
   await installTransportProofRecorder(page);
@@ -914,7 +914,20 @@ test("owner loss surfaces the interrupted recording and recovers the heard take"
   expect(await inspectTruth(page)).toEqual(lostTruth);
   const recoveryRegion = page.getByRole("region", {name: "Sequence recovery"});
   await expect(recoveryRegion).toBeVisible({timeout: 60_000});
-  await expect(recoveryRegion).toContainText("owner_lost");
+  await expect(recoveryRegion).toContainText("Recording session ended");
+  await expect(recoveryRegion).not.toContainText("owner_lost");
+  const originalCandidates = await page.evaluate(() =>
+    window.lmdjWebRuntimeHost.session.listSequenceRecovery());
+  expect(originalCandidates).toEqual(expect.arrayContaining([
+    expect.objectContaining({patternId, reason: "owner_lost"}),
+  ]));
+  const reasonEvidence = testInfo.outputPath("sequence-recovery-reason.json");
+  await writeFile(reasonEvidence, JSON.stringify({candidates: originalCandidates,
+    visibleText: await recoveryRegion.innerText()}, null, 2));
+  await testInfo.attach("sequence-recovery-reason", {path: reasonEvidence,
+    contentType: "application/json"});
+  await recoveryRegion.scrollIntoViewIfNeeded();
+  await page.screenshot({path: testInfo.outputPath("sequence-recovery-reason.png")});
 
   // Apply finalizes the owned one-shot press after its attack tail and
   // commits it: the take the performer heard survives owner loss (#1515).

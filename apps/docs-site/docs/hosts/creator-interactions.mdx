@@ -823,6 +823,11 @@ Recording recovery 卡片位于正在录音的 Stop／Review 通知之后、常�
 System 打开时仍可操作。标题、候选数量和阶段标签来自实际状态；未完成和部分
 恢复不会显示为完成。它不是模态框，不自动抢焦点，也不锁定背景导航。
 
+Sequence 和 Perform 的恢复列表使用可读原因：记录的 owner loss 显示
+Recording session ended；active／switching 草稿显示 Unfinished recording，
+不据此判断原 owner 已结束。未知原因显示 Recording needs review，不直接展示
+内部值。SDK 恢复列表保留原始原因；用户仍须显式恢复或丢弃，以实际结果确认保存。
+
 ## 10. 当前没有的交互 \{#not-available\}
 
 本章只列界面上没有、也没有批准计划的入口。已批准但尚未交付的行为（方向导航、可听 BPM、ASSIGN、独立滤波、live Mute／Solo、作品电平表）统一见[第 2 章](#planned)，不在此重复。

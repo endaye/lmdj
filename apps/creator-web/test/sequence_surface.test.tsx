@@ -471,6 +471,23 @@ test("requires an explicit destination and preserves original recovery semantics
   );
 });
 
+test.each([
+  ["owner_lost", "Recording session ended"],
+  ["/Users/private/unrecognized_reason", "Recording needs review"],
+])("recovery reason %s is readable without changing the original candidate", (reason, label) => {
+  const candidate = {sessionId: "session-1", patternId: project.patternId,
+    bars: 1 as const, reason, eventCount: 3};
+  const callbacks = renderSurface(true, {state: {recovery: [candidate]}});
+  const region = screen.getByRole("region", {name: "Sequence recovery"});
+  expect(within(region).getByText(`${label} · 3 events`)).toBeTruthy();
+  expect(region.textContent).not.toContain(reason);
+  fireEvent.click(within(region).getByRole("button", {name: "Recover original Pattern"}));
+  expect(callbacks.onRecover).toHaveBeenCalledWith(candidate, null);
+  fireEvent.click(within(region).getByRole("button", {name: /^Discard$/}));
+  expect(callbacks.onDiscard).toHaveBeenCalledWith(candidate);
+  expect(candidate.reason).toBe(reason);
+});
+
 test("keeps restoring into another Pattern behind a collapsed More disclosure", () => {
   renderSurface(true);
   const more = screen.getByText("More", {selector: "summary"}).closest("details");

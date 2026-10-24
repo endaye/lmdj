@@ -4,6 +4,7 @@ import {
   NO_ROOM_MESSAGE,
   performCaptureUnavailableMessage,
   PUBLIC_ERROR_CODES,
+  recordingRecoveryReasonMessage,
   SAMPLE_PREVIEW_FAILURE,
   sampleMessage,
   sampleNextStep,
@@ -24,6 +25,27 @@ const PUBLIC_CODES = [
 
 // A code, a snake_case token or the tooling why/remedy format in user text.
 const TECHNICAL = /\b[A-Z][A-Z0-9]*_[A-Z0-9_]+\b|\b[a-z]+_[a-z_]+\b|\bwhy:|\bremedy:/;
+
+test.each([
+  ["active", "Unfinished recording"],
+  ["switching", "Unfinished recording"],
+  ["stopped", "Stopped recording"],
+  ["recovery_required", "Recording needs recovery"],
+  ["owner_lost", "Recording session ended"],
+  ["abandoned", "Recording left unfinished"],
+  ["interrupted", "Interrupted recording"],
+])("recording recovery %s has an explicit user-language meaning", (reason, label) => {
+  // Literal meanings are independent of both consumers and the formatter;
+  // comparing consumers with one another would share a wrong/omitted label.
+  expect(recordingRecoveryReasonMessage(reason)).toBe(label);
+  expect(label).not.toMatch(TECHNICAL);
+});
+
+test.each(["new_reason", "/Users/private/audio.wav", "constructor", "toString", ""])(
+  "unknown recording reason %s remains neutral and private", reason => {
+    expect(recordingRecoveryReasonMessage(reason)).toBe("Recording needs review");
+  },
+);
 
 test.each(PUBLIC_CODES)("%s has a user-language message and a next step", (code) => {
   const {message, nextStep} = userMessage(code);
