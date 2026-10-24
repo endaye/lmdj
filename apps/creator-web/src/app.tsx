@@ -30,6 +30,7 @@ import {
   TakenOverPanel,
   TakeoverPending,
   takeoverNote,
+  type ProjectReleaseState,
 } from "./components/takeover_panel";
 import {
   HardwareConsole,
@@ -386,7 +387,9 @@ function Workspace({
   const [busyRetry, setBusyRetry] = useState<BusyRetry | null>(null);
   // #1679: this tab handed its Project to another tab, a Continue here is
   // waiting for the holder, and why the last one did not end here.
-  const [yieldedProject, setYieldedProject] = useState<string | null>(null);
+  const [yieldedProject, setYieldedProject] = useState<{
+    projectId: string; releaseState: ProjectReleaseState;
+  } | null>(null);
   const [takeoverRequest, setTakeoverRequest] = useState<AbortController | null>(null);
   const [takeoverOutcome, setTakeoverOutcome] = useState<TakeoverOutcome | null>(null);
   const [showLocalProjects, setShowLocalProjects] = useState(false);
@@ -1579,11 +1582,22 @@ function Workspace({
       }
       const token = beginProjectAction("open");
       if (!token) return {accepted: false};
-      setYieldedProject(heldProjectId);
+      const yielded = {projectId: heldProjectId, releaseState: "pending" as const};
+      setYieldedProject(yielded);
       setTakeoverOutcome(null);
       resetInputForAdverseLifecycle();
       dispatchTransport({type: "disengaged"});
-      const released = onYieldRuntime().finally(() => finishProjectAction(token));
+      const recordRelease = (releaseState: ProjectReleaseState) => {
+        setYieldedProject(current => current === yielded
+          ? {...current, releaseState} : current);
+      };
+      const released = onYieldRuntime().then(clean => {
+        recordRelease(clean === true ? "released" : "unconfirmed");
+        return clean;
+      }, error => {
+        recordRelease("unconfirmed");
+        throw error;
+      }).finally(() => finishProjectAction(token));
       return {accepted: true, released};
     });
     // The guard reads refs and the current action lane, so only a change of
@@ -3825,10 +3839,11 @@ function Workspace({
               />
               {yieldedProject !== null && runtimePhase === "closed" && takeoverRequest === null && (
                 <TakenOverPanel
+                  releaseState={yieldedProject.releaseState}
                   note={takeoverOutcome === null ? null : takeoverNote(takeoverOutcome)}
                   {...(takeoverRequest === null && onRetryRuntime
                     ? {onContinueHere: () => {
-                        void continueHere(yieldedProject, () => {
+                        void continueHere(yieldedProject.projectId, () => {
                           setYieldedProject(null);
                           // The fresh Runtime's boot reopens the retained Project.
                           onRetryRuntime();
