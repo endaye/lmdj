@@ -151,11 +151,18 @@ S3 持续录音另有私有 I/O `segment` primitive，绑定原 recording operat
 runtime generation 与 transport epoch，以及 Native 已实际应用的 Pattern/generation/S。
 它先耐久保留实际边界，把 `[source_start,S)` 的完整候选或 checkpoint tail
 flush 到旧 Pattern，再验证 Project 身份/revision、切换 Journal、耐久写出目标
-Pattern 在 S 的零 tick timing profile。目标段在录入期间不被提前 flush；下一次
+Pattern 在 S 的 timing profile，原样保留提供的整数 tick numerator 及 BPM，
+不丢失它表示的分数 tick。
+当前量化切换 caller 显式提供零；私有 I/O 已能保留非零位置，不代表 Native OFF、
+Host/SDK 或 Creator 已接线。目标段在录入期间不被提前 flush；下一次
 边界或真实末尾 cutoff 才结算它，因此跨边界旧 release 不会生成目标按压，
-A→B→A 的新 generation 使用新的零点而保留之前 A 的完整 Truth。
+A→B→A 的新 generation 使用自己的锚点而保留之前 A 的完整 Truth。
 稳定 work 派生的 transfer/flush/profile ID 使部分 append、manifest、switch 或
 profile 回应丢失仍可经实际 durable writer 精确重放；历史重试不倒退当前段。
+已保留的 profile 在同一 work 重试时改动一个 numerator 单位也被拒绝；
+缺失、负数或非整数 numerator 值在产生写入前被拒绝，不猜测零值。
+目标输入在 profile 耐久 ACK 前仍由上层停驻，
+因此该窗口内进程终止不会留下需要尚未耐久锚点才能解释的目标候选。
 重建 I/O owner 可结算原耐久操作，但不会从可读 opening bytes 伪造原始正向
 opening completion，也不据此授权新的 live input。
 

@@ -326,6 +326,11 @@ Result PatternTransportIoOwner::perform(const PatternTransportWorkRequest& reque
     return r.has_value() ? Result::success(Json::object()) : fail(r);
   }
   if (op == "segment") {
+    // No missing, negative or noninteger numerator may become a guessed zero.
+    // This is a private same-build payload, not a public wire extension.
+    if (!j.contains("tick_numerator") || !j.at("tick_numerator").is_number_unsigned())
+      return Result::failure({foundation::ErrorCode::invalid_argument,
+          "Pattern segment phase anchor is missing or invalid"});
     const auto active = journals_.read_active(config_.bundle);
     if (!active.has_value()) return Result::failure(active.error());
     const project_io::SequenceAdmissionIdentity identity{
@@ -346,6 +351,7 @@ Result PatternTransportIoOwner::perform(const PatternTransportWorkRequest& reque
         j.at("generation").get<std::uint64_t>(), j.at("frame").get<std::uint64_t>()};
     const auto id = request.identity.command_id;
     r = owner_.continue_segment(store_, authority, j.at("bpm").get<std::uint16_t>(),
+        j.at("tick_numerator").get<std::uint64_t>(),
         id, derived(id, 0, 'f'), derived(id, 1, 'a'));
     return r.has_value() ? Result::success(Json::object()) : fail(r);
   }

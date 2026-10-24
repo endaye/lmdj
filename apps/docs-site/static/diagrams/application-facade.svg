@@ -1,4 +1,4 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1560 820" role="img" aria-labelledby="title description" data-source-sha256="78babb5c7894293c6ae4c7b7bb4a993b77d311d65d44d901f4544e6a49a584d6">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1560 820" role="img" aria-labelledby="title description" data-source-sha256="5daf047d12fca77a1e2996cd2dc44d66387d8a40278887d8bc4e3e271aa0bf51">
   <title id="title">Application Facade Module</title><desc id="description">唯一 Core 入口；真实 S 连接 control 与 Journal owner，Snapshot 独立准备</desc>
   <defs><marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z"/></marker></defs>
   <style>
@@ -21,7 +21,7 @@
 <g class="connection"><path class="edge-mask" d="M 260 188 H 470 V 148 H 680"/><path class="edge" d="M 260 188 H 470 V 148 H 680" marker-end="url(#arrow)"/><text x="470" y="159">narrow source API</text></g>
 <g class="connection"><path class="edge-mask" d="M 960 148 H 985 V 298 H 1010"/><path class="edge" d="M 960 148 H 985 V 298 H 1010" marker-end="url(#arrow)"/><text x="985" y="214">Cooker + Audio only</text></g>
 <g class="connection"><path class="edge-mask" d="M 930 298 H 964 V 532 H 646 V 478 H 680"/><path class="edge" d="M 930 298 H 964 V 532 H 646 V 478 H 680" marker-end="url(#arrow)"/><text x="805" y="379">ordinary + companion</text></g>
-<g class="connection"><path class="edge-mask" d="M 960 478 H 985 V 148 H 1010"/><path class="edge" d="M 960 478 H 985 V 148 H 1010" marker-end="url(#arrow)"/><text x="985" y="304">actual S · ordered segments</text></g>
+<g class="connection"><path class="edge-mask" d="M 960 478 H 985 V 148 H 1010"/><path class="edge" d="M 960 478 H 985 V 148 H 1010" marker-end="url(#arrow)"/><text x="985" y="304">actual S/N · ordered segments</text></g>
 <g class="connection"><path class="edge-mask" d="M 1260 148 H 1285 V 148 H 1310"/><path class="edge" d="M 1260 148 H 1285 V 148 H 1310" marker-end="url(#arrow)"/><text x="1285" y="139">retained effect / readback</text></g>
 
     <g class="component kind-host">

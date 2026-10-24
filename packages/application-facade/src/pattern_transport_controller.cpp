@@ -259,7 +259,7 @@ struct PatternTransportCoordinator::Async {
     request.command_id = first->command;
     work({{"op", "segment"}, {"recording", first->recording.command_id.value()},
         {"pattern", first->status.pattern_id.value()}, {"generation", first->status.publication->generation},
-        {"frame", frame}, {"bpm", first->status.bpm}}, request);
+        {"frame", frame}, {"bpm", first->status.bpm}, {"tick_numerator", 0}}, request);
   }
   void drive_legacy_input() {
     if (!legacy_candidate || legacy_result || work_request) return;

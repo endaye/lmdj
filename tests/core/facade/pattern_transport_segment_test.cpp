@@ -177,9 +177,11 @@ struct Fixture {
     LMDJ_CHECK(Json::parse(result.payload).at("retained").get<bool>());
   }
   PatternTransportWorkRequest segment(unsigned command, foundation::PatternId target,
-                                      std::uint64_t generation, std::uint64_t frame) {
+                                      std::uint64_t generation, std::uint64_t frame,
+                                      std::uint64_t tick_numerator = 0) {
     return work(command, {{"op", "segment"}, {"recording", uuid(3)},
-        {"pattern", target.value()}, {"generation", generation}, {"frame", frame}, {"bpm", 120}});
+        {"pattern", target.value()}, {"generation", generation}, {"frame", frame},
+        {"bpm", 120}, {"tick_numerator", tick_numerator}});
   }
   project_io::ActiveSequenceJournal active() {
     const auto result = journals.read_active(bundle);
@@ -221,6 +223,44 @@ struct Fixture {
 
 const std::vector<PatternEvent> source_notes{{{0, 1}, 960, 240, 90}};
 const std::vector<PatternEvent> target_notes{{{0, 2}, 240, 480, 95}};
+
+// Literal 960.5 and 480.75 ticks at denominator 2,880,000. These independently
+// distinguish a dropped fraction, a zero origin and a reused previous anchor.
+constexpr std::uint64_t phase_b = 2'766'240'000;
+constexpr std::uint64_t phase_a = 1'384'560'000;
+const std::vector<PatternEvent> phase_target_notes{{{0, 2}, 1200, 480, 95}};
+
+void nonzero_segment_phase_is_immutable_and_survives_reopen() {
+  Fixture f;
+  f.source();
+  const auto to_b = f.segment(100, f.b, 22, 40000, phase_b);
+  f.run(to_b);
+  const auto first = f.active();
+  LMDJ_CHECK(first.admission->timing_profiles.size() == 1);
+  LMDJ_CHECK(first.admission->timing_profiles[0].runtime_frame == 40000);
+  LMDJ_CHECK(first.admission->timing_profiles[0].tick_numerator == phase_b);
+  f.target();
+  f.run(f.segment(101, f.a, 23, 70000, phase_a));
+  LMDJ_CHECK(f.truth().patterns.at(f.b).events == phase_target_notes);
+  const auto before = f.active();
+  LMDJ_CHECK(before.admission->timing_profiles.back().tick_numerator == phase_a);
+  const auto truth = f.truth();
+  auto live_owner = std::move(f.io);
+  f.reopen_owner();
+  f.run(to_b); // Exact historical replay must not restore B or its old clock.
+  LMDJ_CHECK(f.active() == before && f.truth() == truth);
+  auto changed = to_b;
+  auto payload = Json::parse(changed.payload);
+  payload["tick_numerator"] = phase_b + 1; // Even a fractional change is a collision.
+  changed.payload = payload.dump();
+  LMDJ_CHECK(f.io->execute(changed).outcome == PatternTransportWorkOutcome::refused);
+  LMDJ_CHECK(f.active() == before && f.truth() == truth);
+  f.io = std::move(live_owner);
+  f.input(14, 76000, 1, true, 90, 100);
+  f.input(15, 82000, 1, false, 90);
+  f.finish(f.a, 23, 70000, 90000);
+  f.reopened_truth({{{0, 1}, 720, 240, 100}, {{0, 1}, 960, 240, 90}}, phase_target_notes, 3);
+}
 
 void continuous_a_b_a_keeps_full_truth_and_new_generation_clock() {
   Fixture f;
@@ -272,13 +312,14 @@ void empty_segments_keep_equal_frontiers_and_no_empty_flushes() {
 }
 
 void durable_partial_steps_replay_original_work_after_owner_reconstruction() {
-  for (const auto* kind : {"admission-switch", "admission-transfer", "flush", "manifest", "complete", "switch", "admission-profile"}) {
+  for (bool nonzero : {false, true}) for (const auto* kind : {
+      "admission-switch", "admission-transfer", "flush", "manifest", "complete", "switch", "admission-profile"}) {
     for (bool after : {false, true}) {
       Fixture f;
       f.source();
-      f.run(f.segment(100, f.b, 22, 40000));
+      f.run(f.segment(100, f.b, 22, 40000, nonzero ? phase_b : 0));
       f.target();
-      const auto request = f.segment(101, f.a, 23, 70000);
+      const auto request = f.segment(101, f.a, 23, 70000, nonzero ? phase_a : 0);
       f.platform->fault_kind = kind;
       f.platform->after_write = after;
       const auto failed = f.io->execute(request);
@@ -297,10 +338,11 @@ void durable_partial_steps_replay_original_work_after_owner_reconstruction() {
       if (reconciled.error) std::cerr << kind << ' ' << after << ' ' << reconciled.error->message << ' ' << reconciled.error->details.dump() << '\n';
       LMDJ_CHECK(reconciled.outcome == PatternTransportWorkOutcome::success);
       const auto exact = f.active();
+      LMDJ_CHECK(exact.admission->timing_profiles.back().tick_numerator == (nonzero ? phase_a : 0));
       f.run(request);
       LMDJ_CHECK(f.active() == exact);
       LMDJ_CHECK(f.truth().patterns.at(f.a).events == source_notes);
-      LMDJ_CHECK(f.truth().patterns.at(f.b).events == target_notes);
+      LMDJ_CHECK(f.truth().patterns.at(f.b).events == (nonzero ? phase_target_notes : target_notes));
       // Reconstructed owner can settle retained operations, but readable
       // opening bytes cannot authorize new live input after producer loss.
       const auto live = f.io->execute(f.work(2000, {{"op", "admit"}, {"candidate", {
@@ -310,7 +352,7 @@ void durable_partial_steps_replay_original_work_after_owner_reconstruction() {
       LMDJ_CHECK(!Json::parse(live.payload).at("retained").get<bool>());
       LMDJ_CHECK(f.active() == exact);
       f.finish(f.a, 23, 70000, 90000);
-      f.reopened_truth(source_notes, target_notes, 2);
+      f.reopened_truth(source_notes, nonzero ? phase_target_notes : target_notes, 2);
     }
   }
 }
@@ -340,13 +382,32 @@ void stale_work_or_retroactive_input_cannot_change_segment() {
   const auto original = f.segment(100, f.b, 22, 40000);
   f.run(original);
   const auto before = f.active();
-  for (const auto* key : {"frame", "bpm", "generation"}) {
+  for (const auto* key : {"frame", "bpm", "generation", "tick_numerator"}) {
     auto changed = original;
     auto payload = Json::parse(changed.payload);
     payload[key] = payload[key].get<unsigned>() + 1;
     changed.payload = payload.dump();
     LMDJ_CHECK(f.io->execute(changed).outcome == PatternTransportWorkOutcome::refused);
     LMDJ_CHECK(f.active() == before);
+  }
+}
+
+void invalid_segment_phase_is_refused_before_any_effect() {
+  for (const auto& invalid : {Json(nullptr), Json(-1), Json(1.5), Json("960")}) {
+    Fixture f;
+    f.source();
+    auto request = f.segment(100, f.b, 22, 40000);
+    auto payload = Json::parse(request.payload);
+    payload["tick_numerator"] = invalid;
+    request.payload = payload.dump();
+    const auto before = f.active();
+    const auto truth = f.truth();
+    LMDJ_CHECK(f.io->execute(request).outcome == PatternTransportWorkOutcome::refused);
+    LMDJ_CHECK(f.active() == before && f.truth() == truth);
+    payload.erase("tick_numerator");
+    request.payload = payload.dump();
+    LMDJ_CHECK(f.io->execute(request).outcome == PatternTransportWorkOutcome::refused);
+    LMDJ_CHECK(f.active() == before && f.truth() == truth);
   }
 }
 void changed_project_revision_cannot_become_segment_authority() {
@@ -475,16 +536,16 @@ PatternTransportWorkRequest cutoff_work(Fixture& f) {
 }
 
 void crash_child(const std::filesystem::path& root, const std::string& operation,
-                 const std::string& kind, bool after) {
+                 const std::string& kind, bool after, bool nonzero) {
   LMDJ_CHECK(root.filename().string().starts_with("lmdj-segment-crash-") &&
       std::filesystem::canonical(root.parent_path()) ==
           std::filesystem::canonical(std::filesystem::temp_directory_path()) &&
       std::filesystem::is_directory(root) && !std::filesystem::is_symlink(root));
   Fixture f{root};
   f.source();
-  f.run(f.segment(100, f.b, 22, 40000));
+  f.run(f.segment(100, f.b, 22, 40000, nonzero ? phase_b : 0));
   f.target();
-  auto request = f.segment(101, f.a, 23, 70000);
+  auto request = f.segment(101, f.a, 23, 70000, nonzero ? phase_a : 0);
   if (operation != "segment") {
     f.run(request);
     if (operation == "admit") {
@@ -504,7 +565,8 @@ void crash_child(const std::filesystem::path& root, const std::string& operation
   f.platform->fault_kind = kind;
   f.platform->after_write = after;
   f.platform->crash_marker = root / "crash-barrier";
-  f.platform->crash_label = operation + ":" + kind + (after ? ":after" : ":before");
+  f.platform->crash_label = operation + ":" + kind + (after ? ":after" : ":before") +
+      (nonzero ? ":phase" : "");
   (void)f.io->execute(request);
   // Returning normally, an exception, or missing the requested storage call
   // cannot stand in for a process stopped at that exact durable boundary.
@@ -567,7 +629,7 @@ void failed_barrier_children_are_already_reaped() {
 void cold_recovery_after_real_process_death() {
   failed_barrier_children_are_already_reaped();
   std::size_t completed = 0;
-  for (const auto& c : crash_cases) for (bool after : {false, true}) {
+  for (bool nonzero : {false, true}) for (const auto& c : crash_cases) for (bool after : {false, true}) {
     struct OwnedDirectory {
       std::filesystem::path path = std::filesystem::temp_directory_path() /
           ("lmdj-segment-crash-" + std::to_string(
@@ -576,10 +638,11 @@ void cold_recovery_after_real_process_death() {
     } owned;
     LMDJ_CHECK(std::filesystem::create_directory(owned.path));
     const auto child = test::process::spawn({"--crash-step", owned.path.string(),
-        c.operation, c.kind, after ? "after" : "before"});
+        c.operation, c.kind, after ? "after" : "before", nonzero ? "phase" : "zero"});
     const auto result = collect_child(child);
     LMDJ_CHECK(result.expected_stop && WIFSIGNALED(result.status) && WTERMSIG(result.status) == SIGKILL);
-    const std::string label = std::string(c.operation) + ":" + c.kind + (after ? ":after" : ":before");
+    const std::string label = std::string(c.operation) + ":" + c.kind + (after ? ":after" : ":before") +
+        (nonzero ? ":phase" : "");
     std::ifstream marker(owned.path / "crash-barrier");
     LMDJ_CHECK(std::string(std::istreambuf_iterator<char>{marker}, {}) == label);
 
@@ -590,9 +653,9 @@ void cold_recovery_after_real_process_death() {
     auto a_events = source_notes;
     const bool terminal = std::string_view(c.operation) == "cutoff" || std::string_view(c.operation) == "close";
     if (terminal || (std::string_view(c.operation) == "admit" && after))
-      a_events.insert(a_events.begin(), {{0, 3}, 240, terminal ? 480U : 240U, 100});
+      a_events.insert(a_events.begin(), {{0, 3}, nonzero ? 720U : 240U, terminal ? 480U : 240U, 100});
     expected.patterns.emplace(a, domain::Pattern{a, 1, a_events});
-    expected.patterns.emplace(b, domain::Pattern{b, 1, target_notes});
+    expected.patterns.emplace(b, domain::Pattern{b, 1, nonzero ? phase_target_notes : target_notes});
     expected.revision = a_events.size() == 1 ? 2 : 3;
     const facade::ApplicationConfig config{owned.path, nullptr, {}, {},
         audio::RuntimePreparationLimits{1'048'576, 240'000, 67'108'864, 134'217'728},
@@ -638,8 +701,8 @@ void cold_recovery_after_real_process_death() {
     ++completed;
     std::cout << "cold segment recovery " << label << ": PASS\n";
   }
-  LMDJ_CHECK(completed == 32);
-  std::cout << "cold segment recovery matrix: PASS (32 actual SIGKILL boundaries)\n";
+  LMDJ_CHECK(completed == 64);
+  std::cout << "cold segment recovery matrix: PASS (32 zero + 32 nonzero actual SIGKILL boundaries)\n";
 }
 
 }  // namespace
@@ -661,8 +724,10 @@ int main(int argc, char** argv) {
       std::raise(SIGTERM);
       return 3;
     }
-    if (argc == 6 && std::string_view(argv[1]) == "--crash-step") {
-      crash_child(argv[2], argv[3], argv[4], std::string_view(argv[5]) == "after");
+    if (argc == 7 && std::string_view(argv[1]) == "--crash-step") {
+      LMDJ_CHECK(std::string_view(argv[6]) == "phase" || std::string_view(argv[6]) == "zero");
+      crash_child(argv[2], argv[3], argv[4], std::string_view(argv[5]) == "after",
+          std::string_view(argv[6]) == "phase");
       return 1;
     }
     if (argc == 2 && std::string_view(argv[1]) == "--restart") {
@@ -670,10 +735,12 @@ int main(int argc, char** argv) {
       return 0;
     }
     LMDJ_CHECK(argc == 1 || (argc == 2 && std::string_view(argv[1]) == "--component"));
+    nonzero_segment_phase_is_immutable_and_survives_reopen();
     continuous_a_b_a_keeps_full_truth_and_new_generation_clock();
     empty_segments_keep_equal_frontiers_and_no_empty_flushes();
     durable_partial_steps_replay_original_work_after_owner_reconstruction();
     stale_work_or_retroactive_input_cannot_change_segment();
+    invalid_segment_phase_is_refused_before_any_effect();
     legitimate_settings_rebase_preserves_terminal_switch_close();
     changed_project_revision_cannot_become_segment_authority();
     retained_segment_cell_prevents_close_from_removing_its_journal();
