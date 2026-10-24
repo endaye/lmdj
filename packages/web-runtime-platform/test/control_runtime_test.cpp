@@ -13004,6 +13004,99 @@ class HeldCountInOpeningStorage final
   bool armed_{}, released_{};
 };
 
+void test_saved_sample_survives_a_real_preparation_read_failure() {
+  TempDirectory temp;
+  const auto bundle = temp.path() / "projects" / (std::string(kProjectId) + ".lmdj");
+  const auto manifest = bundle / "manifest.json";
+  const auto unavailable = temp.path() / "retained-committed-manifest.json";
+  auto storage = std::make_shared<HeldCountInOpeningStorage>(bundle);
+  auto config = make_application_config(temp.path());
+  config.storage_platform = storage;
+  auto created = ControlRuntime::create(temp.path(), std::move(config), kWebLimits);
+  LMDJ_CHECK(created.has_value());
+  auto runtime = std::move(created.value());
+  check_success(runtime->dispatch("project.create", create_payload(), {}));
+  const auto wav = mono_pcm16_wav(2'400);
+  import_and_assign(*runtime, wav, kAssetId, 11000, 11001, 0);
+  const auto before = inspect_project(temp.path(), kProjectId).at("result").at("project");
+  LMDJ_CHECK(before.at("revision") == 2);
+  const auto original_sample = check_locked_success_result(runtime->dispatch(
+      "sample.inspect", {{"slot", slot(0, 0)}}, {}));
+  LMDJ_CHECK(original_sample.at("playback").at("muted") == false);
+  using Files = std::map<std::string, std::vector<std::byte>>;
+  const auto inventory = [bundle] {
+    Files files;
+    for (const auto& entry : std::filesystem::recursive_directory_iterator(bundle)) {
+      if (entry.is_regular_file())
+        files.emplace(entry.path().lexically_relative(bundle).generic_string(), read_bytes(entry.path()));
+    }
+    return files;
+  };
+  struct ReadFault {
+    unsigned committed_reads{};
+    bool moved{};
+    std::uint64_t revision{};
+    Files committed_files;
+  };
+  const auto fault = std::make_shared<ReadFault>();
+  storage->before_read = [fault, manifest, unavailable, inventory](const auto& path) {
+    if (path != manifest || fault->moved) return;
+    std::ifstream stream(manifest);
+    Json metadata;
+    stream >> metadata;
+    if (metadata.at("head_revision") != 3) return;
+    if (++fault->committed_reads != 2) return;
+    fault->revision = metadata.at("head_revision").template get<std::uint64_t>();
+    fault->committed_files = inventory();
+    std::filesystem::rename(manifest, unavailable);
+    fault->moved = true;
+  };
+  auto playback = original_sample.at("playback");
+  playback["muted"] = true;
+  const auto response = runtime->dispatch("sample.update_pad",
+      {{"command_id", uuid(11002)}, {"expected_revision", 2},
+       {"slot", slot(0, 0)}, {"playback", playback}}, {});
+  storage->before_read = {};
+  LMDJ_CHECK(fault->moved && fault->committed_reads == 2 && fault->revision == 3);
+  LMDJ_CHECK(!std::filesystem::exists(manifest));
+  LMDJ_CHECK(read_bytes(unavailable) == fault->committed_files.at("manifest.json"));
+  std::filesystem::rename(unavailable, manifest);
+  const auto result = check_locked_success_result(response);
+  LMDJ_CHECK(result.at("committed_revision") == 3);
+  LMDJ_CHECK(result.at("runtime_revision") == 2);
+  LMDJ_CHECK(result.at("runtime_published") == false);
+  LMDJ_CHECK(result.at("snapshot_error").at("code") == "INVALID_PROJECT");
+  auto expected = before;
+  expected["revision"] = 3;
+  LMDJ_CHECK(inspect_project(temp.path(), kProjectId).at("result").at("project") == expected);
+  const auto saved_sample = check_locked_success_result(runtime->dispatch(
+      "sample.inspect", {{"slot", slot(0, 0)}}, {}));
+  auto expected_sample = original_sample;
+  expected_sample["project_revision"] = 3;
+  expected_sample["playback"]["muted"] = true;
+  LMDJ_CHECK(saved_sample == expected_sample);
+  LMDJ_CHECK(inventory() == fault->committed_files);
+  const auto retry = check_locked_success_result(runtime->dispatch(
+      "snapshot.retry", {{"pattern_id", kPatternId}}, {}));
+  LMDJ_CHECK(retry.at("runtime_ready") == true);
+  LMDJ_CHECK(retry.at("project_revision") == 3 && retry.at("runtime_revision") == 3);
+  LMDJ_CHECK(retry.at("snapshot_error").is_null());
+  LMDJ_CHECK(inventory() == fault->committed_files);
+  runtime.reset();
+  runtime = make_runtime(temp.path());
+  check_success(runtime->dispatch("project.open",
+      {{"project_id", kProjectId}, {"pattern_id", kPatternId}}, {}));
+  LMDJ_CHECK(inspect_project(temp.path(), kProjectId).at("result").at("project") == expected);
+  LMDJ_CHECK(check_locked_success_result(runtime->dispatch(
+      "sample.inspect", {{"slot", slot(0, 0)}}, {})) == expected_sample);
+  LMDJ_CHECK(inventory() == fault->committed_files);
+  const auto digest = sha256(wav);
+  LMDJ_CHECK(read_bytes(bundle / "assets" / (digest + ".wav")) == wav);
+  std::cout << "sample.preparation.real-read-failure: " << result.dump()
+            << "; retry=" << retry.dump() << "; complete_files="
+            << fault->committed_files.size() << "; reopen_identical=true\n";
+}
+
 void test_known_deadline_failed_count_in_consumes_only_after_real_stop_and_all_owners_settle() {
   using namespace lmdj::web_runtime::detail;
   TempDirectory temp;
@@ -15020,6 +15113,7 @@ int main(int argc, char** argv) {
           static_cast<std::size_t>(std::stoul(argv[2])), lifecycle);
       return 0;
     }
+    test_saved_sample_survives_a_real_preparation_read_failure();
     test_record_off_publication_keeps_short_inspect_serviceable(1);
     test_record_off_publication_keeps_short_inspect_serviceable(2);
     test_record_off_publication_keeps_short_inspect_serviceable(1, PostCloseLifecycle::stop);
