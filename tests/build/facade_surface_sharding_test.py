@@ -42,6 +42,15 @@ EXPECTED = {
         "facade.pattern_count_in.ingress": "ingress",
         "facade.pattern_count_in.durability": "durability",
     },
+    # Each restart shard kills and recovers 32 real child processes; one
+    # registration holding both phases outgrew its component budget.
+    "lmdj_pattern_transport_segment_tests": {
+        "facade.pattern_transport_segment": "component",
+        "facade.pattern_transport_segment_restart": "restart-zero-phase",
+        "facade.pattern_transport_segment_restart.nonzero_phase": (
+            "restart-nonzero-phase"
+        ),
+    },
 }
 
 # Registrations of a sharded binary that deliberately run more than one shard.

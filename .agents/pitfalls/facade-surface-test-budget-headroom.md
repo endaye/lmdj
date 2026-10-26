@@ -39,6 +39,9 @@ recurrences:
   - date: 2026-10-18
     occurrence: https://github.com/endaye/lmdj/actions/runs/39107252620
     observed_by: Claude Code (Opus 5.5)
+  - date: 2026-10-26
+    occurrence: https://github.com/endaye/lmdj/actions/runs/40120366652
+    observed_by: Claude Code (Opus 5.5)
 exit: none
 escalation: https://github.com/endaye/lmdj/issues/657
 ---
@@ -74,7 +77,9 @@ new scenario to one named shard and split again before any shard approaches its
 component budget. `lmdj_pattern_count_in_tests` follows the same rule (#2238):
 its deadline cases sleep past the real 1 s input and 5 s opening deadlines,
 so each deadline family is its own registration rather than one more scenario
-in a shard that is already near its budget.
+in a shard that is already near its budget. `lmdj_pattern_transport_segment_tests`
+splits its real-SIGKILL recovery matrix by segment phase for the same reason:
+adding the nonzero phase doubled one registration past its 90 s ASan budget.
 
 `tests/build/facade_surface_sharding_test.py` still enforces that partitioning,
 but it can only read C++ CTest registrations; it cannot see a wall-clock
