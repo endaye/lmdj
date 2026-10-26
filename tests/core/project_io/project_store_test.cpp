@@ -650,6 +650,56 @@ void test_replay_prefix_cache_is_not_kept_by_a_failed_asset_check() {
   LMDJ_CHECK(transaction_reads(*platform) == 2);  // full replay, nothing kept
 }
 
+// The cache holds replayed state, never verification results: a verifying
+// load checks every current Asset even when an unverified load (here
+// inspect_committed without Asset checks) filled the cache (review of #2506).
+void test_replay_prefix_cache_never_skips_asset_verification() {
+  const auto bundle = std::filesystem::path{"memory/replay-cache-unverified.lmdj"};
+  auto platform = std::make_shared<MemoryStoragePlatform>();
+  ProjectStore cached{platform};
+  cached.enable_replay_prefix_cache();
+  ProjectStore plain{platform};
+  LMDJ_CHECK(plain.create(bundle, new_project()).has_value());
+  std::array bytes{std::byte{'R'}, std::byte{'I'}, std::byte{'F'}, std::byte{'F'},
+                   std::byte{0x00}, std::byte{0x01}};
+  const auto asset_id = AssetId{test_uuid("replay-cache-unverified-asset")};
+  const auto imported = plain.import_artifact_bytes(bundle,
+      ProjectStore::ImportArtifactBytesRequest{
+          meta("replay-cache-unverified-command", 0), asset_id, "audio/wav", bytes});
+  LMDJ_CHECK(imported.has_value());
+  const auto blob = bundle / "assets" /
+      (imported.value().state.assets.at(asset_id).artifact.sha256 + ".wav");
+  LMDJ_CHECK(cached.inspect_committed(bundle, false).has_value());  // fills the cache
+  std::array corrupt{std::byte{'X'}, std::byte{'I'}, std::byte{'F'}, std::byte{'F'},
+                     std::byte{0x00}, std::byte{0x01}};
+  LMDJ_CHECK(platform->replace_complete(blob, corrupt).has_value());
+  LMDJ_CHECK(!cached.load(bundle).has_value());  // still caught
+}
+
+// The accepted trade-off of #2504, stated as a test: a committed transaction
+// rewritten in place is not re-read by the store that already replayed it,
+// while a store without the cache (and so every new process) replays it.
+void test_replay_prefix_cache_trusts_already_replayed_transactions() {
+  const auto bundle = std::filesystem::path{"memory/replay-cache-immutable.lmdj"};
+  auto platform = std::make_shared<MemoryStoragePlatform>();
+  ProjectStore cached{platform};
+  cached.enable_replay_prefix_cache();
+  ProjectStore plain{platform};
+  LMDJ_CHECK(plain.create(bundle, new_project()).has_value());
+  LMDJ_CHECK(plain.execute(bundle, Command{create_pattern(
+      "immutable-command", 0, "immutable-pattern")}).has_value());
+  const auto before = cached.load(bundle);
+  LMDJ_CHECK(before.has_value());
+  const auto transaction = bundle / "history/transactions" /
+      ("1-" + test_uuid("immutable-command") + ".json");
+  const std::string garbage = "{}";
+  LMDJ_CHECK(platform->replace_complete(transaction,
+      std::as_bytes(std::span{garbage.data(), garbage.size()})).has_value());
+  const auto trusted = cached.load(bundle);
+  LMDJ_CHECK(trusted.has_value() && trusted.value() == before.value());
+  LMDJ_CHECK(!plain.load(bundle).has_value());  // a full replay sees the damage
+}
+
 void test_default_store_remains_copy_list_initializable() {
   ProjectStore store = {};
   (void)store;
@@ -3370,6 +3420,8 @@ int main() {
     test_replay_prefix_cache_replays_only_appended_transactions();
     test_replay_prefix_cache_falls_back_to_full_replay();
     test_replay_prefix_cache_is_not_kept_by_a_failed_asset_check();
+    test_replay_prefix_cache_never_skips_asset_verification();
+    test_replay_prefix_cache_trusts_already_replayed_transactions();
     test_canonical_checkpoint_round_trip_and_bundle_shape();
     test_v1_load_migrates_in_memory_and_first_mutation_writes_v4();
     test_v2_total_migration_discards_takes_and_is_byte_stable();
