@@ -409,13 +409,28 @@ if(BUILD_TESTING AND NOT EMSCRIPTEN)
   )
   lmdj_target_warnings(lmdj_web_control_runtime_tests)
   lmdj_target_sanitizers(lmdj_web_control_runtime_tests)
+  # One registration per named shard: the whole suite took 116 s of one
+  # 120 s host budget on an idle M1 and timed out under Linux ASan.
+  # tests/build/facade_surface_sharding_test.py keeps this list and the
+  # binary's --list-shards table in step.
   lmdj_add_test(
     NAME host.web_control_runtime
     TIER host
-    COMMAND lmdj_web_control_runtime_tests
+    COMMAND lmdj_web_control_runtime_tests --shard=recording-owners
     WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
     LABELS audio concurrency
   )
+  foreach(lmdj_web_control_shard IN ITEMS
+      assignment project-sequence pattern-edit sample-audio bridge transport)
+    string(REPLACE "-" "_" lmdj_web_control_suffix "${lmdj_web_control_shard}")
+    lmdj_add_test(
+      NAME host.web_control_runtime.${lmdj_web_control_suffix}
+      TIER host
+      COMMAND lmdj_web_control_runtime_tests --shard=${lmdj_web_control_shard}
+      WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+      LABELS audio concurrency
+    )
+  endforeach()
   add_executable(
     lmdj_web_manifest_gate_tests
     test/manifest_gate_test.cpp
