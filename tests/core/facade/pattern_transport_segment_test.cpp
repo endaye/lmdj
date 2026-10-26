@@ -626,10 +626,12 @@ void failed_barrier_children_are_already_reaped() {
   }
 }
 
-void cold_recovery_after_real_process_death() {
+// One phase of the real-SIGKILL matrix: every crash case, before and after
+// its durable step, for a segment that starts at phase zero or mid-Bar.
+std::size_t cold_recovery_after_real_process_death(bool nonzero) {
   failed_barrier_children_are_already_reaped();
   std::size_t completed = 0;
-  for (bool nonzero : {false, true}) for (const auto& c : crash_cases) for (bool after : {false, true}) {
+  for (const auto& c : crash_cases) for (bool after : {false, true}) {
     struct OwnedDirectory {
       std::filesystem::path path = std::filesystem::temp_directory_path() /
           ("lmdj-segment-crash-" + std::to_string(
@@ -701,9 +703,42 @@ void cold_recovery_after_real_process_death() {
     ++completed;
     std::cout << "cold segment recovery " << label << ": PASS\n";
   }
-  LMDJ_CHECK(completed == 64);
-  std::cout << "cold segment recovery matrix: PASS (32 zero + 32 nonzero actual SIGKILL boundaries)\n";
+  LMDJ_CHECK(completed == 2 * crash_cases.size());
+  std::cout << "cold segment recovery matrix: PASS (" << completed << (nonzero ? " nonzero" : " zero")
+            << "-phase actual SIGKILL boundaries)\n";
+  return completed;
 }
+
+struct Shard {
+  std::string_view name;
+  std::size_t scenarios;
+  void (*run)();
+};
+
+void component_scenarios() {
+  nonzero_segment_phase_is_immutable_and_survives_reopen();
+  continuous_a_b_a_keeps_full_truth_and_new_generation_clock();
+  empty_segments_keep_equal_frontiers_and_no_empty_flushes();
+  durable_partial_steps_replay_original_work_after_owner_reconstruction();
+  stale_work_or_retroactive_input_cannot_change_segment();
+  invalid_segment_phase_is_refused_before_any_effect();
+  legitimate_settings_rebase_preserves_terminal_switch_close();
+  changed_project_revision_cannot_become_segment_authority();
+  retained_segment_cell_prevents_close_from_removing_its_journal();
+}
+
+// Each shard is one CTest registration with its own component budget. A
+// restart shard kills and recovers 32 real child processes, so the two
+// phases cannot share one registration (#2422: 90 s ASan timeout after the
+// nonzero phase joined the matrix). tests/build/facade_surface_sharding_test.py
+// keeps this table and the registrations in step.
+constexpr std::array<Shard, 3> kShards{{
+    {"component", 9, component_scenarios},
+    {"restart-zero-phase", 2 * crash_cases.size(),
+        [] { static_cast<void>(cold_recovery_after_real_process_death(false)); }},
+    {"restart-nonzero-phase", 2 * crash_cases.size(),
+        [] { static_cast<void>(cold_recovery_after_real_process_death(true)); }},
+}};
 
 }  // namespace
 
@@ -730,21 +765,32 @@ int main(int argc, char** argv) {
           std::string_view(argv[6]) == "phase");
       return 1;
     }
-    if (argc == 2 && std::string_view(argv[1]) == "--restart") {
-      cold_recovery_after_real_process_death();
+    if (argc == 2 && std::string_view(argv[1]) == "--list-shards") {
+      std::size_t total = 0;
+      for (const auto& shard : kShards) {
+        std::cout << shard.name << ' ' << shard.scenarios << '\n';
+        total += shard.scenarios;
+      }
+      std::cout << "all " << total << '\n';
       return 0;
     }
-    LMDJ_CHECK(argc == 1 || (argc == 2 && std::string_view(argv[1]) == "--component"));
-    nonzero_segment_phase_is_immutable_and_survives_reopen();
-    continuous_a_b_a_keeps_full_truth_and_new_generation_clock();
-    empty_segments_keep_equal_frontiers_and_no_empty_flushes();
-    durable_partial_steps_replay_original_work_after_owner_reconstruction();
-    stale_work_or_retroactive_input_cannot_change_segment();
-    invalid_segment_phase_is_refused_before_any_effect();
-    legitimate_settings_rebase_preserves_terminal_switch_close();
-    changed_project_revision_cannot_become_segment_authority();
-    retained_segment_cell_prevents_close_from_removing_its_journal();
-    if (argc == 1) cold_recovery_after_real_process_death();
+    const std::string_view prefix{"--shard="};
+    const std::string_view selected = argc == 2 ? std::string_view(argv[1]) : std::string_view{};
+    if (argc > 2 || (argc == 2 && !selected.starts_with(prefix))) {
+      std::cerr << "usage: lmdj_pattern_transport_segment_tests [--list-shards|--shard=<name>]\n";
+      return 2;
+    }
+    bool matched = false;
+    for (const auto& shard : kShards) {
+      if (argc == 1 || selected.substr(prefix.size()) == shard.name) {
+        shard.run();
+        matched = true;
+      }
+    }
+    if (!matched) {
+      std::cerr << "unknown pattern transport segment shard\n";
+      return 2;
+    }
     std::cout << "pattern transport segment tests: PASS\n";
   } catch (const std::exception& error) {
     std::cerr << error.what() << '\n';

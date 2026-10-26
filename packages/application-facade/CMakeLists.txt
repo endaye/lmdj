@@ -143,10 +143,16 @@ if(BUILD_TESTING)
   target_link_libraries(lmdj_pattern_transport_segment_tests PRIVATE lmdj::application)
   lmdj_target_warnings(lmdj_pattern_transport_segment_tests)
   lmdj_target_sanitizers(lmdj_pattern_transport_segment_tests)
+  # One registration per named shard: each restart shard kills and recovers
+  # 32 real child processes, so both phases outgrew one component budget.
+  # tests/build/facade_surface_sharding_test.py keeps this list and the
+  # binary's --list-shards table in step.
   lmdj_add_test(NAME facade.pattern_transport_segment TIER component
-    COMMAND lmdj_pattern_transport_segment_tests --component)
+    COMMAND lmdj_pattern_transport_segment_tests --shard=component)
   lmdj_add_test(NAME facade.pattern_transport_segment_restart TIER component
-    COMMAND lmdj_pattern_transport_segment_tests --restart)
+    COMMAND lmdj_pattern_transport_segment_tests --shard=restart-zero-phase)
+  lmdj_add_test(NAME facade.pattern_transport_segment_restart.nonzero_phase TIER component
+    COMMAND lmdj_pattern_transport_segment_tests --shard=restart-nonzero-phase)
   add_executable(lmdj_pattern_transport_switch_tests
     "${CMAKE_SOURCE_DIR}/tests/core/facade/pattern_transport_switch_test.cpp")
   target_include_directories(lmdj_pattern_transport_switch_tests PRIVATE "${CMAKE_SOURCE_DIR}")
