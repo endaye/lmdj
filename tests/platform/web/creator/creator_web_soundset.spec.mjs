@@ -1120,7 +1120,11 @@ async function expectPadColourSurfaces(page, pad, colour) {
   await expect(overview.locator(`.sequence-overview-note[data-row='${pad}'] .sequence-overview-onset`))
     .toHaveCSS("fill", expected);
   await expect(row.locator(".sequence-grid-pad")).toHaveCSS("color", expected);
-  await expect(row.getByTestId("sequence-grid-note")).toHaveCSS("background-color", expected);
+  // The EDIT grid paints a note's fill on its ::before face (#2468); the
+  // note box itself stays transparent so the cell gaps show through.
+  await expect.poll(() => row.getByTestId("sequence-grid-note")
+    .evaluate((element) => getComputedStyle(element, "::before").backgroundColor))
+    .toBe(expected);
   const matrixPad = page.getByRole("button", {name: new RegExp(`^Pad ${address} —`)});
   if (colour !== null) {
     await expect(matrixPad).toHaveCSS("--pad-colour", INTERACTION_PAD_COLOURS[colour].hex);
