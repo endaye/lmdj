@@ -15095,6 +15095,285 @@ void test_record_off_publication_keeps_short_inspect_serviceable(
   else f.stop_and_reopen(expected);
 }
 
+// Recording switches, count-in receipts and exceptional input owners.
+void run_recording_owners_shard() {
+  test_saved_sample_survives_a_real_preparation_read_failure();
+  test_record_off_publication_keeps_short_inspect_serviceable(1);
+  test_record_off_publication_keeps_short_inspect_serviceable(2);
+  test_record_off_publication_keeps_short_inspect_serviceable(1, PostCloseLifecycle::stop);
+  test_record_off_publication_keeps_short_inspect_serviceable(1, PostCloseLifecycle::suspend);
+  test_record_off_publication_keeps_short_inspect_serviceable(1, PostCloseLifecycle::destroy);
+  test_record_off_publication_keeps_short_inspect_serviceable(1, PostCloseLifecycle::timeout);
+  test_recording_switch_host_returns_to_acknowledged_material_and_reopens();
+  test_recording_switch_host_keeps_both_native_facts_behind_real_io();
+  test_recording_switch_host_keeps_both_native_facts_behind_real_io(true);
+  test_recording_switch_host_keeps_original_count_in_receipts_and_prompt_f();
+  test_recording_switch_host_preserves_recording_kind_exclusion();
+  test_recording_switch_host_cancels_at_f_and_withdraws_current_target();
+  test_recording_switch_host_disposes_failed_io_before_native_pin_quiescence();
+  test_recording_switch_host_count_in_poll_republishes_actual_current_without_selection_poll();
+  test_prepared_record_timeout_waits_for_real_owner_and_original_consumers();
+  test_legacy_idle_play_timeout_retires_actual_worker_before_bridge_release();
+  test_owner_loss_cleanup_failure_stops_and_clears_the_overlay(true);
+  test_bridge_pre_dispatch_timeout_keeps_count_in_caller_ack_serviceable();
+  test_bridge_post_dispatch_timeout_keeps_count_in_caller_ack_serviceable();
+  test_pattern_input_pre_engagement_exact_replay_and_future_release();
+  test_pattern_input_profile_strict_decimal_and_pending_shutdown_owners();
+  test_pattern_input_failed_observer_retains_original_deadline_and_physical_release();
+  test_exceptional_live_only_owner_ack_requires_native_and_ticket_consumers();
+  test_exceptional_owner_ack_preserves_original_queued_release_completion();
+  test_exceptional_recorded_silent_owner_ack_keeps_failed_recovery_prefix();
+  test_exceptional_never_recorded_engagement_uses_real_no_journal_disposition();
+  test_exceptional_pre_engagement_hold_keeps_its_original_live_only_owner();
+  test_exceptional_after_real_record_off_preserves_f_and_committed_truth();
+  test_known_deadline_failed_count_in_consumes_only_after_real_stop_and_all_owners_settle();
+  test_exceptional_count_in_receipt_requires_owner_and_caller_ack();
+  test_normal_count_in_close_consumption_precedes_retirement();
+  test_host_live_status_and_control_reuse_verified_writer_identity();
+  test_bridge_retains_original_legacy_rpc_until_exact_candidate_is_durable();
+  test_bridge_retains_original_legacy_rpc_until_exact_candidate_is_durable(true);
+}
+
+// Pad assignment, provider owners and one-shot Bank transitions.
+void run_assignment_shard() {
+  test_retained_asset_assignment_replaces_the_destination_pcm();
+  test_assignment_history_restores_whole_truth_pcm_and_reopens();
+  test_same_asset_assignment_retains_destination_playback();
+  test_assignment_d16_and_native_null_preserve_materials();
+  test_assignment_replay_after_later_edit_publishes_current_truth();
+  test_missing_asset_assignment_keeps_truth_history_and_live_voice();
+  test_stale_assignment_keeps_truth_history_and_live_voice();
+  test_foreign_asset_assignment_cannot_import_another_project_material();
+  test_assignment_post_commit_deadline_retains_identity_and_truth();
+  test_assignment_waits_for_its_real_bank_acknowledgement();
+  test_assignment_ack_timeout_keeps_commit_and_fails_closed();
+  test_assignment_admission_timeout_keeps_commit_without_a_new_bank();
+  test_assignment_cannot_acknowledge_with_an_unrelated_later_generation();
+  test_assignment_refuses_a_live_sequence_owner_without_mutation();
+  test_assignment_refuses_a_live_performance_owner_without_mutation();
+  test_assignment_refuses_a_recording_pattern_transport_without_mutation();
+  test_stopped_snapshot_selection_applies_before_the_next_play();
+  test_retained_transport_replay_survives_pending_stopped_publication();
+  test_candidate_host_owns_paths_pcm_stop_and_atomic_adoption();
+  test_provider_owner_uses_retained_project_and_survives_restart();
+  for (unsigned mode = 0; mode < 7; ++mode) test_web_provider_owner_refusals_are_persistent(mode);
+  test_one_shot_bank_transition_waits_for_accepted_queue_commit();
+  test_one_shot_bank_transition_renders_until_target_is_applied();
+  test_one_shot_bank_transition_rejects_overlap_until_completion();
+}
+
+// Project bundles, Sequence overlays, history and replay interplay.
+void run_project_sequence_shard() {
+  test_facade_error_details_follow_an_explicit_safe_schema();
+  test_refusal_diagnostic_reports_the_pre_sanitization_reason();
+  test_project_bundle_stream_delegates_to_facade_and_lists_summary();
+  test_host_close_aborts_active_project_bundle_import();
+  test_runtime_cancellation_precedes_project_mutation();
+  test_project_duplicate_lists_the_copy_and_keeps_the_open_project();
+  test_project_duplicate_refuses_a_source_owned_by_another_tab();
+  test_project_duplicate_names_an_unfinished_recording();
+  test_project_duplicate_refuses_an_identity_already_in_use();
+  test_project_duplicate_cancelled_before_publication_leaves_no_copy();
+  test_project_duplicate_waits_for_a_pending_sample_import();
+  test_project_duplicate_payload_is_exact();
+  test_exact_payloads_and_facade_owned_project_journey();
+  test_sequence_observer_busy_and_owner_loss_recovery();
+  test_owner_loss_cleanup_failure_stops_and_clears_the_overlay();
+  test_pending_sequence_overlay_repeats_and_commits_without_duplicate();
+  test_stop_replay_recovers_a_committed_clean_publication_failure();
+  test_authoritative_switch_supersedes_overlay_and_stop_cancels_target();
+  test_stop_fails_closed_if_target_applies_between_cancel_queries();
+  test_bpm_publication_then_switch_flushes_old_events_at_exact_boundary();
+  test_sequence_switch_prepares_before_selecting_bar_boundary();
+  test_sequence_switch_supersedes_a_near_boundary_recording_overlay();
+  test_authoring_history_import_roundtrip_and_reopen();
+  test_authoring_history_restores_pattern_and_parameters();
+  test_pad_delete_stops_voice_preserves_rhythm_and_roundtrips_history();
+  test_pattern_transport_status_reports_the_rendered_frame();
+  test_pattern_events_edit_during_a_replay_returns_at_its_end();
+  test_headered_live_control_flows_through_control_runtime();
+  test_a_pad_delete_during_a_replay_stops_only_the_live_voice();
+  test_an_undo_during_a_replay_publishes_nothing_over_it();
+  test_a_bpm_change_during_a_replay_publishes_nothing_over_it();
+  test_a_project_switch_during_a_replay_publishes_its_own_view();
+  test_opening_another_project_stops_replay_before_replacement();
+  test_play_after_replay_starts_the_selected_truth_pattern();
+  test_stop_after_replay_stops_the_pattern_transport();
+  test_record_after_replay_records_into_the_selected_pattern();
+  test_transport_replay_stop_timeout_starts_no_transport();
+}
+
+// Pattern edits, length, copy, colour and deferred swaps.
+void run_pattern_edit_shard() {
+  test_pattern_events_edit_while_stopped_reaches_the_next_play();
+  test_pattern_events_edit_while_playing_swaps_the_pattern_in_place();
+  test_pattern_events_edit_of_another_pattern_publishes_nothing();
+  test_pattern_events_edit_refusals_keep_truth();
+  test_pattern_resize_while_stopped_loops_the_next_play_at_the_new_length();
+  test_pattern_length_and_copy_refuse_while_playing_and_keep_truth();
+  test_pattern_length_and_copy_refuse_while_recording_and_keep_truth();
+  test_pattern_length_and_copy_refuse_while_the_transport_settles();
+  test_pattern_copy_and_a_change_of_another_pattern_publish_nothing();
+  test_pattern_events_edit_refuses_while_the_transport_settles();
+  test_pattern_events_edit_refuses_a_pending_publication();
+  test_pattern_events_edit_refuses_a_legacy_sequence_session();
+  test_pattern_events_edit_keeps_a_current_runtime_current();
+  test_pad_colour_set_while_playing_disturbs_nothing();
+  test_pad_colour_set_keeps_a_current_runtime_current();
+  test_pad_colour_set_refused_while_recording_keeps_truth();
+  test_a_bpm_change_keeps_a_current_runtime_current();
+  test_a_swing_change_keeps_a_current_runtime_current();
+  test_pattern_events_edit_reports_a_failed_swap();
+  test_pattern_events_edit_after_stop_publishes_immediately();
+  test_pattern_events_edit_stopped_supersedes_a_pending_publication();
+  test_pattern_events_edit_defers_a_swap_until_a_slot_frees();
+  test_pattern_events_edit_superseded_deferral_publishes_nothing_more();
+  test_pattern_events_edit_deferral_waits_out_a_recording();
+  test_pattern_events_edit_deferral_survives_an_audio_interruption();
+  test_a_deferred_swap_waits_out_a_replay();
+  test_a_refused_replay_restore_retries_until_a_slot_frees();
+  test_pad_delete_cancels_staged_host_import_and_releases_history();
+}
+
+// Sample editing and import, audio activation, Bank acknowledgement and budgets.
+void run_sample_audio_shard() {
+  test_sample_editing_binds_current_project_and_drives_fixed_controls();
+  test_sample_parity_playback_crosses_the_fixed_control_wire();
+  test_sample_preview_pitch_reaches_the_voice();
+  test_sample_import_prevents_current_project_switch_until_terminal();
+  test_sample_import_protocol_failure_aborts_staging();
+  test_sample_import_timeout_aborts_staging_and_fails_closed();
+  test_sample_commit_quota_failure_keeps_truth_and_runtime_unchanged();
+  test_sample_post_claim_deadline_preserves_saved_truth();
+  test_source_frames_are_admitted_by_prepared_pcm_quota();
+  test_audio_activation_prepares_master_fx_for_perform();
+  test_session_free_fx_gesture_reaches_the_master_bus();
+  test_trigger_queue_full_is_admission_failure();
+  test_voice_capacity_is_sequence_addressed_execution_outcome();
+  test_audio_activation_requires_ready_and_reports_explicit_ack();
+  test_audio_reactivation_waits_past_a_stale_bank_acknowledgement();
+  test_live_bank_publication_waits_for_the_exact_acknowledgement();
+  test_live_bank_publication_ack_timeout_fails_closed();
+  test_live_sample_mutations_wait_for_the_exact_bank_acknowledgement();
+  test_running_sample_mutation_post_commit_deadline_fails_closed();
+  test_running_sample_mutation_preparation_deadline_fails_closed();
+  test_audio_activation_rolls_back_begin_and_ack_failures();
+  test_audio_suspend_requires_and_honors_quiescence_coordinator();
+  test_audio_activation_rechecks_deadline_after_generation_ack();
+  test_retained_audio_activation_keeps_default_one_second_budget();
+  test_audio_activation_ack_wait_uses_original_request_budget();
+  test_bridge_live_operations_keep_original_one_second_queue_budget();
+  test_audio_activation_rollback_rechecks_the_original_deadline();
+  test_suspend_and_close_pass_only_the_original_remaining_budget();
+  test_exact_non_fifo_aggregate_accounting_and_prior_bank_retention();
+  test_host_close_releases_current_and_retired_runtime_banks();
+  test_oversized_project_switch_is_inspectable_but_not_runnable();
+}
+
+// Sound Set catalog routing and the bridge request lifecycle.
+void run_bridge_shard() {
+  test_soundset_operations_route_at_the_workspace_and_the_project();
+  test_host_supplied_catalog_verifies_what_it_serves();
+  test_host_supplied_catalog_resolves_only_addressed_objects();
+  test_host_catalog_operations_need_a_wired_transport();
+  test_soundset_audition_reports_whether_a_voice_started();
+  test_bridge_routes_catalog_description_without_a_project();
+  test_bridge_routes_sample_operations_without_a_project_path();
+  test_bridge_defers_parse_dispatch_and_copies_fixed_slots();
+  test_bridge_rejects_duplicates_until_response_consumption();
+  test_bridge_response_backpressure_fails_before_mutation();
+  test_bridge_reserves_response_capacity_under_realtime_notification_pressure();
+  test_bridge_exception_reuses_the_reserved_response_slot();
+  test_bridge_release_proxy_failure_is_a_terminal_transport_signal();
+  test_bridge_emits_only_real_snapshot_notifications_after_response();
+  test_bridge_emits_sample_publication_notifications_after_response();
+  test_bridge_assignment_response_precedes_real_publication_notification();
+  test_bridge_assignment_replay_notifies_current_revision();
+  test_bridge_assignment_preparation_rejection_follows_committed_response();
+  test_bridge_refused_assignment_emits_no_snapshot_notification();
+  test_bridge_expired_preclaim_assignment_changes_no_truth();
+  test_bridge_assignment_claim_preserves_known_commit_past_deadline();
+  test_bridge_emits_commit_quota_rejection_without_snapshot_notification();
+  test_bridge_rejects_an_expired_control_request_without_late_success();
+  test_bridge_cancelled_before_dispatch_skips_facade_work();
+  test_bridge_defers_a_request_whose_thunk_runs_during_a_dispatch();
+  test_bridge_defers_the_seal_when_a_failure_lands_during_a_dispatch();
+  test_bridge_parks_foreign_control_tasks_during_a_dispatch();
+  test_bridge_parks_requests_during_the_realtime_service();
+  test_bridge_parks_the_realtime_service_during_a_dispatch();
+  test_bridge_benign_query_cancel_does_not_fail_the_runtime();
+  test_bridge_rechecks_deadline_before_success_publication();
+  test_bridge_uses_the_caller_deadline_as_the_authoritative_upper_bound();
+  test_bridge_preserves_a_pre_deadline_publication_claim_to_settlement();
+  test_bridge_passes_the_absolute_caller_deadline_into_audio_activation();
+  test_failed_activation_keeps_queued_rpc_and_retirement_service_alive();
+  test_bridge_rechecks_deadline_before_error_publication();
+  test_internal_audio_activation_timeout_is_terminal_after_response();
+  test_bridge_preserves_error_responses_for_an_externally_failed_runtime();
+}
+
+// Pattern transport recording, switches and snaps.
+void run_transport_shard() {
+  test_pattern_transport_requires_opt_in_and_preserves_legacy();
+  test_pattern_transport_records_live_input_and_rejects_legacy_writes();
+  test_pattern_transport_suspend_barrier_settles_recording();
+  test_pattern_transport_unknown_closure_blocks_clean_suspend();
+  test_transport_reload_rebinds_engagement_without_bricking();
+  test_transport_record_after_applied_switch_retargets();
+  test_transport_current_pattern_withdraws_both_exact_authorities();
+  test_transport_current_pattern_cancel_race_requeues_after_predecessor_applies();
+  test_transport_predecessor_press_after_successor_claim_queues_behind_successor();
+  test_transport_latest_successor_prepublication_handoff_retains_stop_authorities();
+  test_transport_switch_snap_lands_at_its_exact_frame();
+  test_transport_switch_replacement_can_change_snap();
+  test_transport_switch_each_snap_can_be_withdrawn();
+  test_transport_stop_cancels_each_snap_and_both_claimed_authorities();
+  test_transport_claimed_successor_lands_without_host_cadence();
+  test_transport_claimed_predecessor_is_selection_before_successor_applies();
+  test_transport_switch_rejects_invalid_snap();
+  test_transport_latest_unclaimed_successor_uses_predecessor_snap_clock();
+  test_transport_pressing_claimed_predecessor_withdraws_only_successor();
+  test_transport_switch_applies_at_the_reported_boundary();
+  test_transport_switch_replaces_an_unclaimed_request();
+  test_transport_switch_after_the_claim_defers_to_the_following_bar();
+  test_transport_stop_before_the_boundary_cancels_the_switch();
+  test_transport_stop_cancels_an_audio_claimed_switch();
+  test_transport_stop_cancels_a_switch_queued_after_record_off();
+  test_transport_record_after_an_applied_switch_records_the_new_pattern();
+  test_transport_record_after_cancellation_opens_from_the_production_receipt();
+  test_transport_switch_keeps_recording_and_refuses_while_stopped();
+  test_transport_stop_spends_a_deferred_switch_without_publishing();
+  test_transport_switch_refuses_a_foreign_pending_publication();
+  test_sequence_settings_bpm_refuses_a_pending_transport_switch();
+  test_pattern_events_edit_refuses_a_pending_transport_switch();
+  test_transport_record_refuses_a_pending_transport_switch();
+  test_performance_replay_begin_refuses_a_pending_transport_switch();
+  test_transport_recording_rejects_sample_commit_and_keeps_journal();
+  test_pattern_transport_owner_loss_lists_recovery_on_reopen();
+}
+
+struct Shard {
+  std::string_view name;
+  std::size_t scenarios;
+  void (*run)();
+};
+
+// Each shard is one CTest registration with its own host budget. The whole
+// suite outgrew one 120 s registration (116 s on an idle M1, then 360 s ASan
+// timeouts on Linux, #2422). Add a scenario to the shard of its theme and
+// split again before any shard nears the budget.
+// tests/build/facade_surface_sharding_test.py keeps this table and the
+// registrations in step.
+constexpr std::array<Shard, 7> kShards{{
+    {"recording-owners", 35, run_recording_owners_shard},
+    {"assignment", 30, run_assignment_shard},
+    {"project-sequence", 37, run_project_sequence_shard},
+    {"pattern-edit", 28, run_pattern_edit_shard},
+    {"sample-audio", 31, run_sample_audio_shard},
+    {"bridge", 38, run_bridge_shard},
+    {"transport", 36, run_transport_shard},
+}};
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -15113,235 +15392,32 @@ int main(int argc, char** argv) {
           static_cast<std::size_t>(std::stoul(argv[2])), lifecycle);
       return 0;
     }
-    test_saved_sample_survives_a_real_preparation_read_failure();
-    test_record_off_publication_keeps_short_inspect_serviceable(1);
-    test_record_off_publication_keeps_short_inspect_serviceable(2);
-    test_record_off_publication_keeps_short_inspect_serviceable(1, PostCloseLifecycle::stop);
-    test_record_off_publication_keeps_short_inspect_serviceable(1, PostCloseLifecycle::suspend);
-    test_record_off_publication_keeps_short_inspect_serviceable(1, PostCloseLifecycle::destroy);
-    test_record_off_publication_keeps_short_inspect_serviceable(1, PostCloseLifecycle::timeout);
-    test_recording_switch_host_returns_to_acknowledged_material_and_reopens();
-    test_recording_switch_host_keeps_both_native_facts_behind_real_io();
-    test_recording_switch_host_keeps_both_native_facts_behind_real_io(true);
-    test_recording_switch_host_keeps_original_count_in_receipts_and_prompt_f();
-    test_recording_switch_host_preserves_recording_kind_exclusion();
-    test_recording_switch_host_cancels_at_f_and_withdraws_current_target();
-    test_recording_switch_host_disposes_failed_io_before_native_pin_quiescence();
-    test_recording_switch_host_count_in_poll_republishes_actual_current_without_selection_poll();
-    test_prepared_record_timeout_waits_for_real_owner_and_original_consumers();
-    test_legacy_idle_play_timeout_retires_actual_worker_before_bridge_release();
-    test_owner_loss_cleanup_failure_stops_and_clears_the_overlay(true);
-    test_bridge_pre_dispatch_timeout_keeps_count_in_caller_ack_serviceable();
-    test_bridge_post_dispatch_timeout_keeps_count_in_caller_ack_serviceable();
-    test_pattern_input_pre_engagement_exact_replay_and_future_release();
-    test_pattern_input_profile_strict_decimal_and_pending_shutdown_owners();
-    test_pattern_input_failed_observer_retains_original_deadline_and_physical_release();
-    test_exceptional_live_only_owner_ack_requires_native_and_ticket_consumers();
-    test_exceptional_owner_ack_preserves_original_queued_release_completion();
-    test_exceptional_recorded_silent_owner_ack_keeps_failed_recovery_prefix();
-    test_exceptional_never_recorded_engagement_uses_real_no_journal_disposition();
-    test_exceptional_pre_engagement_hold_keeps_its_original_live_only_owner();
-    test_exceptional_after_real_record_off_preserves_f_and_committed_truth();
-    test_known_deadline_failed_count_in_consumes_only_after_real_stop_and_all_owners_settle();
-    test_exceptional_count_in_receipt_requires_owner_and_caller_ack();
-    test_normal_count_in_close_consumption_precedes_retirement();
-    test_host_live_status_and_control_reuse_verified_writer_identity();
-    test_bridge_retains_original_legacy_rpc_until_exact_candidate_is_durable();
-    test_bridge_retains_original_legacy_rpc_until_exact_candidate_is_durable(true);
-    test_retained_asset_assignment_replaces_the_destination_pcm();
-    test_assignment_history_restores_whole_truth_pcm_and_reopens();
-    test_same_asset_assignment_retains_destination_playback();
-    test_assignment_d16_and_native_null_preserve_materials();
-    test_assignment_replay_after_later_edit_publishes_current_truth();
-    test_missing_asset_assignment_keeps_truth_history_and_live_voice();
-    test_stale_assignment_keeps_truth_history_and_live_voice();
-    test_foreign_asset_assignment_cannot_import_another_project_material();
-    test_assignment_post_commit_deadline_retains_identity_and_truth();
-    test_assignment_waits_for_its_real_bank_acknowledgement();
-    test_assignment_ack_timeout_keeps_commit_and_fails_closed();
-    test_assignment_admission_timeout_keeps_commit_without_a_new_bank();
-    test_assignment_cannot_acknowledge_with_an_unrelated_later_generation();
-    test_assignment_refuses_a_live_sequence_owner_without_mutation();
-    test_assignment_refuses_a_live_performance_owner_without_mutation();
-    test_assignment_refuses_a_recording_pattern_transport_without_mutation();
-    test_stopped_snapshot_selection_applies_before_the_next_play();
-    test_retained_transport_replay_survives_pending_stopped_publication();
-    test_candidate_host_owns_paths_pcm_stop_and_atomic_adoption();
-    test_provider_owner_uses_retained_project_and_survives_restart();
-    for (unsigned mode = 0; mode < 7; ++mode) test_web_provider_owner_refusals_are_persistent(mode);
-    test_one_shot_bank_transition_waits_for_accepted_queue_commit();
-    test_one_shot_bank_transition_renders_until_target_is_applied();
-    test_one_shot_bank_transition_rejects_overlap_until_completion();
-    test_facade_error_details_follow_an_explicit_safe_schema();
-    test_refusal_diagnostic_reports_the_pre_sanitization_reason();
-    test_project_bundle_stream_delegates_to_facade_and_lists_summary();
-    test_host_close_aborts_active_project_bundle_import();
-    test_runtime_cancellation_precedes_project_mutation();
-    test_project_duplicate_lists_the_copy_and_keeps_the_open_project();
-    test_project_duplicate_refuses_a_source_owned_by_another_tab();
-    test_project_duplicate_names_an_unfinished_recording();
-    test_project_duplicate_refuses_an_identity_already_in_use();
-    test_project_duplicate_cancelled_before_publication_leaves_no_copy();
-    test_project_duplicate_waits_for_a_pending_sample_import();
-    test_project_duplicate_payload_is_exact();
-    test_exact_payloads_and_facade_owned_project_journey();
-    test_sequence_observer_busy_and_owner_loss_recovery();
-    test_owner_loss_cleanup_failure_stops_and_clears_the_overlay();
-    test_pending_sequence_overlay_repeats_and_commits_without_duplicate();
-    test_stop_replay_recovers_a_committed_clean_publication_failure();
-    test_authoritative_switch_supersedes_overlay_and_stop_cancels_target();
-    test_stop_fails_closed_if_target_applies_between_cancel_queries();
-    test_bpm_publication_then_switch_flushes_old_events_at_exact_boundary();
-    test_sequence_switch_prepares_before_selecting_bar_boundary();
-    test_sequence_switch_supersedes_a_near_boundary_recording_overlay();
-    test_authoring_history_import_roundtrip_and_reopen();
-    test_authoring_history_restores_pattern_and_parameters();
-    test_pad_delete_stops_voice_preserves_rhythm_and_roundtrips_history();
-    test_pattern_transport_status_reports_the_rendered_frame();
-    test_pattern_events_edit_during_a_replay_returns_at_its_end();
-    test_headered_live_control_flows_through_control_runtime();
-    test_a_pad_delete_during_a_replay_stops_only_the_live_voice();
-    test_an_undo_during_a_replay_publishes_nothing_over_it();
-    test_a_bpm_change_during_a_replay_publishes_nothing_over_it();
-    test_a_project_switch_during_a_replay_publishes_its_own_view();
-    test_opening_another_project_stops_replay_before_replacement();
-    test_play_after_replay_starts_the_selected_truth_pattern();
-    test_stop_after_replay_stops_the_pattern_transport();
-    test_record_after_replay_records_into_the_selected_pattern();
-    test_transport_replay_stop_timeout_starts_no_transport();
-    test_pattern_events_edit_while_stopped_reaches_the_next_play();
-    test_pattern_events_edit_while_playing_swaps_the_pattern_in_place();
-    test_pattern_events_edit_of_another_pattern_publishes_nothing();
-    test_pattern_events_edit_refusals_keep_truth();
-    test_pattern_resize_while_stopped_loops_the_next_play_at_the_new_length();
-    test_pattern_length_and_copy_refuse_while_playing_and_keep_truth();
-    test_pattern_length_and_copy_refuse_while_recording_and_keep_truth();
-    test_pattern_length_and_copy_refuse_while_the_transport_settles();
-    test_pattern_copy_and_a_change_of_another_pattern_publish_nothing();
-    test_pattern_events_edit_refuses_while_the_transport_settles();
-    test_pattern_events_edit_refuses_a_pending_publication();
-    test_pattern_events_edit_refuses_a_legacy_sequence_session();
-    test_pattern_events_edit_keeps_a_current_runtime_current();
-    test_pad_colour_set_while_playing_disturbs_nothing();
-    test_pad_colour_set_keeps_a_current_runtime_current();
-    test_pad_colour_set_refused_while_recording_keeps_truth();
-    test_a_bpm_change_keeps_a_current_runtime_current();
-    test_a_swing_change_keeps_a_current_runtime_current();
-    test_pattern_events_edit_reports_a_failed_swap();
-    test_pattern_events_edit_after_stop_publishes_immediately();
-    test_pattern_events_edit_stopped_supersedes_a_pending_publication();
-    test_pattern_events_edit_defers_a_swap_until_a_slot_frees();
-    test_pattern_events_edit_superseded_deferral_publishes_nothing_more();
-    test_pattern_events_edit_deferral_waits_out_a_recording();
-    test_pattern_events_edit_deferral_survives_an_audio_interruption();
-    test_a_deferred_swap_waits_out_a_replay();
-    test_a_refused_replay_restore_retries_until_a_slot_frees();
-    test_pad_delete_cancels_staged_host_import_and_releases_history();
-    test_sample_editing_binds_current_project_and_drives_fixed_controls();
-    test_sample_parity_playback_crosses_the_fixed_control_wire();
-    test_sample_preview_pitch_reaches_the_voice();
-    test_sample_import_prevents_current_project_switch_until_terminal();
-    test_sample_import_protocol_failure_aborts_staging();
-    test_sample_import_timeout_aborts_staging_and_fails_closed();
-    test_sample_commit_quota_failure_keeps_truth_and_runtime_unchanged();
-    test_sample_post_claim_deadline_preserves_saved_truth();
-    test_source_frames_are_admitted_by_prepared_pcm_quota();
-    test_audio_activation_prepares_master_fx_for_perform();
-    test_session_free_fx_gesture_reaches_the_master_bus();
-    test_trigger_queue_full_is_admission_failure();
-    test_voice_capacity_is_sequence_addressed_execution_outcome();
-    test_audio_activation_requires_ready_and_reports_explicit_ack();
-    test_audio_reactivation_waits_past_a_stale_bank_acknowledgement();
-    test_live_bank_publication_waits_for_the_exact_acknowledgement();
-    test_live_bank_publication_ack_timeout_fails_closed();
-    test_live_sample_mutations_wait_for_the_exact_bank_acknowledgement();
-    test_running_sample_mutation_post_commit_deadline_fails_closed();
-    test_running_sample_mutation_preparation_deadline_fails_closed();
-    test_audio_activation_rolls_back_begin_and_ack_failures();
-    test_audio_suspend_requires_and_honors_quiescence_coordinator();
-    test_audio_activation_rechecks_deadline_after_generation_ack();
-    test_retained_audio_activation_keeps_default_one_second_budget();
-    test_audio_activation_ack_wait_uses_original_request_budget();
-    test_bridge_live_operations_keep_original_one_second_queue_budget();
-    test_audio_activation_rollback_rechecks_the_original_deadline();
-    test_suspend_and_close_pass_only_the_original_remaining_budget();
-    test_exact_non_fifo_aggregate_accounting_and_prior_bank_retention();
-    test_host_close_releases_current_and_retired_runtime_banks();
-    test_oversized_project_switch_is_inspectable_but_not_runnable();
-    test_soundset_operations_route_at_the_workspace_and_the_project();
-    test_host_supplied_catalog_verifies_what_it_serves();
-    test_host_supplied_catalog_resolves_only_addressed_objects();
-    test_host_catalog_operations_need_a_wired_transport();
-    test_soundset_audition_reports_whether_a_voice_started();
-    test_bridge_routes_catalog_description_without_a_project();
-    test_bridge_routes_sample_operations_without_a_project_path();
-    test_bridge_defers_parse_dispatch_and_copies_fixed_slots();
-    test_bridge_rejects_duplicates_until_response_consumption();
-    test_bridge_response_backpressure_fails_before_mutation();
-    test_bridge_reserves_response_capacity_under_realtime_notification_pressure();
-    test_bridge_exception_reuses_the_reserved_response_slot();
-    test_bridge_release_proxy_failure_is_a_terminal_transport_signal();
-    test_bridge_emits_only_real_snapshot_notifications_after_response();
-    test_bridge_emits_sample_publication_notifications_after_response();
-    test_bridge_assignment_response_precedes_real_publication_notification();
-    test_bridge_assignment_replay_notifies_current_revision();
-    test_bridge_assignment_preparation_rejection_follows_committed_response();
-    test_bridge_refused_assignment_emits_no_snapshot_notification();
-    test_bridge_expired_preclaim_assignment_changes_no_truth();
-    test_bridge_assignment_claim_preserves_known_commit_past_deadline();
-    test_bridge_emits_commit_quota_rejection_without_snapshot_notification();
-    test_bridge_rejects_an_expired_control_request_without_late_success();
-    test_bridge_cancelled_before_dispatch_skips_facade_work();
-    test_bridge_defers_a_request_whose_thunk_runs_during_a_dispatch();
-    test_bridge_defers_the_seal_when_a_failure_lands_during_a_dispatch();
-    test_bridge_parks_foreign_control_tasks_during_a_dispatch();
-    test_bridge_parks_requests_during_the_realtime_service();
-    test_bridge_parks_the_realtime_service_during_a_dispatch();
-    test_bridge_benign_query_cancel_does_not_fail_the_runtime();
-    test_bridge_rechecks_deadline_before_success_publication();
-    test_bridge_uses_the_caller_deadline_as_the_authoritative_upper_bound();
-    test_bridge_preserves_a_pre_deadline_publication_claim_to_settlement();
-    test_bridge_passes_the_absolute_caller_deadline_into_audio_activation();
-    test_failed_activation_keeps_queued_rpc_and_retirement_service_alive();
-    test_bridge_rechecks_deadline_before_error_publication();
-    test_internal_audio_activation_timeout_is_terminal_after_response();
-    test_bridge_preserves_error_responses_for_an_externally_failed_runtime();
-    test_pattern_transport_requires_opt_in_and_preserves_legacy();
-    test_pattern_transport_records_live_input_and_rejects_legacy_writes();
-    test_pattern_transport_suspend_barrier_settles_recording();
-    test_pattern_transport_unknown_closure_blocks_clean_suspend();
-    test_transport_reload_rebinds_engagement_without_bricking();
-    test_transport_record_after_applied_switch_retargets();
-    test_transport_current_pattern_withdraws_both_exact_authorities();
-    test_transport_current_pattern_cancel_race_requeues_after_predecessor_applies();
-    test_transport_predecessor_press_after_successor_claim_queues_behind_successor();
-    test_transport_latest_successor_prepublication_handoff_retains_stop_authorities();
-    test_transport_switch_snap_lands_at_its_exact_frame();
-    test_transport_switch_replacement_can_change_snap();
-    test_transport_switch_each_snap_can_be_withdrawn();
-    test_transport_stop_cancels_each_snap_and_both_claimed_authorities();
-    test_transport_claimed_successor_lands_without_host_cadence();
-    test_transport_claimed_predecessor_is_selection_before_successor_applies();
-    test_transport_switch_rejects_invalid_snap();
-    test_transport_latest_unclaimed_successor_uses_predecessor_snap_clock();
-    test_transport_pressing_claimed_predecessor_withdraws_only_successor();
-    test_transport_switch_applies_at_the_reported_boundary();
-    test_transport_switch_replaces_an_unclaimed_request();
-    test_transport_switch_after_the_claim_defers_to_the_following_bar();
-    test_transport_stop_before_the_boundary_cancels_the_switch();
-    test_transport_stop_cancels_an_audio_claimed_switch();
-    test_transport_stop_cancels_a_switch_queued_after_record_off();
-    test_transport_record_after_an_applied_switch_records_the_new_pattern();
-    test_transport_record_after_cancellation_opens_from_the_production_receipt();
-    test_transport_switch_keeps_recording_and_refuses_while_stopped();
-    test_transport_stop_spends_a_deferred_switch_without_publishing();
-    test_transport_switch_refuses_a_foreign_pending_publication();
-    test_sequence_settings_bpm_refuses_a_pending_transport_switch();
-    test_pattern_events_edit_refuses_a_pending_transport_switch();
-    test_transport_record_refuses_a_pending_transport_switch();
-    test_performance_replay_begin_refuses_a_pending_transport_switch();
-    test_transport_recording_rejects_sample_commit_and_keeps_journal();
-    test_pattern_transport_owner_loss_lists_recovery_on_reopen();
+    if (argc == 2 && std::string_view(argv[1]) == "--list-shards") {
+      std::size_t total = 0;
+      for (const auto& shard : kShards) {
+        std::cout << shard.name << ' ' << shard.scenarios << '\n';
+        total += shard.scenarios;
+      }
+      std::cout << "all " << total << '\n';
+      return 0;
+    }
+    const std::string_view prefix{"--shard="};
+    const std::string_view selected = argc == 2 ? std::string_view(argv[1]) : std::string_view{};
+    if (argc > 2 || (argc == 2 && !selected.starts_with(prefix))) {
+      std::cerr << "usage: lmdj_web_control_runtime_tests [--list-shards|--shard=<name>]\n";
+      return 2;
+    }
+    bool matched = false;
+    for (const auto& shard : kShards) {
+      if (argc == 1 || selected.substr(prefix.size()) == shard.name) {
+        shard.run();
+        matched = true;
+      }
+    }
+    if (!matched) {
+      std::cerr << "unknown web control runtime shard\n";
+      return 2;
+    }
   } catch (const std::exception& error) {
     std::cerr << error.what() << '\n';
     return 1;

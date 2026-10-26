@@ -51,6 +51,16 @@ EXPECTED = {
             "restart-nonzero-phase"
         ),
     },
+    # The whole Control runtime suite outgrew one 120 s host registration.
+    "lmdj_web_control_runtime_tests": {
+        "host.web_control_runtime": "recording-owners",
+        "host.web_control_runtime.assignment": "assignment",
+        "host.web_control_runtime.project_sequence": "project-sequence",
+        "host.web_control_runtime.pattern_edit": "pattern-edit",
+        "host.web_control_runtime.sample_audio": "sample-audio",
+        "host.web_control_runtime.bridge": "bridge",
+        "host.web_control_runtime.transport": "transport",
+    },
 }
 
 # Registrations of a sharded binary that deliberately run more than one shard.
