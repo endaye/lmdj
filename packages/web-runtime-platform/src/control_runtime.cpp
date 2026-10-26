@@ -2101,12 +2101,17 @@ struct ControlRuntime::Impl {
 #if defined(LMDJ_WEB_RUNTIME_TESTING) && LMDJ_WEB_RUNTIME_TESTING
     auto publish = std::move(gateway.publish);
     gateway.publish =
-        [publication_failure, publish = std::move(publish)](
+        [this, publication_failure, publish = std::move(publish)](
             std::shared_ptr<const cooker::RuntimeSnapshot> snapshot,
             std::optional<std::uint64_t> activation_frame,
             std::optional<audio::PatternReplacementAuthority>
                 replacement_authority) {
           if (publication_failure->exchange(false)) {
+            // One arm injects one failure. Since #2455 the wrapped publish
+            // runs the Control route, which checks its own flag set by the
+            // same arm; left armed, it would also fail the next Performance
+            // publication, such as a replay.
+            fail_next_pattern_publication = false;
             return foundation::Result<audio::PatternPublication>::failure(
                 Error{
                     ErrorCode::invalid_argument,
