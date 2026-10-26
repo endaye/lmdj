@@ -559,6 +559,13 @@ CI `creator-web` job 上限自 2026-10-15 起为 55 分钟（owner 预算决定�
 完整 Proof 已约 44 分钟（2026-10-12 最后一次通过为 34.0 分钟；Vitest 1305 → 1688，
 Chromium 旅程 94 → 133），而这些浏览器旅程受 CPU 约束，与独立组重叠执行既不省时又引入超时失败。
 该上限是带余量的 hang 检测，不是性能目标。
+2026-10-26 起完整 Proof 在 netcup 上约 60 分钟、超过 55 分钟，owner 决定拆成两个 job
+（[#2286](https://github.com/endaye/lmdj/issues/2286)），各自保留 55 分钟上限：
+`creator-web` 做一次 clean build 后运行独立的 Chromium worker 池；`creator-web-serial`
+负责两次 clean build 的字节一致性、单元测试、Catalog/Sample/WebKit/Capture 等串行组和
+deployment journey。两者属于同一个 `creator` lane、同一 Web 主机容量队列，因此先后执行、
+不重叠；batch verdict 需要两个 job 都通过。`LMDJ_CREATOR_WEB_PROOF_PART=pool|serial`
+选择其中一半，缺省 `all` 仍是本地完整 Proof。
 CI `core-asan` job 上限同样自 2026-10-15 起由 35 分钟提高到 55 分钟（owner 预算决定）：
 ASan `full` 通过 262/262 用时 1145.7 秒，其后串行 `stress` 层还需约 13 分钟
 （`facade.candidate_store_stress` 580.8 秒、`facade.pattern_count_in_stress` 201.8 秒），
