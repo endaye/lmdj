@@ -516,7 +516,7 @@ foundation::Result<void> PatternAdmissionOwner::retain_overlay_publication(
 }
 
 foundation::Result<void> PatternAdmissionOwner::reconcile_switch(
-    project_io::ProjectStore& store) {
+    project_io::ProjectStore& store, const domain::ProjectState* committed) {
   if (!identity_) return owner_error("admission_identity_missing");
   const auto journal = journals_.read_active(bundle_);
   if (!journal.has_value()) {
@@ -528,18 +528,28 @@ foundation::Result<void> PatternAdmissionOwner::reconcile_switch(
   }
   const auto pending = pending_applied_switch(*journal.value().admission);
   if (!pending) return foundation::Result<void>::success();
-  const auto project = store.load(bundle_);
-  if (!project.has_value()) {
-    return foundation::Result<void>::failure(project.error());
+  // While the Journal is active, Truth advances only through this owner's
+  // flushes or a settings rebase, which moves the Journal's expected
+  // revision with it. Held Truth at that revision is what a load would read.
+  std::optional<foundation::Result<domain::ProjectState>> loaded;
+  const domain::ProjectState* project = committed;
+  if (project == nullptr ||
+      project->id != journal.value().admission->preparation.project_id ||
+      project->revision != journal.value().expected_revision) {
+    loaded.emplace(store.load(bundle_));
+    if (!loaded->has_value()) {
+      return foundation::Result<void>::failure(loaded->error());
+    }
+    project = &loaded->value();
   }
-  if (project.value().id != journal.value().admission->preparation.project_id ||
-      project.value().revision != journal.value().expected_revision) {
+  if (project->id != journal.value().admission->preparation.project_id ||
+      project->revision != journal.value().expected_revision) {
     // A successful settings rebase advances this Journal too. An interrupted
     // rebase is unresolved authority, not permission to bind a newer Project.
     return owner_error("segment_project_authority_changed");
   }
-  const auto found = project.value().patterns.find(pending->pattern_id);
-  if (found == project.value().patterns.end()) {
+  const auto found = project->patterns.find(pending->pattern_id);
+  if (found == project->patterns.end()) {
     return owner_error("segment_authority_missing");
   }
   return journals_.switch_pattern(
@@ -613,9 +623,10 @@ foundation::Result<void> PatternAdmissionOwner::continue_segment(
   if (!result.has_value()) return result;
   // Exact retain_switch also syncs a readable partial switch record before
   // reconcile_switch may observe that it has already advanced the segment.
-  result = drain_source_prefix(store, transfer_id, flush_id);
+  auto committed = std::make_unique<domain::ProjectState>(truth.value());
+  result = drain_source_prefix(store, transfer_id, flush_id, &committed);
   if (!result.has_value()) return result;
-  result = reconcile_switch(store);
+  result = reconcile_switch(store, committed.get());
   if (!result.has_value()) return result;
   journal = journals_.read_active(bundle_);
   if (!journal.has_value()) return foundation::Result<void>::failure(journal.error());
@@ -646,7 +657,7 @@ foundation::Result<void> PatternAdmissionOwner::continue_segment(
 
 foundation::Result<void> PatternAdmissionOwner::drain_source_prefix(
     project_io::ProjectStore& store, foundation::CommandId transfer_id,
-    foundation::CommandId flush_id) {
+    foundation::CommandId flush_id, std::unique_ptr<domain::ProjectState>* committed) {
   if (!identity_) return owner_error("admission_identity_missing");
   auto journal = journals_.read_active(bundle_);
   if (!journal.has_value()) {
@@ -665,6 +676,8 @@ foundation::Result<void> PatternAdmissionOwner::drain_source_prefix(
     if (!executed.has_value()) {
       return foundation::Result<void>::failure(executed.error());
     }
+    if (committed)
+      *committed = std::make_unique<domain::ProjectState>(executed.value().outcome.state);
   }
   journal = journals_.read_active(bundle_);
   if (!journal.has_value()) {
@@ -711,6 +724,8 @@ foundation::Result<void> PatternAdmissionOwner::drain_source_prefix(
   if (!executed.has_value()) {
     return foundation::Result<void>::failure(executed.error());
   }
+  if (committed)
+    *committed = std::make_unique<domain::ProjectState>(executed.value().outcome.state);
   return foundation::Result<void>::success();
 }
 
