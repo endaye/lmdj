@@ -7,6 +7,7 @@ import json
 import os
 from pathlib import Path
 import re
+import shutil
 import subprocess
 import tempfile
 import unittest
@@ -122,6 +123,26 @@ HOSTED_CONTROL_PLANE_JOBS = (
 
 
 class CiRunnerFallbackTest(unittest.TestCase):
+    # One stub `curl` for every selector run. macOS scans each newly written
+    # executable on first exec (~0.35 s), so a stub per call alone pushed this
+    # suite past its 10 s budget on the M1 gates host (#2422). The stub serves
+    # both selectors: `API_OK=0` makes it fail like an unreachable API.
+    stub_directory: str
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.stub_directory = tempfile.mkdtemp(prefix="lmdj-runner-selector-stub-")
+        stub = Path(cls.stub_directory) / "curl"
+        stub.write_text(
+            '#!/usr/bin/env bash\n[ "${API_OK:-1}" = 1 ] || exit 22\nprintf %s "$RUNNER_REPLY"\n',
+            encoding="utf-8",
+        )
+        stub.chmod(0o755)
+
+    @classmethod
+    def tearDownClass(cls) -> None:
+        shutil.rmtree(cls.stub_directory, ignore_errors=True)
+
     def workflow_job(self, job_name: str) -> str:
         source = WORKFLOW.read_text(encoding="utf-8")
         match = re.search(
@@ -434,15 +455,12 @@ class CiRunnerFallbackTest(unittest.TestCase):
         )
         names = dict(re.findall(r"(?m)^          ((?:PRIMARY|OVERFLOW)_RUNNER_NAME): (\S+)$", selector))
         with tempfile.TemporaryDirectory() as temporary:
-            stub = Path(temporary) / "curl"
-            stub.write_text('#!/usr/bin/env bash\nprintf %s "$RUNNER_REPLY"\n', encoding="utf-8")
-            stub.chmod(0o755)
             output = Path(temporary) / "output"
             output.write_text("", encoding="utf-8")
             environment = os.environ.copy()
             environment.update(names)
             environment.update(
-                PATH=f"{temporary}{os.pathsep}{environment['PATH']}",
+                PATH=f"{self.stub_directory}{os.pathsep}{environment['PATH']}",
                 REPOSITORY="endaye/lmdj",
                 BATCH_REQUEST_KIND=kind,
                 RUNNER_READ_TOKEN="token",
@@ -541,17 +559,11 @@ class CiRunnerFallbackTest(unittest.TestCase):
         self.assertIsNotNone(name)
         assert name is not None
         with tempfile.TemporaryDirectory() as temporary:
-            stub = Path(temporary) / "curl"
-            stub.write_text(
-                '#!/usr/bin/env bash\n[ "$API_OK" = 1 ] || exit 22\nprintf %s "$RUNNER_REPLY"\n',
-                encoding="utf-8",
-            )
-            stub.chmod(0o755)
             output = Path(temporary) / "output"
             output.write_text("", encoding="utf-8")
             environment = os.environ.copy()
             environment.update(
-                PATH=f"{temporary}{os.pathsep}{environment['PATH']}",
+                PATH=f"{self.stub_directory}{os.pathsep}{environment['PATH']}",
                 REPOSITORY="endaye/lmdj",
                 BATCH_REQUEST_KIND=kind,
                 WEB_OVERFLOW_RUNNER_NAME=name.group(1),
