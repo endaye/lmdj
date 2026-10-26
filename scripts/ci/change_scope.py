@@ -57,7 +57,7 @@ _CANONICAL_LANE_JOBS = {
     # Routed by the static `ci-web-heavy` netcup role, so no runner selector
     # is a support job of this lane.
     "web_runtime_host": ("web-runtime-host",),
-    "creator": ("creator-web",),
+    "creator": ("creator-web", "creator-web-serial"),
     "web_runtime_lab": ("web-runtime-lab",),
     "deploy_contract": ("deploy-contract",),
     "package": ("package",),
@@ -69,7 +69,7 @@ _CANONICAL_LANE_JOBS = {
 _CANONICAL_SELF_HOSTED_JOBS = (
     "docs-static", "portal", "ci-contract", "core-ubuntu", "core-asan",
     "core-coverage", "web-toolchain-conformance", "web-runtime-host",
-    "creator-web", "web-runtime-lab", "deploy-contract",
+    "creator-web", "creator-web-serial", "web-runtime-lab", "deploy-contract",
     "package",
 )
 # The exact reason recorded on a `push` whose event-supplied base range cannot

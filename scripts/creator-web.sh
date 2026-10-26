@@ -23,6 +23,12 @@ required_capture_spec="$repo_root/tests/platform/web/creator/creator_web_capture
 proof_root=""
 proof_server_pid=""
 proof_server_ready_root=""
+# The batch runs the Creator Proof as two jobs that each keep the lane's
+# hang detector (Owner decision 2026-10-26, #2286): `pool` builds once and
+# runs the independent Chromium journeys; `serial` proves reproducibility,
+# runs the unit tests and the serial browser groups and the deployment
+# journey. `all`, the default, is the complete Proof in one run.
+proof_part="${LMDJ_CREATOR_WEB_PROOF_PART:-all}"
 
 usage() {
   cat >&2 <<'EOF'
@@ -471,7 +477,7 @@ PY
     echo "Creator Web error: proof server did not become ready" >&2
     return 2
   }
-  if [[ "$mode" != smoke ]]; then
+  if [[ "$mode" != smoke && "${proof_part:-all}" != serial ]]; then
   LMDJ_WEB_RESULTS_SLOT=chromium \
     LMDJ_CREATOR_WEB_EXTERNAL_SERVER=1 \
     LMDJ_CREATOR_WEB_FULL_CHROMIUM=1 \
@@ -479,6 +485,12 @@ PY
     LMDJ_CREATOR_WEB_BUNDLE="$bundle" \
     npm --prefix "$web_test_root" test -- \
       --project=chromium --workers=2 "${chromium_specs[@]}" || status=$?
+  fi
+  if [[ "${proof_part:-all}" == pool ]]; then
+    cleanup_server
+    return "$status"
+  fi
+  if [[ "$mode" != smoke ]]; then
   # These specs replace the owned server's one Catalog upstream file. Keep
   # them serial and outside the independent browser-context worker pool.
   # Each invocation owns a separate result directory, including on failure.
@@ -584,6 +596,16 @@ PY
 
 proof_creator() {
   local mode="${1:-proof}"
+  case "${proof_part:-all}" in
+    all|pool|serial) ;;
+    *)
+      echo "Creator Web error: why: LMDJ_CREATOR_WEB_PROOF_PART is '${proof_part:-all}'; remedy: use all, pool or serial" >&2
+      return 64 ;;
+  esac
+  if [[ "$mode" == reproducible && "${proof_part:-all}" != all ]]; then
+    echo "Creator Web error: why: the reproducible leg is not split; remedy: unset LMDJ_CREATOR_WEB_PROOF_PART" >&2
+    return 64
+  fi
   activate_toolchain
   if [[ "$mode" == reproducible ]]; then skip_playwright_requirement; fi
   require_dependencies
@@ -611,7 +633,8 @@ proof_creator() {
   configure_creator
   build_creator
   package_creator
-  if [[ "$mode" == proof || "$mode" == reproducible ]]; then
+  # Reproducibility is proven once, by the part that is not the pool.
+  if [[ ( "$mode" == proof && "${proof_part:-all}" != pool ) || "$mode" == reproducible ]]; then
     cmake -E copy_directory "$dist_root" "$proof_root/first-dist"
     clean_creator
     configure_creator
@@ -635,21 +658,26 @@ proof_creator() {
     echo "Creator Web Reproducible: PASS (two clean distributions byte-identical and packaged; unit tests and browser journeys not run)"
     return
   fi
+  local part_note=""
+  [[ "${proof_part:-all}" == all ]] || part_note=" (${proof_part:-all} part only)"
   if [[ "$mode" == smoke ]]; then
-    test_creator_ui
-    run_browser_gate "" "" "" smoke
-    echo "Creator Web Smoke: PASS (authoring/playback/reload; complete proof not verified)"
+    # Smoke has no independent Chromium journeys; the serial part owns it.
+    if [[ "${proof_part:-all}" != pool ]]; then
+      test_creator_ui
+      run_browser_gate "" "" "" smoke
+    fi
+    echo "Creator Web Smoke: PASS (authoring/playback/reload; complete proof not verified)$part_note"
     return
   fi
-  test_creator
+  [[ "${proof_part:-all}" == pool ]] || test_creator
   run_browser_gate \
     "$proof_root/creator-proof-bundle.lmdj" \
     "$proof_root/creator-sample-proof-bundle.lmdj" \
     "$proof_root/creator-candidate-proof-bundle.lmdj"
   if [[ "$mode" == proof ]]; then
-    echo "Creator Web Proof: PASS"
+    echo "Creator Web Proof: PASS$part_note"
   else
-    echo "Creator Web Quick: PASS (incremental build; reproducibility not verified)"
+    echo "Creator Web Quick: PASS (incremental build; reproducibility not verified)$part_note"
   fi
 }
 

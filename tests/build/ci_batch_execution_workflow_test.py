@@ -506,7 +506,8 @@ class WorkflowScripts(unittest.TestCase):
             with self.subTest(upstream=upstream):
                 needs = {
                     "change-scope": {"result": upstream, "outputs": {}},
-                    "creator-web": {"result": "skipped", "outputs": {}}}
+                    "creator-web": {"result": "skipped", "outputs": {}},
+                    "creator-web-serial": {"result": "skipped", "outputs": {}}}
                 verdict = batch_execution.from_needs(
                     POLICY, execution["identity"], execution["selection"], needs,
                     aliases=ALIASES,

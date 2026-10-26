@@ -51,7 +51,7 @@ LANE_JOBS = {
     # Cut over to the static `ci-web-heavy` netcup role, so the lane resolves
     # no runner through a selector and must not require a selector result.
     "web_runtime_host": ["web-runtime-host"],
-    "creator": ["creator-web"],
+    "creator": ["creator-web", "creator-web-serial"],
     "web_runtime_lab": ["web-runtime-lab"],
     "deploy_contract": ["deploy-contract"],
     "package": ["package"],
@@ -71,6 +71,7 @@ SELF_HOSTED_JOBS = [
     "web-toolchain-conformance",
     "web-runtime-host",
     "creator-web",
+    "creator-web-serial",
     "web-runtime-lab",
     "deploy-contract",
     "package",
@@ -1667,7 +1668,8 @@ class ChangeScopeTest(unittest.TestCase):
         self.assertEqual(manifest["mode"], "requested")
         self.assertEqual(self.true_lanes(manifest), {"web_toolchain", "creator"})
         self.assertEqual(
-            manifest["required_jobs"], ["creator-web", "web-toolchain-conformance"]
+            manifest["required_jobs"],
+            ["creator-web", "creator-web-serial", "web-toolchain-conformance"],
         )
         self.assertTrue(
             any("requested lanes" in reason for reason in manifest["reasons"]),

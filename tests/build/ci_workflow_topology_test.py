@@ -33,6 +33,7 @@ FORMAL_LANE_JOBS = (
     "web-toolchain-conformance",
     "web-runtime-host",
     "creator-web",
+    "creator-web-serial",
     "web-runtime-lab",
     "deploy-contract",
     "package",
@@ -57,6 +58,7 @@ SELF_HOSTED_JOBS = (
     "web-toolchain-conformance",
     "web-runtime-host",
     "creator-web",
+    "creator-web-serial",
     "web-runtime-lab",
     "deploy-contract",
     "package",
@@ -93,6 +95,8 @@ WEB_SELECTED_ROUTE = (
 WEB_HEAVY_JOBS = {
     "web-toolchain-conformance": "web_toolchain",
     "creator-web": "creator",
+    # Owner decision 2026-10-26 (#2286): the Creator Proof runs as two jobs.
+    "creator-web-serial": "creator",
     "web-runtime-host": "web_runtime_host",
     "web-runtime-lab": "web_runtime_lab",
 }
@@ -189,6 +193,7 @@ FORMAL_RESULT_LANE_GUARDS = {
     "web-toolchain-conformance": {"web_toolchain"},
     "web-runtime-host": {"web_runtime_host"},
     "creator-web": {"creator"},
+    "creator-web-serial": {"creator"},
     "web-runtime-lab": {"web_runtime_lab"},
     "deploy-contract": {"deploy_contract"},
     "package": {"portal", "core_ubuntu", "package"},
@@ -866,7 +871,7 @@ class CiWorkflowTopologyTest(unittest.TestCase):
         # A failed Web selector must explain the Web lanes' skip (#2279), or
         # the verdict reports a common-cause routing failure as four lane failures.
         self.assertIn(
-            "for web_job in ('web-toolchain-conformance', 'web-runtime-host', 'creator-web', 'web-runtime-lab'):\n"
+            "for web_job in ('web-toolchain-conformance', 'web-runtime-host', 'creator-web', 'creator-web-serial', 'web-runtime-lab'):\n"
             "              dependencies[web_job] = ['change-scope', 'select-web-runner']",
             job,
         )
@@ -1021,6 +1026,9 @@ class CiWorkflowTopologyTest(unittest.TestCase):
             # Owner budget decision (#2286): ~44 min of Proof work since
             # 2026-10-13; overlapping its CPU-bound browser groups failed.
             "creator-web": 55,
+            # Owner decision 2026-10-26 (#2286): the second half of the Proof
+            # keeps the same hang detector.
+            "creator-web-serial": 55,
             # Holds lmdj-native-heavy-linux; at most 18 s over 214 runs.
             "web-runtime-lab": 10,
             # Owner budget decision (#2283, 2026-10-16): M1 native ASan
