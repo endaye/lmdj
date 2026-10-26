@@ -196,6 +196,10 @@ struct ImportArtifactExecution {
   domain::AppliedCommand outcome;
 };
 
+// Committed history a store has already replayed; see
+// ProjectStore::enable_replay_prefix_cache.
+struct ReplayPrefixCache;
+
 class ProjectStore {
  public:
   ProjectStore();
@@ -212,6 +216,17 @@ class ProjectStore {
       const std::string& session_id, bool redo);
   void close_authoring_history();
   void seal_authoring_history_group(const std::filesystem::path& bundle);
+
+  // Lets this store's later loads start from the history it already
+  // replayed instead of checkpoint zero, replaying only transactions the
+  // manifest appended since (Owner decision 2026-10-26, #2504). Committed
+  // transaction files are immutable, so a cached prefix is trusted rather
+  // than re-read; any other manifest change, and every failed load, falls
+  // back to a full replay. The head checkpoint is still compared with the
+  // replayed state, and Asset bytes are still verified. Enable it only on
+  // a store owned by an active recording session (its IO owner); every
+  // other store, and every new process, keeps replaying the full history.
+  void enable_replay_prefix_cache();
 
 
   struct ImportArtifactRequest {
@@ -480,6 +495,7 @@ class ProjectStore {
   std::shared_ptr<ProjectStoragePlatform> platform_;
   std::shared_ptr<AuthoringHistory> history_;
   std::shared_ptr<PerformanceOwnerLocks> performance_owner_locks_;
+  std::shared_ptr<ReplayPrefixCache> replay_cache_;
 };
 
 }  // namespace lmdj::project_io

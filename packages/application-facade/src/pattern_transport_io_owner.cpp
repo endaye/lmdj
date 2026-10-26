@@ -93,7 +93,11 @@ PatternTransportIoOwner::PatternTransportIoOwner(PatternTransportControllerConfi
     std::shared_ptr<PatternTransportOpeningPublication> opening)
     : config_(std::move(config)), journals_(platform),
       store_(std::move(platform), std::move(history)),
-      owner_(journals_, config_.bundle, config_.session), opening_(std::move(opening)) {}
+      owner_(journals_, config_.bundle, config_.session), opening_(std::move(opening)) {
+  // This store serves one recording session's Journal-bound work, so its
+  // loads may start from history it already replayed (#2504).
+  store_.enable_replay_prefix_cache();
+}
 
 PatternTransportWorkCompletion PatternTransportIoOwner::execute(
     const PatternTransportWorkRequest& request) {
