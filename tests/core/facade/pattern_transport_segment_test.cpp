@@ -277,13 +277,14 @@ void nonzero_segment_phase_is_immutable_and_survives_reopen() {
   f.reopened_truth({{{0, 1}, 720, 240, 100}, {{0, 1}, 960, 240, 90}}, phase_target_notes, 3);
 }
 
-// Each full Project load replays the whole committed history, and on OPFS a
-// segment step's reloads held late releases and post-switch presses past
-// their one-second budget (#2422). A segment step checks Truth once and then
-// reuses the state it holds: its own pre-check load, or the verified state
-// its flush commit returned. With H prior transactions and one source flush,
-// the pre-check and the commit's own load each replay H, and the commit's
-// post-commit visibility check replays H + 1; reconciliation adds none.
+// A full Project load replays the committed history, and on OPFS a segment
+// step's replays held late releases and post-switch presses past their
+// one-second budget (#2422). The step reuses the Truth it holds (#2503), and
+// the recording session's store replays only what the manifest appended
+// since its last load (#2504). With H prior transactions, the IO owner's
+// earlier work already replayed them, so a switch that flushes the source
+// replays only that flush's one transaction, and an empty switch replays
+// none; without the cache it was 3H + 1 and H.
 void segment_reuses_the_truth_it_already_holds() {
   constexpr std::uint64_t history = 6;
   Fixture f{std::filesystem::temp_directory_path() / ("lmdj-segment-reuse-" +
@@ -291,15 +292,15 @@ void segment_reuses_the_truth_it_already_holds() {
   f.source();
   const auto flushed = f.platform->transaction_reads;
   f.run(f.segment(100, f.b, 22, 40000));
-  LMDJ_CHECK(f.platform->transaction_reads - flushed == 3 * history + 1);
+  LMDJ_CHECK(f.platform->transaction_reads - flushed == 1);
   LMDJ_CHECK(f.truth().patterns.at(f.a).events == source_notes);
   LMDJ_CHECK(f.active().pattern_id == f.b && f.active().admission->segment_generation == 22);
-  // Nothing to flush: the pre-check is the only replay.
+  // Nothing to flush: nothing new to replay.
   Fixture empty{std::filesystem::temp_directory_path() / ("lmdj-segment-reuse-empty-" +
       std::to_string(std::chrono::steady_clock::now().time_since_epoch().count())), history};
   const auto idle = empty.platform->transaction_reads;
   empty.run(empty.segment(100, empty.b, 22, 40000));
-  LMDJ_CHECK(empty.platform->transaction_reads - idle == history);
+  LMDJ_CHECK(empty.platform->transaction_reads - idle == 0);
   LMDJ_CHECK(empty.active().pattern_id == empty.b);
 }
 

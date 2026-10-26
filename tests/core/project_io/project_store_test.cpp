@@ -522,6 +522,101 @@ void test_common_transactions_use_semantic_storage_obligations() {
   LMDJ_CHECK(platform->operation_log == expected_operations);
 }
 
+std::size_t transaction_reads(const MemoryStoragePlatform& platform) {
+  return static_cast<std::size_t>(std::count_if(
+      platform.read_paths.begin(), platform.read_paths.end(),
+      [](const auto& path) { return path.parent_path().filename() == "transactions"; }));
+}
+
+// #2504: a store with the replay prefix cache replays only the transactions
+// its manifest appended since its last verified load, and a store without it
+// keeps replaying the whole history. Both read the same Truth.
+void test_replay_prefix_cache_replays_only_appended_transactions() {
+  const auto bundle = std::filesystem::path{"memory/replay-cache.lmdj"};
+  auto platform = std::make_shared<MemoryStoragePlatform>();
+  ProjectStore cached{platform};
+  cached.enable_replay_prefix_cache();
+  ProjectStore plain{platform};
+  LMDJ_CHECK(cached.create(bundle, new_project()).has_value());
+  for (std::uint64_t revision = 0; revision < 3; ++revision) {
+    LMDJ_CHECK(plain.execute(bundle, Command{create_pattern(
+        "replay-cache-command-" + std::to_string(revision), revision,
+        "replay-cache-pattern-" + std::to_string(revision))}).has_value());
+  }
+
+  platform->read_paths.clear();
+  const auto first = cached.load(bundle);
+  LMDJ_CHECK(first.has_value() && first.value().revision == 3);
+  LMDJ_CHECK(transaction_reads(*platform) == 3);  // nothing cached yet
+
+  platform->read_paths.clear();
+  const auto again = cached.load(bundle);
+  LMDJ_CHECK(again.has_value() && again.value() == first.value());
+  LMDJ_CHECK(transaction_reads(*platform) == 0);  // the whole prefix reused
+
+  LMDJ_CHECK(plain.execute(bundle, Command{create_pattern(
+      "replay-cache-command-3", 3, "replay-cache-pattern-3")}).has_value());
+  platform->read_paths.clear();
+  const auto appended = cached.load(bundle);
+  LMDJ_CHECK(appended.has_value() && appended.value().revision == 4);
+  LMDJ_CHECK(transaction_reads(*platform) == 1);  // only the appended one
+
+  platform->read_paths.clear();
+  const auto reference = plain.load(bundle);
+  LMDJ_CHECK(reference.has_value() && reference.value() == appended.value());
+  LMDJ_CHECK(transaction_reads(*platform) == 4);  // no cache: full replay
+}
+
+// A manifest that no longer extends the cached list, and a different bundle,
+// both replay in full and read their own Truth.
+void test_replay_prefix_cache_falls_back_to_full_replay() {
+  const auto bundle = std::filesystem::path{"memory/replay-cache-rewrite.lmdj"};
+  const auto other = std::filesystem::path{"memory/replay-cache-other.lmdj"};
+  auto platform = std::make_shared<MemoryStoragePlatform>();
+  ProjectStore cached{platform};
+  cached.enable_replay_prefix_cache();
+  ProjectStore plain{platform};
+  LMDJ_CHECK(plain.create(bundle, new_project()).has_value());
+  LMDJ_CHECK(plain.create(other, new_project()).has_value());
+  for (std::uint64_t revision = 0; revision < 2; ++revision) {
+    LMDJ_CHECK(plain.execute(bundle, Command{create_pattern(
+        "rewrite-command-" + std::to_string(revision), revision,
+        "rewrite-pattern-" + std::to_string(revision))}).has_value());
+  }
+  LMDJ_CHECK(plain.execute(other, Command{create_pattern(
+      "other-command", 0, "other-pattern")}).has_value());
+  const auto at_two = cached.load(bundle);
+  LMDJ_CHECK(at_two.has_value() && at_two.value().revision == 2);
+
+  platform->read_paths.clear();
+  const auto other_loaded = cached.load(other);
+  LMDJ_CHECK(other_loaded.has_value() && other_loaded.value().revision == 1);
+  LMDJ_CHECK(other_loaded.value().patterns.contains(PatternId{test_uuid("other-pattern")}));
+  LMDJ_CHECK(transaction_reads(*platform) == 1);  // its own full history
+
+  LMDJ_CHECK(cached.load(bundle).has_value());  // re-cache the first bundle
+  // Point the manifest back at revision 1: its list is now shorter than the
+  // cached one, so the cache cannot apply.
+  const auto manifest_bytes = platform->read_complete(bundle / "manifest.json");
+  LMDJ_CHECK(manifest_bytes.has_value());
+  auto manifest = nlohmann::json::parse(std::string(
+      reinterpret_cast<const char*>(manifest_bytes.value().data()),
+      manifest_bytes.value().size()));
+  manifest["transactions"].erase(manifest["transactions"].size() - 1);
+  manifest["head_revision"] = 1;
+  manifest["head_checkpoint"] = "history/checkpoints/1.json";
+  const auto text = manifest.dump();
+  LMDJ_CHECK(platform->replace_complete(bundle / "manifest.json",
+      std::as_bytes(std::span{text.data(), text.size()})).has_value());
+  platform->read_paths.clear();
+  const auto at_one = cached.load(bundle);
+  LMDJ_CHECK(at_one.has_value() && at_one.value().revision == 1);
+  LMDJ_CHECK(!at_one.value().patterns.contains(PatternId{test_uuid("rewrite-pattern-1")}));
+  LMDJ_CHECK(transaction_reads(*platform) == 1);  // full replay of the shorter list
+  const auto reference = plain.load(bundle);
+  LMDJ_CHECK(reference.has_value() && reference.value() == at_one.value());
+}
+
 void test_default_store_remains_copy_list_initializable() {
   ProjectStore store = {};
   (void)store;
@@ -3239,6 +3334,8 @@ int main() {
     test_v4_lineage_migration_retains_old_variant_evidence();
     test_common_transactions_use_semantic_storage_obligations();
     test_default_store_remains_copy_list_initializable();
+    test_replay_prefix_cache_replays_only_appended_transactions();
+    test_replay_prefix_cache_falls_back_to_full_replay();
     test_canonical_checkpoint_round_trip_and_bundle_shape();
     test_v1_load_migrates_in_memory_and_first_mutation_writes_v4();
     test_v2_total_migration_discards_takes_and_is_byte_stable();

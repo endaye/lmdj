@@ -3348,10 +3348,59 @@ read_checkpoint(
 // The loaded Project lives on the heap: callers keep it across several
 // ProjectState-sized locals, and a by-value LoadedProject in every caller's
 // frame was a large share of Project I/O's Web stack (#1720).
+}  // namespace
+
+// Committed history one store already replayed (#2504). `project` holds the
+// state after replaying exactly `project->transactions` from checkpoint zero.
+struct ReplayPrefixCache {
+  std::mutex mutex;
+  std::filesystem::path bundle;
+  std::unique_ptr<LoadedProject> project;
+};
+
+namespace {
+
+// The cached prefix, when the manifest still lists it unchanged at its head.
+std::unique_ptr<LoadedProject> take_replayed_prefix(
+    ReplayPrefixCache* cache, const std::filesystem::path& bundle,
+    const nlohmann::json& listed) {
+  if (cache == nullptr) return nullptr;
+  std::lock_guard lock(cache->mutex);
+  if (!cache->project || cache->bundle != bundle || !listed.is_array() ||
+      cache->project->transactions.size() > listed.size()) {
+    return nullptr;
+  }
+  for (std::size_t index = 0; index < cache->project->transactions.size(); ++index) {
+    const auto& entry = listed[index];
+    if (!entry.is_string() ||
+        std::filesystem::path{entry.get<std::string>()}.generic_string() !=
+            cache->project->transactions[index]) {
+      return nullptr;
+    }
+  }
+  return std::make_unique<LoadedProject>(*cache->project);
+}
+
+void remember_replayed(ReplayPrefixCache* cache, const std::filesystem::path& bundle,
+                       const LoadedProject* project) {
+  if (cache == nullptr) return;
+  std::lock_guard lock(cache->mutex);
+  cache->bundle = bundle;
+  cache->project = project != nullptr ? std::make_unique<LoadedProject>(*project) : nullptr;
+}
+
 foundation::Result<std::unique_ptr<LoadedProject>> load_project(
     const ProjectStoragePlatform& platform,
     const std::filesystem::path& bundle,
-    bool verify_asset_bytes = true) {
+    bool verify_asset_bytes = true,
+    ReplayPrefixCache* cache = nullptr) {
+  // Any failure below leaves no reusable prefix behind.
+  struct DropOnFailure {
+    ReplayPrefixCache* cache;
+    const std::filesystem::path& bundle;
+    bool armed = true;
+    ~DropOnFailure() { if (armed) remember_replayed(cache, bundle, nullptr); }
+  } drop_on_failure{cache, bundle};
   const auto manifest_path = bundle / "manifest.json";
   auto manifest_result = read_json(platform, manifest_path);
   if (!manifest_result.has_value()) {
@@ -3380,16 +3429,22 @@ foundation::Result<std::unique_ptr<LoadedProject>> load_project(
           invalid_project("project manifest checkpoint path is invalid", manifest_path));
     }
 
-    auto initial =
-        read_checkpoint(platform, bundle / "history/checkpoints/0.json");
-    if (!initial.has_value()) {
-      return foundation::Result<std::unique_ptr<LoadedProject>>::failure(initial.error());
-    }
-    if (initial.value()->revision != 0) {
-      return foundation::Result<std::unique_ptr<LoadedProject>>::failure(
-          invalid_project(
-              "initial checkpoint revision is not zero",
-              bundle / "history/checkpoints/0.json"));
+    const auto& listed = manifest.at("transactions");
+    auto replayed_prefix = take_replayed_prefix(cache, bundle, listed);
+    std::unique_ptr<domain::ProjectState> initial_state;
+    if (!replayed_prefix) {
+      auto initial =
+          read_checkpoint(platform, bundle / "history/checkpoints/0.json");
+      if (!initial.has_value()) {
+        return foundation::Result<std::unique_ptr<LoadedProject>>::failure(initial.error());
+      }
+      if (initial.value()->revision != 0) {
+        return foundation::Result<std::unique_ptr<LoadedProject>>::failure(
+            invalid_project(
+                "initial checkpoint revision is not zero",
+                bundle / "history/checkpoints/0.json"));
+      }
+      initial_state = std::move(initial.value());
     }
     nlohmann::json checkpoint_json;
     auto checkpoint =
@@ -3404,20 +3459,23 @@ foundation::Result<std::unique_ptr<LoadedProject>> load_project(
 
     // Aggregate-initialised in place on the heap, so no LoadedProject
     // temporary ever occupies this frame.
-    auto loaded = std::unique_ptr<LoadedProject>(new LoadedProject{
-        std::move(*initial.value()),
+    auto loaded = replayed_prefix ? std::move(replayed_prefix)
+                                  : std::unique_ptr<LoadedProject>(new LoadedProject{
+        std::move(*initial_state),
         {},
         {},
         {},
         {},
         {},
     });
+    const auto already_replayed = loaded->transactions.size();
     // The head checkpoint, not the replayed command history, states a
     // Project's Contract level: a Project promoted to v4 by an earlier persist
     // still replays from a v3 checkpoint zero, and a v4-only command in that
     // history has to replay against v4 Project Truth.
     loaded->state.contract = checkpoint.value()->contract;
-    for (const auto& encoded_path : manifest.at("transactions")) {
+    for (std::size_t index = already_replayed; index < listed.size(); ++index) {
+      const auto& encoded_path = listed[index];
       const auto replayed =
           replay_transaction(platform, bundle, manifest_path, encoded_path, loaded);
       if (!replayed.has_value()) {
@@ -3440,6 +3498,9 @@ foundation::Result<std::unique_ptr<LoadedProject>> load_project(
               bundle / head_checkpoint));
     }
 
+    // Only a replay that matched its head checkpoint becomes reusable.
+    remember_replayed(cache, bundle, loaded.get());
+    drop_on_failure.armed = false;
     // Owner resolution verifies only its selected Artifact after checking
     // ownership. Every authoring load keeps the complete asset verification.
     if (!verify_asset_bytes) {
@@ -4813,6 +4874,10 @@ struct ProjectStore::PerformanceOwnerLocks {
   std::map<std::string, Entry> entries;
 };
 
+void ProjectStore::enable_replay_prefix_cache() {
+  if (!replay_cache_) replay_cache_ = std::make_shared<ReplayPrefixCache>();
+}
+
 ProjectStore::ProjectStore()
     : ProjectStore(make_default_project_storage_platform()) {}
 
@@ -4838,7 +4903,7 @@ foundation::Result<AuthoringHistoryStatus> ProjectStore::open_authoring_history(
   if (!lease.has_value()) return Result::failure(lease.error());
   auto tree = validate_managed_bundle_tree(*platform_, bundle);
   if (!tree.has_value()) return Result::failure(tree.error());
-  auto loaded = load_project(*platform_, bundle);
+  auto loaded = load_project(*platform_, bundle, true, replay_cache_.get());
   if (!loaded.has_value()) return Result::failure(loaded.error());
   auto recovered = recover_uncommitted(*platform_, history_, bundle, *loaded.value());
   if (!recovered.has_value()) return Result::failure(recovered.error());
@@ -4876,7 +4941,7 @@ foundation::Result<domain::AppliedCommand> ProjectStore::restore_authoring_histo
   }
   auto tree = validate_managed_bundle_tree(*platform_, bundle);
   if (!tree.has_value()) return Result::failure(tree.error());
-  auto loaded = load_project(*platform_, bundle);
+  auto loaded = load_project(*platform_, bundle, true, replay_cache_.get());
   if (!loaded.has_value()) return Result::failure(loaded.error());
   const auto status = history_status_locked(platform_, history_, bundle, loaded.value()->state);
   if (!status.has_value()) return Result::failure(status.error());
@@ -5170,7 +5235,7 @@ foundation::Result<domain::ProjectState> ProjectStore::load(
       return foundation::Result<domain::ProjectState>::failure(tree.error());
     }
   }
-  auto loaded = load_project(*platform_, bundle);
+  auto loaded = load_project(*platform_, bundle, true, replay_cache_.get());
   if (!loaded.has_value()) {
     return foundation::Result<domain::ProjectState>::failure(
         loaded.error());
@@ -5211,7 +5276,7 @@ foundation::Result<CommandExecution> ProjectStore::execute_with_identity(
   if (!tree.has_value()) {
     return foundation::Result<CommandExecution>::failure(tree.error());
   }
-  auto loaded = load_project(*platform_, bundle);
+  auto loaded = load_project(*platform_, bundle, true, replay_cache_.get());
   if (!loaded.has_value()) {
     return foundation::Result<CommandExecution>::failure(
         loaded.error());
@@ -5502,7 +5567,7 @@ ProjectStore::begin_performance_draft(
   }
   auto operation = std::move(lease.value());
   (void)operation;
-  auto loaded = load_project(*platform_, bundle);
+  auto loaded = load_project(*platform_, bundle, true, replay_cache_.get());
   if (!loaded.has_value()) {
     return foundation::Result<PerformanceLifecycleReceipt>::failure(
         loaded.error());
@@ -5733,7 +5798,7 @@ ProjectStore::save_performance_draft(
   }
   auto operation = std::move(lease.value());
   (void)operation;
-  auto loaded = load_project(*platform_, bundle);
+  auto loaded = load_project(*platform_, bundle, true, replay_cache_.get());
   if (!loaded.has_value()) {
     return foundation::Result<PerformanceLifecycleReceipt>::failure(
         loaded.error());
@@ -5852,7 +5917,7 @@ ProjectStore::discard_performance_draft(
   }
   auto operation = std::move(lease.value());
   (void)operation;
-  auto loaded = load_project(*platform_, bundle);
+  auto loaded = load_project(*platform_, bundle, true, replay_cache_.get());
   if (!loaded.has_value()) {
     return foundation::Result<PerformanceLifecycleReceipt>::failure(
         loaded.error());
@@ -5946,7 +6011,7 @@ ProjectStore::apply_performance_recovery(
   }
   auto operation = std::move(lease.value());
   (void)operation;
-  auto loaded = load_project(*platform_, bundle);
+  auto loaded = load_project(*platform_, bundle, true, replay_cache_.get());
   if (!loaded.has_value()) {
     return foundation::Result<PerformanceLifecycleReceipt>::failure(
         loaded.error());
@@ -6152,7 +6217,7 @@ ProjectStore::discard_performance_recovery(
   }
   auto operation = std::move(lease.value());
   (void)operation;
-  auto loaded = load_project(*platform_, bundle);
+  auto loaded = load_project(*platform_, bundle, true, replay_cache_.get());
   if (!loaded.has_value()) {
     return foundation::Result<PerformanceStopReceipt>::failure(loaded.error());
   }
@@ -6272,7 +6337,7 @@ ProjectStore::bind_performance_recording(
   }
   auto operation = std::move(lease.value());
   (void)operation;
-  auto loaded = load_project(*platform_, bundle);
+  auto loaded = load_project(*platform_, bundle, true, replay_cache_.get());
   if (!loaded.has_value()) {
     return foundation::Result<PerformanceLifecycleReceipt>::failure(
         loaded.error());
@@ -6371,7 +6436,7 @@ ProjectStore::execute_performance_rebase(
   }
   auto operation = std::move(lease.value());
   (void)operation;
-  auto loaded = load_project(*platform_, bundle);
+  auto loaded = load_project(*platform_, bundle, true, replay_cache_.get());
   if (!loaded.has_value()) {
     return foundation::Result<CommandExecution>::failure(loaded.error());
   }
@@ -6501,7 +6566,7 @@ ProjectStore::replay_sequence_flush(
   }
   auto operation = std::move(lease.value());
   (void)operation;
-  auto loaded = load_project(*platform_, bundle);
+  auto loaded = load_project(*platform_, bundle, true, replay_cache_.get());
   if (!loaded.has_value()) {
     return foundation::Result<
         std::optional<SequenceFlushExecution>>::failure(loaded.error());
@@ -6579,7 +6644,7 @@ ProjectStore::replay_sequence_flush(
     }
     auto operation = std::move(lease.value());
     (void)operation;
-    auto loaded = load_project(*platform_, bundle);
+    auto loaded = load_project(*platform_, bundle, true, replay_cache_.get());
     if (!loaded.has_value()) {
       return foundation::Result<
           std::optional<SequenceFlushExecution>>::failure(loaded.error());
@@ -6657,7 +6722,7 @@ ProjectStore::execute_sequence_flush(
     }
     auto operation = std::move(lease.value());
     (void)operation;
-    auto loaded = load_project(*platform_, bundle);
+    auto loaded = load_project(*platform_, bundle, true, replay_cache_.get());
     if (!loaded.has_value()) {
       return foundation::Result<domain::AppliedCommand>::failure(
           loaded.error());
@@ -6786,7 +6851,7 @@ ProjectStore::replay_performance_flush(
   }
   auto operation = std::move(lease.value());
   (void)operation;
-  auto loaded = load_project(*platform_, bundle);
+  auto loaded = load_project(*platform_, bundle, true, replay_cache_.get());
   if (!loaded.has_value()) {
     return foundation::Result<
         std::optional<PerformanceFlushExecution>>::failure(loaded.error());
@@ -6894,7 +6959,7 @@ ProjectStore::replay_performance_flush(
     }
     auto operation = std::move(lease.value());
     (void)operation;
-    auto loaded = load_project(*platform_, bundle);
+    auto loaded = load_project(*platform_, bundle, true, replay_cache_.get());
     if (!loaded.has_value()) {
       return foundation::Result<
           std::optional<PerformanceFlushExecution>>::failure(loaded.error());
@@ -6997,7 +7062,7 @@ ProjectStore::execute_performance_flush(
     }
     auto operation = std::move(lease.value());
     (void)operation;
-    auto loaded = load_project(*platform_, bundle);
+    auto loaded = load_project(*platform_, bundle, true, replay_cache_.get());
     if (!loaded.has_value()) {
       return foundation::Result<domain::AppliedCommand>::failure(
           loaded.error());
@@ -7296,7 +7361,7 @@ ProjectStore::disarm_sequence_capture(
                     "inspect the durable Capture receipt and Project Truth"}},
               });
         };
-        auto loaded = load_project(*platform_, bundle);
+        auto loaded = load_project(*platform_, bundle, true, replay_cache_.get());
         if (!loaded.has_value()) {
           return foundation::Result<std::optional<std::uint64_t>>::failure(
               loaded.error());
@@ -7494,7 +7559,7 @@ ProjectStore::import_artifact_with_identity(
     return foundation::Result<ImportArtifactExecution>::failure(
         tree.error());
   }
-  auto loaded = load_project(*platform_, bundle);
+  auto loaded = load_project(*platform_, bundle, true, replay_cache_.get());
   if (!loaded.has_value()) {
     return foundation::Result<ImportArtifactExecution>::failure(
         loaded.error());
@@ -7671,7 +7736,7 @@ foundation::Result<domain::AppliedCommand> ProjectStore::import_artifact_bytes(
   if (!tree.has_value()) {
     return foundation::Result<domain::AppliedCommand>::failure(tree.error());
   }
-  auto loaded = load_project(*platform_, bundle);
+  auto loaded = load_project(*platform_, bundle, true, replay_cache_.get());
   if (!loaded.has_value()) {
     return foundation::Result<domain::AppliedCommand>::failure(
         loaded.error());
@@ -7844,7 +7909,7 @@ foundation::Result<domain::AppliedCommand> ProjectStore::install_soundset(
   if (!tree.has_value()) {
     return foundation::Result<domain::AppliedCommand>::failure(tree.error());
   }
-  auto loaded = load_project(*platform_, bundle);
+  auto loaded = load_project(*platform_, bundle, true, replay_cache_.get());
   if (!loaded.has_value()) {
     return foundation::Result<domain::AppliedCommand>::failure(
         loaded.error());
@@ -8002,7 +8067,7 @@ foundation::Result<domain::AppliedCommand> ProjectStore::adopt_candidates(
   if (!tree.has_value()) {
     return foundation::Result<domain::AppliedCommand>::failure(tree.error());
   }
-  auto loaded = load_project(*platform_, bundle);
+  auto loaded = load_project(*platform_, bundle, true, replay_cache_.get());
   if (!loaded.has_value()) {
     return foundation::Result<domain::AppliedCommand>::failure(
         loaded.error());
@@ -8137,7 +8202,7 @@ ProjectStore::import_assign_sample_bytes(
   if (!tree.has_value()) {
     return foundation::Result<domain::AppliedCommand>::failure(tree.error());
   }
-  auto loaded = load_project(*platform_, bundle);
+  auto loaded = load_project(*platform_, bundle, true, replay_cache_.get());
   if (!loaded.has_value()) {
     return foundation::Result<domain::AppliedCommand>::failure(
         loaded.error());
@@ -8429,7 +8494,7 @@ foundation::Result<std::vector<std::byte>> ProjectStore::read_asset_artifact(
   if (!tree.has_value()) return BytesResult::failure(tree.error());
   // The internal reader replays committed metadata only. Public load also
   // recovers/scavenges authoring state, which owner resolution must not do.
-  const auto loaded = load_project(*platform_, bundle, false);
+  const auto loaded = load_project(*platform_, bundle, false, replay_cache_.get());
   if (!loaded.has_value()) return BytesResult::failure(loaded.error());
   const auto& state = loaded.value()->state;
   const auto owner = state.assets.find(asset_id);
@@ -8487,7 +8552,7 @@ ProjectStore::scan_performance_recording(
     }
     return OwnerResult::success(found->second.recording_revision);
   };
-  const auto loaded = load_project(*platform_, bundle, false);
+  const auto loaded = load_project(*platform_, bundle, false, replay_cache_.get());
   if (!loaded.has_value()) return ScanResult::failure(loaded.error());
   const auto recording_revision = owner(loaded.value()->state);
   if (!recording_revision.has_value()) return ScanResult::failure(recording_revision.error());
@@ -8554,7 +8619,7 @@ ProjectStore::scan_performance_recording(
   }
   // The history mutex and same-platform leases are reentrant. Even a consumer
   // that violates its no-mutation contract must not receive a stale receipt.
-  const auto final = load_project(*platform_, bundle, false);
+  const auto final = load_project(*platform_, bundle, false, replay_cache_.get());
   if (!final.has_value()) return ScanResult::failure(final.error());
   const auto final_owner = owner(final.value()->state);
   if (!final_owner.has_value()) return ScanResult::failure(final_owner.error());
@@ -8584,7 +8649,7 @@ foundation::Result<domain::ProjectState> ProjectStore::inspect_committed(
   if (!lease.has_value()) return Result::failure(lease.error());
   tree = validate_managed_bundle_tree(*platform_, bundle);
   if (!tree.has_value()) return Result::failure(tree.error());
-  auto loaded = load_project(*platform_, bundle, verify_asset_bytes);
+  auto loaded = load_project(*platform_, bundle, verify_asset_bytes, replay_cache_.get());
   if (!loaded.has_value()) return Result::failure(loaded.error());
   return Result::success(std::move(loaded.value()->state));
 }

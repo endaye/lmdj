@@ -222,6 +222,24 @@ Web 构建的栈是 256 KiB（`-sSTACK_SIZE=262144`）。`ProjectState` 把 64 �
 
 清理后 `main` 上最深的动作是 71 972 B（`history_roundtrip`）；叠加 #1667 的字段后最深是 112 932 B，约为栈的 43%。Project I/O Web 一致性测试在每个原生动作结束时报告栈高水位，任何动作超过栈的一半都会失败，并写明原因与补救。
 
+### 录音会话的重放前缀缓存
+
+普通 Project load 从 checkpoint 0 重放 manifest 列出的全部交易，再与 head checkpoint 比对。
+在 OPFS 上，录音中的 Pattern 切换一次要走多次 load，重放全部历史的开销让切换后的输入
+越过 1 秒请求预算（[#2422](https://github.com/endaye/lmdj/issues/2422)）。
+`ProjectStore::enable_replay_prefix_cache` 让一个 store 记住它最近一次已与 head
+checkpoint 比对通过的重放结果；之后的 load 只要 manifest 的交易列表仍以缓存的列表开头，
+就从缓存状态起只重放新追加的交易（Owner 决策 2026-10-26，
+[#2504](https://github.com/endaye/lmdj/issues/2504)）。
+
+- 已提交的交易文件以 `create_immutable` 写出、从不改写，所以缓存的前缀直接复用，
+  不再重读；这是该决策接受的取舍：同一进程内被原地破坏的旧交易文件不再由后续 load
+  发现，下一个进程仍完整重放。
+- head checkpoint 比对、Asset 字节校验、recovery 与提交路径不变。
+- manifest 不再延伸缓存列表（例如指回较早的 head）、换了 bundle、或任何一次 load 失败，
+  都退回完整重放并替换或丢弃缓存。
+- 只有录音会话的 IO owner 为自己的 store 打开缓存；其他 store 和每次进程启动仍完整重放。
+
 ### Real OPFS evidence and remaining gaps
 
 `project_io_web_conformance.spec.mjs` 的 S2 fixture 调用实际 C++ journal API，
