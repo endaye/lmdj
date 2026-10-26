@@ -169,6 +169,18 @@ fixture_source_root=/fixtures
         self.assertIn("Proof: PASS (pool part only)", result.stdout)
         self.assertNotIn("reproducibility: PASS", result.stdout)
 
+    def test_creator_pool_part_skips_only_the_sample_fixture(self):
+        """Only the serial Sample Editor and Capture groups read the Sample bundle;
+        the pool still needs the main, overview and candidate bundles."""
+        fixtures = {"generate_project_fixture", "generate_sample_editor_fixture", "python3"}
+        _, pool = self.invoke("creator", "proof", part="pool")
+        _, serial = self.invoke("creator", "proof", part="serial")
+        pool = [call.split()[0] for call in pool if call.split()[0] in fixtures]
+        serial = [call.split()[0] for call in serial if call.split()[0] in fixtures]
+        self.assertEqual(pool, ["generate_project_fixture", "generate_project_fixture", "python3"])
+        self.assertEqual(serial, ["generate_project_fixture", "generate_project_fixture",
+                                  "generate_sample_editor_fixture", "python3"])
+
     def test_creator_serial_part_keeps_reproducibility_and_unit_tests(self):
         result, calls = self.invoke("creator", "proof", part="serial")
         self.assertEqual(result.returncode, 0, result.stderr)

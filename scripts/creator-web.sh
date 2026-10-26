@@ -623,7 +623,10 @@ proof_creator() {
   generate_project_fixture "$proof_root/creator-proof-bundle.lmdj"
   export LMDJ_CREATOR_WEB_OVERVIEW_BUNDLE="$proof_root/overview/creator-overview-bundle.lmdj"
   generate_project_fixture "$LMDJ_CREATOR_WEB_OVERVIEW_BUNDLE" overview
-  generate_sample_editor_fixture "$proof_root/creator-sample-proof-bundle.lmdj"
+  # Only the serial Sample Editor and Capture groups read the Sample bundle.
+  if [[ "${proof_part:-all}" != pool ]]; then
+    generate_sample_editor_fixture "$proof_root/creator-sample-proof-bundle.lmdj"
+  fi
   python3 "$web_test_root/creator/fixtures/make_candidate_fixture.py" \
     "$repo_root/build/core/dev/bin/lmdj-core" \
     "$repo_root/products/lmdj/assembly.json" \
