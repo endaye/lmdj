@@ -200,12 +200,14 @@ if(LMDJ_ENABLE_COVERAGE)
     lmdj_domain_candidate_adoption_tests
     lmdj_domain_model_sequence_tests
     lmdj_authoring_history_tests
+    lmdj_performance_recording_scan_tests
     lmdj_project_store_tests
     lmdj_performance_recording_verification_tests
     lmdj_project_storage_platform_tests
     lmdj_project_bundle_transfer_tests
     lmdj_runtime_content_tests
     lmdj_project_cooker_sample_analysis_tests
+    lmdj_wav_metadata_inspector_tests
     lmdj_project_cooker_performance_replay_tests
     lmdj_project_cooker_wav_selection_tests
     lmdj_project_cooker_tests
@@ -237,6 +239,7 @@ if(LMDJ_ENABLE_COVERAGE)
     lmdj_facade_performance_runtime_consumer_tests
     lmdj_runtime_facade_tests
     lmdj_runtime_facade_concurrency_tests
+    lmdj_facade_performance_recording_metadata_tests
     lmdj_application_facade_tests
     lmdj_pattern_admission_tests
     lmdj_pattern_transport_segment_tests
@@ -264,6 +267,7 @@ if(LMDJ_ENABLE_COVERAGE)
     lmdj_facade_pattern_tempo_gateway_tests
     lmdj_facade_pattern_tempo_preview_tests
     lmdj_web_pattern_tempo_preview_tests
+    lmdj_web_recording_metadata_query_tests
     lmdj_facade_resample_performance_tests
     lmdj_facade_performance_session_tests
     lmdj_facade_performance_gesture_admission_tests
