@@ -253,7 +253,11 @@ test("switching Perform pages starts at the new page's controls", async ({page})
 });
 
 
-test("Sequence's header, bar controls and sixteen full-size rows fit one touch page", async ({page}) => {
+// Sequence EDIT (#2468, Owner decision 2026-10-26): the named touch workspace
+// scrolls vertically rather than shrinking lanes to fit one page. Every lane
+// keeps its 11-unit height, every control its 44-unit hit, and the first and
+// last lanes stay reachable inside the workspace without horizontal overflow.
+test("Sequence's header, bar controls and sixteen full-size lanes stay reachable in one scrolling touch page", async ({page}) => {
   await page.getByTestId("physical-controls").getByRole("button", {name:"Sequence", exact:true}).click();
   for (const viewport of [{width:1440,height:900}, {width:1280,height:600}, {width:768,height:600}]) {
     await page.setViewportSize(viewport);
@@ -264,18 +268,31 @@ test("Sequence's header, bar controls and sixteen full-size rows fit one touch p
       const available = touch.clientHeight - parseFloat(style.paddingTop) - parseFloat(style.paddingBottom);
       const rows = [...editor.querySelectorAll('.sequence-grid-lane')];
       return {height:editor.getBoundingClientRect().height / scale, available,
+        scrollable: ["auto", "scroll"].includes(style.overflowY) && touch.scrollHeight > touch.clientHeight,
+        // Scrolled to its end, the workspace shows the editor's bottom edge.
+        bottomReachable: (() => {
+          const previous = touch.scrollTop;
+          touch.scrollTop = touch.scrollHeight;
+          const reachable = editor.getBoundingClientRect().bottom <= touch.getBoundingClientRect().bottom + 1;
+          touch.scrollTop = previous;
+          return reachable;
+        })(),
         rowHeights: rows.map(row => row.getBoundingClientRect().height / scale),
         headerHeight:editor.querySelector('.sequence-editor-header').offsetHeight,
         controlHeights:[...editor.querySelectorAll('.sequence-grid-navigation button')].map(button=>button.offsetHeight)};
     });
-    expect(dimensions.height).toBeLessThanOrEqual(dimensions.available + 0.1);
+    // Whatever does not fit the page is reached by scrolling the workspace.
+    if (dimensions.height > dimensions.available + 0.1) expect(dimensions.scrollable).toBe(true);
+    expect(dimensions.bottomReachable).toBe(true);
     expect(dimensions.rowHeights).toHaveLength(16);
-    for (const height of dimensions.rowHeights) expect(height).toBeCloseTo(13, 1);
-    expect(dimensions.headerHeight).toBe(44);
+    for (const height of dimensions.rowHeights) expect(height).toBeCloseTo(11, 1);
+    // Pattern row (44) + group gap (8) + full-width EDIT/SETUP tabs (44).
+    expect(dimensions.headerHeight).toBe(96);
     expect(dimensions.controlHeights).toEqual([44,44,44,44]);
     await expectTouchFits(page);
-    // Global recovery may consume vertical space; the final row must remain
-    // reachable and must never be removed or shrunk to fake first-screen fit.
+    // Global recovery may consume vertical space; the first and final rows
+    // must remain reachable and must never be removed or shrunk.
+    await expectControlFits(page, page.locator('.sequence-grid-row').first());
     await expectControlFits(page, page.locator('.sequence-grid-row').last());
     for (const name of ['Choose Pattern','Choose bar','Grid tools']) {
       await page.getByRole('button',{name,exact:true}).click();
