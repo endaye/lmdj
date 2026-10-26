@@ -235,7 +235,10 @@ checkpoint 比对通过的重放结果；之后的 load 只要 manifest 的交�
 - 已提交的交易文件以 `create_immutable` 写出、从不改写，所以缓存的前缀直接复用，
   不再重读；这是该决策接受的取舍：同一进程内被原地破坏的旧交易文件不再由后续 load
   发现，下一个进程仍完整重放。
-- head checkpoint 比对、Asset 字节校验、recovery 与提交路径不变。
+- 缓存的键是 bundle 与交易列表本身；head revision、head checkpoint 路径与内容仍在每次
+  load 时读取并与重放结果比对，不一致就让这次 load 失败并丢弃缓存。
+- head checkpoint 比对、Asset 字节校验、recovery 与提交路径不变；只有通过了本次全部校验
+  （包括所要求的 Asset 校验）的 load 才会更新缓存。
 - manifest 不再延伸缓存列表（例如指回较早的 head）、换了 bundle、或任何一次 load 失败，
   都退回完整重放并替换或丢弃缓存。
 - 只有录音会话的 IO owner 为自己的 store 打开缓存；其他 store 和每次进程启动仍完整重放。

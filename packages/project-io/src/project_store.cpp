@@ -3498,12 +3498,16 @@ foundation::Result<std::unique_ptr<LoadedProject>> load_project(
               bundle / head_checkpoint));
     }
 
-    // Only a replay that matched its head checkpoint becomes reusable.
-    remember_replayed(cache, bundle, loaded.get());
-    drop_on_failure.armed = false;
+    // Only a load that passed every check it ran becomes reusable: the head
+    // checkpoint comparison above and, when requested, Asset verification.
+    const auto remember = [&] {
+      remember_replayed(cache, bundle, loaded.get());
+      drop_on_failure.armed = false;
+    };
     // Owner resolution verifies only its selected Artifact after checking
     // ownership. Every authoring load keeps the complete asset verification.
     if (!verify_asset_bytes) {
+      remember();
       return foundation::Result<std::unique_ptr<LoadedProject>>::success(std::move(loaded));
     }
     for (const auto& [asset_id, asset] : loaded->state.assets) {
@@ -3520,6 +3524,7 @@ foundation::Result<std::unique_ptr<LoadedProject>> load_project(
                 blob));
       }
     }
+    remember();
     return foundation::Result<std::unique_ptr<LoadedProject>>::success(std::move(loaded));
   } catch (const std::exception& exception) {
     return foundation::Result<std::unique_ptr<LoadedProject>>::failure(
