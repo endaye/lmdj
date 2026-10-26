@@ -2376,8 +2376,13 @@ test("owner process loss leaves one recoverable recording and no second capture 
     await showPerformPage(successor, "Replay");
     await expect(successor.getByRole("button", {name: "Apply recovery"}))
       .toHaveCount(1);
+    // The Journal's raw reason stays "active" (#2487); the status line shows
+    // its explanation rather than the SDK word.
+    expect(await successor.evaluate(() =>
+      window.lmdjWebRuntimeHost.session.listPerformanceRecovery()))
+      .toEqual([expect.objectContaining({reason: "active"})]);
     await expect(successor.getByRole("status", {name: "Performance recovery status"}))
-      .toContainText("active");
+      .toHaveText("Unfinished recording");
     await showPerformPage(successor, "Live");
     await expect(successor.getByRole("button", {name: "Record Performance"}))
       .toBeDisabled();
