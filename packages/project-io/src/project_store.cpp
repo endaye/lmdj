@@ -4653,7 +4653,8 @@ foundation::Result<domain::AppliedCommand> execute_persisted(
     const std::shared_ptr<ProjectStoragePlatform>& platform,
     const std::shared_ptr<AuthoringHistory>& history,
     const std::filesystem::path& bundle,
-    const PersistedCommand& command) {
+    const PersistedCommand& command,
+    ReplayPrefixCache* cache = nullptr) {
   auto tree = validate_managed_bundle_tree(*platform, bundle);
   if (!tree.has_value()) {
     return foundation::Result<domain::AppliedCommand>::failure(tree.error());
@@ -4669,7 +4670,7 @@ foundation::Result<domain::AppliedCommand> execute_persisted(
   if (!tree.has_value()) {
     return foundation::Result<domain::AppliedCommand>::failure(tree.error());
   }
-  auto loaded = load_project(*platform, bundle);
+  auto loaded = load_project(*platform, bundle, true, cache);
   if (!loaded.has_value()) {
     return foundation::Result<domain::AppliedCommand>::failure(
         loaded.error());
@@ -5395,21 +5396,21 @@ foundation::Result<domain::AppliedCommand> ProjectStore::execute(
     const std::filesystem::path& bundle,
     const domain::UpdatePadPlayback& command) {
   auto history_guard = history_->acquire();
-  return execute_persisted(platform_, history_, bundle, PersistedCommand{command});
+  return execute_persisted(platform_, history_, bundle, PersistedCommand{command}, replay_cache_.get());
 }
 
 foundation::Result<domain::AppliedCommand> ProjectStore::execute(
     const std::filesystem::path& bundle,
     const domain::ResetPadPlayback& command) {
   auto history_guard = history_->acquire();
-  return execute_persisted(platform_, history_, bundle, PersistedCommand{command});
+  return execute_persisted(platform_, history_, bundle, PersistedCommand{command}, replay_cache_.get());
 }
 
 foundation::Result<domain::AppliedCommand> ProjectStore::execute(
     const std::filesystem::path& bundle,
     const domain::SetPadColour& command) {
   auto history_guard = history_->acquire();
-  return execute_persisted(platform_, history_, bundle, PersistedCommand{command});
+  return execute_persisted(platform_, history_, bundle, PersistedCommand{command}, replay_cache_.get());
 }
 
 foundation::Result<domain::AppliedCommand> ProjectStore::execute(
@@ -5428,28 +5429,29 @@ foundation::Result<domain::AppliedCommand> ProjectStore::execute(
   });
   auto history_guard = history_->acquire();
   return execute_persisted(
-      platform_, history_, bundle, PersistedCommand{std::move(normalized)});
+      platform_, history_, bundle, PersistedCommand{std::move(normalized)},
+      replay_cache_.get());
 }
 
 foundation::Result<domain::AppliedCommand> ProjectStore::execute(
     const std::filesystem::path& bundle,
     const domain::ResizePattern& command) {
   auto history_guard = history_->acquire();
-  return execute_persisted(platform_, history_, bundle, PersistedCommand{command});
+  return execute_persisted(platform_, history_, bundle, PersistedCommand{command}, replay_cache_.get());
 }
 
 foundation::Result<domain::AppliedCommand> ProjectStore::execute(
     const std::filesystem::path& bundle,
     const domain::DoubleUpPattern& command) {
   auto history_guard = history_->acquire();
-  return execute_persisted(platform_, history_, bundle, PersistedCommand{command});
+  return execute_persisted(platform_, history_, bundle, PersistedCommand{command}, replay_cache_.get());
 }
 
 foundation::Result<domain::AppliedCommand> ProjectStore::execute(
     const std::filesystem::path& bundle,
     const domain::CopyPattern& command) {
   auto history_guard = history_->acquire();
-  return execute_persisted(platform_, history_, bundle, PersistedCommand{command});
+  return execute_persisted(platform_, history_, bundle, PersistedCommand{command}, replay_cache_.get());
 }
 
 foundation::Result<domain::AppliedCommand> ProjectStore::execute(
@@ -5462,21 +5464,21 @@ foundation::Result<domain::AppliedCommand> ProjectStore::create_performance(
     const std::filesystem::path& bundle,
     const CreatePerformance& command) {
   auto history_guard = history_->acquire();
-  return execute_persisted(platform_, history_, bundle, PersistedCommand{command});
+  return execute_persisted(platform_, history_, bundle, PersistedCommand{command}, replay_cache_.get());
 }
 
 foundation::Result<domain::AppliedCommand> ProjectStore::rename_performance(
     const std::filesystem::path& bundle,
     const RenamePerformance& command) {
   auto history_guard = history_->acquire();
-  return execute_persisted(platform_, history_, bundle, PersistedCommand{command});
+  return execute_persisted(platform_, history_, bundle, PersistedCommand{command}, replay_cache_.get());
 }
 
 foundation::Result<domain::AppliedCommand> ProjectStore::delete_performance(
     const std::filesystem::path& bundle,
     const DeletePerformance& command) {
   auto history_guard = history_->acquire();
-  return execute_persisted(platform_, history_, bundle, PersistedCommand{command});
+  return execute_persisted(platform_, history_, bundle, PersistedCommand{command}, replay_cache_.get());
 }
 
 foundation::Result<PerformanceLifecycleReceipt>
