@@ -268,13 +268,22 @@ test("Sequence's header, bar controls and sixteen full-size lanes stay reachable
       const available = touch.clientHeight - parseFloat(style.paddingTop) - parseFloat(style.paddingBottom);
       const rows = [...editor.querySelectorAll('.sequence-grid-lane')];
       return {height:editor.getBoundingClientRect().height / scale, available,
-        scrollable: touch.scrollHeight > touch.clientHeight && getComputedStyle(touch).overflowY !== "hidden",
+        scrollable: ["auto", "scroll"].includes(style.overflowY) && touch.scrollHeight > touch.clientHeight,
+        // Scrolled to its end, the workspace shows the editor's bottom edge.
+        bottomReachable: (() => {
+          const previous = touch.scrollTop;
+          touch.scrollTop = touch.scrollHeight;
+          const reachable = editor.getBoundingClientRect().bottom <= touch.getBoundingClientRect().bottom + 1;
+          touch.scrollTop = previous;
+          return reachable;
+        })(),
         rowHeights: rows.map(row => row.getBoundingClientRect().height / scale),
         headerHeight:editor.querySelector('.sequence-editor-header').offsetHeight,
         controlHeights:[...editor.querySelectorAll('.sequence-grid-navigation button')].map(button=>button.offsetHeight)};
     });
     // Whatever does not fit the page is reached by scrolling the workspace.
     if (dimensions.height > dimensions.available + 0.1) expect(dimensions.scrollable).toBe(true);
+    expect(dimensions.bottomReachable).toBe(true);
     expect(dimensions.rowHeights).toHaveLength(16);
     for (const height of dimensions.rowHeights) expect(height).toBeCloseTo(11, 1);
     // Pattern row (44) + group gap (8) + full-width EDIT/SETUP tabs (44).
