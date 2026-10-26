@@ -90,7 +90,13 @@ class PatternAdmissionOwner {
   // Records the publication generation a live-overlay republication created
   // (#1513), so the cutoff without a switch validates against it.
   foundation::Result<void> retain_overlay_publication(std::uint64_t generation);
-  foundation::Result<void> reconcile_switch(project_io::ProjectStore& store);
+  // `committed`, when given, is Truth this step already holds: its own
+  // pre-check load or the verified state its flush commit returned. It is
+  // used only while its revision equals the Journal's expected revision;
+  // otherwise Truth is loaded again as before.
+  foundation::Result<void> reconcile_switch(
+      project_io::ProjectStore& store,
+      const domain::ProjectState* committed = nullptr);
   // Ongoing recording: settle only the source, then bind the supplied clock
   // at the actual Native boundary. The caller parks post-S ingress until ACK.
   // Stable IDs replay every partial durable step; target input stays unflushed.
@@ -100,9 +106,12 @@ class PatternAdmissionOwner {
       const project_io::SequencePublicationAuthority& authority,
       std::uint16_t bpm, std::uint64_t tick_numerator, foundation::CommandId transfer_id,
       foundation::CommandId flush_id, foundation::CommandId profile_id);
+  // `committed`, when given, receives the verified post-commit Truth of each
+  // flush this drain executes.
   foundation::Result<void> drain_source_prefix(
       project_io::ProjectStore& store, foundation::CommandId transfer_id,
-      foundation::CommandId flush_id);
+      foundation::CommandId flush_id,
+      std::unique_ptr<domain::ProjectState>* committed = nullptr);
   foundation::Result<void> drain_target_segment(
       project_io::ProjectStore& store, foundation::CommandId transfer_id,
       foundation::CommandId flush_id, foundation::CommandId profile_id);

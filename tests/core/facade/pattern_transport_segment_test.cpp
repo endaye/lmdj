@@ -73,8 +73,12 @@ class FaultStorage final : public lmdj::project_io::ProjectStoragePlatform {
       const std::filesystem::path& path) const override {
     return inner->byte_length(path);
   }
+  // A full Project load replays every committed transaction file, so these
+  // reads measure how many times a step reloaded Truth.
+  mutable std::size_t transaction_reads = 0;
   lmdj::foundation::Result<std::vector<std::byte>> read_complete(
       const std::filesystem::path& path) const override {
+    if (path.parent_path().filename() == "transactions") ++transaction_reads;
     return inner->read_complete(path);
   }
   lmdj::foundation::Result<void> create_immutable(
@@ -137,7 +141,8 @@ struct Fixture {
   std::uint64_t step = 1;
   explicit Fixture(std::filesystem::path owned_root =
       std::filesystem::temp_directory_path() / ("lmdj-recording-segments-" +
-          std::to_string(std::chrono::steady_clock::now().time_since_epoch().count())))
+          std::to_string(std::chrono::steady_clock::now().time_since_epoch().count())),
+      std::uint64_t prior_commits = 0)
       : root(std::move(owned_root)) {
     auto created = domain::create_project(project, 120);
     LMDJ_CHECK(created.has_value());
@@ -145,11 +150,21 @@ struct Fixture {
     state.patterns.emplace(a, domain::Pattern{a, 1, {}});
     state.patterns.emplace(b, domain::Pattern{b, 1, {}});
     LMDJ_CHECK(store.create(bundle, state).has_value());
+    // Committed history before recording starts; each load replays it.
+    for (std::uint64_t k = 0; k < prior_commits; ++k) {
+      // Alternate swing and end on the original 50 for an even count.
+      const domain::UpdateSequenceSettings settings{
+          {foundation::CommandId{uuid(200 + static_cast<unsigned>(k))}, k},
+          std::nullopt, std::nullopt, static_cast<std::uint8_t>(k % 2 == 0 ? 55 : 50)};
+      const auto committed = store.execute(bundle, settings);
+      if (!committed.has_value()) std::cerr << committed.error().message << '\n';
+      LMDJ_CHECK(committed.has_value());
+    }
     reopen_owner();
     const project_io::SequenceAdmissionFence fence{
         project_io::SequenceFenceKind::admission, foundation::CommandId{uuid(5)},
         11, 13000, 1000, a, 21, 120, true, {}, project_io::SequenceSwitchOutcome::none, {}};
-    run(work(3, {{"op", "open"}, {"pattern", a.value()}, {"revision", 0},
+    run(work(3, {{"op", "open"}, {"pattern", a.value()}, {"revision", prior_commits},
         {"generation", 21}, {"started", facade::detail::transport_clock_stamp(std::chrono::steady_clock::now())},
         {"fence", facade::detail::encode_transport_fence(fence)}}));
   }
@@ -260,6 +275,32 @@ void nonzero_segment_phase_is_immutable_and_survives_reopen() {
   f.input(15, 82000, 1, false, 90);
   f.finish(f.a, 23, 70000, 90000);
   f.reopened_truth({{{0, 1}, 720, 240, 100}, {{0, 1}, 960, 240, 90}}, phase_target_notes, 3);
+}
+
+// Each full Project load replays the whole committed history, and on OPFS a
+// segment step's reloads held late releases and post-switch presses past
+// their one-second budget (#2422). A segment step checks Truth once and then
+// reuses the state it holds: its own pre-check load, or the verified state
+// its flush commit returned. With H prior transactions and one source flush,
+// the pre-check and the commit's own load each replay H, and the commit's
+// post-commit visibility check replays H + 1; reconciliation adds none.
+void segment_reuses_the_truth_it_already_holds() {
+  constexpr std::uint64_t history = 6;
+  Fixture f{std::filesystem::temp_directory_path() / ("lmdj-segment-reuse-" +
+      std::to_string(std::chrono::steady_clock::now().time_since_epoch().count())), history};
+  f.source();
+  const auto flushed = f.platform->transaction_reads;
+  f.run(f.segment(100, f.b, 22, 40000));
+  LMDJ_CHECK(f.platform->transaction_reads - flushed == 3 * history + 1);
+  LMDJ_CHECK(f.truth().patterns.at(f.a).events == source_notes);
+  LMDJ_CHECK(f.active().pattern_id == f.b && f.active().admission->segment_generation == 22);
+  // Nothing to flush: the pre-check is the only replay.
+  Fixture empty{std::filesystem::temp_directory_path() / ("lmdj-segment-reuse-empty-" +
+      std::to_string(std::chrono::steady_clock::now().time_since_epoch().count())), history};
+  const auto idle = empty.platform->transaction_reads;
+  empty.run(empty.segment(100, empty.b, 22, 40000));
+  LMDJ_CHECK(empty.platform->transaction_reads - idle == history);
+  LMDJ_CHECK(empty.active().pattern_id == empty.b);
 }
 
 void continuous_a_b_a_keeps_full_truth_and_new_generation_clock() {
@@ -716,6 +757,7 @@ struct Shard {
 };
 
 void component_scenarios() {
+  segment_reuses_the_truth_it_already_holds();
   nonzero_segment_phase_is_immutable_and_survives_reopen();
   continuous_a_b_a_keeps_full_truth_and_new_generation_clock();
   empty_segments_keep_equal_frontiers_and_no_empty_flushes();
@@ -733,7 +775,7 @@ void component_scenarios() {
 // nonzero phase joined the matrix). tests/build/facade_surface_sharding_test.py
 // keeps this table and the registrations in step.
 constexpr std::array<Shard, 3> kShards{{
-    {"component", 9, component_scenarios},
+    {"component", 10, component_scenarios},
     {"restart-zero-phase", 2 * crash_cases.size(),
         [] { static_cast<void>(cold_recovery_after_real_process_death(false)); }},
     {"restart-nonzero-phase", 2 * crash_cases.size(),
