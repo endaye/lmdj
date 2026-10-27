@@ -249,3 +249,56 @@ test('stable resume entrypoint forwards original SHA to the concrete verifier', 
   await assert.rejects(promisify(execFile)('bash', [script, 'resume-version', '1.0.13.0', 'canary', 'not-a-sha']),
     (error) => error.code === 1 && /requires the original full source SHA/.test(error.stderr));
 });
+
+function retentionInventories(builds, witnessed = builds) {
+  return {
+    versioned_docs: {builds, required: true},
+    versioned_sidebars: {builds, required: true},
+    versioned_metadata: {builds, required: true},
+    versioned_provenance: {builds: witnessed, required: false},
+    'static/versions': {builds, required: true},
+  };
+}
+
+test('snapshot retention admits five snapshots besides the current Build', () => {
+  const versions = ['2.0.6.0', '2.0.5.0', '2.0.4.0', '2.0.3.0', '2.0.2.0', '2.0.1.0'];
+  assert.deepEqual(versionDocs.validateSnapshotRetention({
+    productBuild: '2.0.6.0', versions, inventories: retentionInventories(versions),
+  }), []);
+});
+
+test('snapshot retention rejects a sixth snapshot besides the current Build', () => {
+  const versions = ['2.0.7.0', '2.0.6.0', '2.0.5.0', '2.0.4.0', '2.0.3.0', '2.0.2.0', '2.0.1.0'];
+  const errors = versionDocs.validateSnapshotRetention({
+    productBuild: '2.0.7.0', versions, inventories: retentionInventories(versions),
+  });
+  assert.equal(errors.length, 1);
+  assert.match(errors[0], /^why: versions\.json retains 6 Product Build snapshots besides current 2\.0\.7\.0.*remedy: .*remove 2\.0\.1\.0 /);
+});
+
+test('snapshot retention rejects snapshot files that versions.json does not list', () => {
+  const inventories = retentionInventories(['2.0.2.0']);
+  inventories['static/versions'].builds = ['2.0.2.0', '2.0.1.0'];
+  assert.deepEqual(versionDocs.validateSnapshotRetention({
+    productBuild: '2.0.2.0', versions: ['2.0.2.0'], inventories,
+  }).map((error) => error.split(';')[0]), [
+    'why: static/versions carries Product Build 2.0.1.0, which versions.json does not list',
+  ]);
+});
+
+test('snapshot retention rejects a listed Build missing a snapshot file', () => {
+  const inventories = retentionInventories(['2.0.2.0', '2.0.1.0']);
+  inventories.versioned_sidebars.builds = ['2.0.2.0'];
+  assert.deepEqual(versionDocs.validateSnapshotRetention({
+    productBuild: '2.0.2.0', versions: ['2.0.2.0', '2.0.1.0'], inventories,
+  }).map((error) => error.split(';')[0]), [
+    'why: versions.json lists Product Build 2.0.1.0 without its versioned_sidebars file',
+  ]);
+});
+
+test('snapshot retention does not require a witness for a listed Build', () => {
+  const versions = ['2.0.2.0', '2.0.1.0'];
+  assert.deepEqual(versionDocs.validateSnapshotRetention({
+    productBuild: '2.0.2.0', versions, inventories: retentionInventories(versions, ['2.0.1.0']),
+  }), []);
+});

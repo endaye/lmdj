@@ -135,7 +135,11 @@ Product Build 条目必须唯一。仓库只保留最近 5 个 Product Build 快
 （`versioned_docs`、`versioned_sidebars`、`versioned_metadata`、
 `versioned_provenance`、`static/versions/` 五类文件与 `versions.json`
 同步增删）；更旧的快照作为历史发布证据保留在其发布时的 Git revision
-中，可按 revision 检出审计，不随 HEAD 携带。既有 schema-1 快照保持只读
+中，可按 revision 检出审计，不随 HEAD 携带。一键候选 cut 只能新增本 Build
+的路径，不能删旧快照，因此计数不含当前 Product Build：cut 后可暂时存在第 6
+个快照，由普通 Task 删除最旧者；未清理时下一次 cut 的 `check:release-docs`
+在 S0 即失败。该检查同时要求五类文件与 `versions.json` 一一对应（squash
+witness 只查孤儿，不要求最新 Build 已有）。既有 schema-1 快照保持只读
 兼容，不回写。
 
 Build/BOM 已在 `main` 的 snapshot-only Task 优先建立 direct-parent：冻结是从当前

@@ -55,6 +55,37 @@ export function validateReleaseSnapshot({facts, versions, metadata, snapshotExis
   return errors;
 }
 
+// The repository keeps the latest five Product Build snapshots. The one-click
+// candidate cut may only add its own Build's paths, so the current Build is
+// not counted: a cut adds the sixth snapshot, and the next cut's S0 fails
+// until an ordinary Task prunes the oldest.
+export const RETAINED_SNAPSHOT_LIMIT = 5;
+
+export function validateSnapshotRetention({productBuild, versions, inventories}) {
+  const errors = [];
+  const retained = versions.filter((version) => version !== productBuild);
+  if (retained.length > RETAINED_SNAPSHOT_LIMIT) {
+    const excess = retained.slice(RETAINED_SNAPSHOT_LIMIT);
+    errors.push(`why: versions.json retains ${retained.length} Product Build snapshots besides current ${productBuild}, above the limit of ${RETAINED_SNAPSHOT_LIMIT}; remedy: in an ordinary Task, remove ${excess.join(', ')} from versions.json together with their versioned_docs, versioned_sidebars, versioned_metadata, versioned_provenance and static/versions files; older snapshots stay auditable at their introducing revisions`);
+  }
+  const listed = new Set(versions);
+  for (const [name, {builds, required}] of Object.entries(inventories)) {
+    const present = new Set(builds);
+    for (const build of builds) {
+      if (!listed.has(build)) {
+        errors.push(`why: ${name} carries Product Build ${build}, which versions.json does not list; remedy: remove the orphaned ${name} file, or restore the complete snapshot and its versions.json entry`);
+      }
+    }
+    if (!required) continue;
+    for (const build of versions) {
+      if (!present.has(build)) {
+        errors.push(`why: versions.json lists Product Build ${build} without its ${name} file; remedy: restore the snapshot's ${name} file from its introducing revision, or remove the whole snapshot from versions.json`);
+      }
+    }
+  }
+  return errors;
+}
+
 async function defaultGitStatus(repoRoot) {
   const {stdout} = await execFileAsync('git', ['status', '--porcelain'], {cwd: repoRoot});
   return stdout;
