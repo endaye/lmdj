@@ -302,3 +302,9 @@ test('snapshot retention does not require a witness for a listed Build', () => {
     productBuild: '2.0.2.0', versions, inventories: retentionInventories(versions, ['2.0.1.0']),
   }), []);
 });
+
+test('snapshot inventory ignores names that are not a four-part Build', () => {
+  assert.deepEqual(versionDocs.snapshotInventory('static/versions', ['2.0.1.0', '.DS_Store', 'notes.txt']), {
+    builds: ['2.0.1.0'], required: true,
+  });
+});

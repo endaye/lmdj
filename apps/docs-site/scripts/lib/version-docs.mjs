@@ -61,6 +61,24 @@ export function validateReleaseSnapshot({facts, versions, metadata, snapshotExis
 // until an ordinary Task prunes the oldest.
 export const RETAINED_SNAPSHOT_LIMIT = 5;
 
+// Each storage class names a Build by a fixed pattern. Only a four-part Build
+// counts, so a stray `.DS_Store` or editor file is not mistaken for one. A
+// witness is created after the introducing merge, so the newest snapshot may
+// lack one; the witness class is only checked for orphans.
+const BUILD = '(\\d+\\.\\d+\\.\\d+\\.\\d+)';
+export const SNAPSHOT_STORAGE = {
+  versioned_docs: {pattern: new RegExp(`^version-${BUILD}$`), required: true},
+  versioned_sidebars: {pattern: new RegExp(`^version-${BUILD}-sidebars\\.json$`), required: true},
+  versioned_metadata: {pattern: new RegExp(`^version-${BUILD}\\.json$`), required: true},
+  versioned_provenance: {pattern: new RegExp(`^version-${BUILD}-squash-witness\\.json$`), required: false},
+  'static/versions': {pattern: new RegExp(`^${BUILD}$`), required: true},
+};
+
+export function snapshotInventory(storageClass, names) {
+  const {pattern, required} = SNAPSHOT_STORAGE[storageClass];
+  return {builds: names.flatMap((name) => name.match(pattern)?.slice(1, 2) ?? []), required};
+}
+
 export function validateSnapshotRetention({productBuild, versions, inventories}) {
   const errors = [];
   const retained = versions.filter((version) => version !== productBuild);

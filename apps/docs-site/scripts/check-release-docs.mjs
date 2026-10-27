@@ -4,7 +4,7 @@ import {execFile} from 'node:child_process';
 import {promisify} from 'node:util';
 import {fileURLToPath} from 'node:url';
 import {readRepoFacts} from './lib/repo-facts.mjs';
-import {validateReleaseSnapshot, validateSnapshotRetention} from './lib/version-docs.mjs';
+import {SNAPSHOT_STORAGE, snapshotInventory, validateReleaseSnapshot, validateSnapshotRetention} from './lib/version-docs.mjs';
 import {verifySnapshotProvenance} from './lib/snapshot-provenance.mjs';
 
 const execFileAsync = promisify(execFile);
@@ -21,23 +21,14 @@ const metadata = await readFile(metadataPath, 'utf8').then(JSON.parse, (error) =
 });
 const snapshotPath = path.join(portalRoot, 'versioned_docs', `version-${productBuild}`, 'overview', 'index.mdx');
 const snapshotExists = await access(snapshotPath).then(() => true, () => false);
-async function inventoryBuilds(relative, pattern) {
-  const names = await readdir(path.join(portalRoot, relative)).catch((error) => {
+const inventories = {};
+for (const storageClass of Object.keys(SNAPSHOT_STORAGE)) {
+  const names = await readdir(path.join(portalRoot, storageClass)).catch((error) => {
     if (error.code === 'ENOENT') return [];
     throw error;
   });
-  return names.flatMap((name) => name.match(pattern)?.slice(1, 2) ?? []);
+  inventories[storageClass] = snapshotInventory(storageClass, names);
 }
-
-// A witness is created after the introducing merge, so the newest snapshot
-// may lack one; the witness inventory is only checked for orphans.
-const inventories = {
-  versioned_docs: {builds: await inventoryBuilds('versioned_docs', /^version-(.+)$/), required: true},
-  versioned_sidebars: {builds: await inventoryBuilds('versioned_sidebars', /^version-(.+)-sidebars\.json$/), required: true},
-  versioned_metadata: {builds: await inventoryBuilds('versioned_metadata', /^version-(.+)\.json$/), required: true},
-  versioned_provenance: {builds: await inventoryBuilds('versioned_provenance', /^version-(.+)-squash-witness\.json$/), required: false},
-  'static/versions': {builds: await inventoryBuilds('static/versions', /^(.+)$/), required: true},
-};
 let errors = [
   ...validateReleaseSnapshot({facts, versions, metadata, snapshotExists}),
   ...validateSnapshotRetention({productBuild, versions, inventories}),
