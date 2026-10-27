@@ -122,7 +122,7 @@ class PolicyParityTest(unittest.TestCase):
         self.assertEqual(len(diagnostics), 2)
         joined = "\n".join(diagnostics)
         self.assertIn("suite package mirrors scope lane package, which scope_policy.json no longer declares", joined)
-        self.assertIn("suite creator lists jobs ['creator-web', 'creator-web-serial'] but scope lane creator runs ['creator-web', 'creator-web-visual']", joined)
+        self.assertIn("suite creator lists jobs ['creator-web'] but scope lane creator runs ['creator-web', 'creator-web-visual']", joined)
         assert_diagnostics_actionable(self, diagnostics)
 
     def test_nightly_suites_name_jobs_core_nightly_actually_runs(self) -> None:

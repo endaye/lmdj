@@ -78,8 +78,7 @@ class CiHostedRunnerPolicyTest(unittest.TestCase):
         # ever emits self-hosted label sets; that is pinned by executing it in
         # ci_runner_fallback_test.py, so dynamic here is not hosted spend.
         web_selected = {("ci.yml", job_id) for job_id in (
-            "web-toolchain-conformance", "web-runtime-host", "creator-web", "creator-web-serial",
-            "web-runtime-lab")}
+            "web-toolchain-conformance", "web-runtime-host", "creator-web", "web-runtime-lab")}
         for job in all_jobs():
             key = (job.workflow, job.job_id)
             if job.workflow not in routine or job.is_reusable_call or key in macos:

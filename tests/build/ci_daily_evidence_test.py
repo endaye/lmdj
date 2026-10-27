@@ -35,7 +35,6 @@ class DailyEvidenceTest(unittest.TestCase):
                       for job in self.policy.inventory.job_owner}
         self.needs.update({"change-scope": {"result": "success", "outputs": {}},
                            "creator-web": {"result": "success", "outputs": {}},
-                           "creator-web-serial": {"result": "success", "outputs": {}},
                            "docs-static": {"result": "success", "outputs": {}}})
 
     def document(self, needs=None):
@@ -62,8 +61,7 @@ class DailyEvidenceTest(unittest.TestCase):
         self.assertEqual(self.suite(checked, "docs_static")["status"], "passed")
         self.assertEqual({name for name, on in bundle["execution.json"]["lanes"].items() if on},
                          {"creator", "docs_static"})
-        self.assertEqual({row["job"] for row in checked["observations"]},
-                         {"creator-web", "creator-web-serial", "docs-static"})
+        self.assertEqual({row["job"] for row in checked["observations"]}, {"creator-web", "docs-static"})
 
     def test_daily_bundle_requires_independently_frozen_map(self):
         bundle = self.bundle()

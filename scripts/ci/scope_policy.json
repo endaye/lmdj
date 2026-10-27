@@ -12,12 +12,12 @@
     "core_macos": ["select-macos-runner", "macos-primary", "core-macos", "core-asan-macos"],
     "web_toolchain": ["web-toolchain-conformance"],
     "web_runtime_host": ["web-runtime-host"],
-    "creator": ["creator-web", "creator-web-serial"],
+    "creator": ["creator-web"],
     "web_runtime_lab": ["web-runtime-lab"],
     "deploy_contract": ["deploy-contract"],
     "package": ["package"]
   },
-  "self_hosted_jobs": ["docs-static", "portal", "ci-contract", "core-ubuntu", "core-asan", "core-coverage", "web-toolchain-conformance", "web-runtime-host", "creator-web", "creator-web-serial", "web-runtime-lab", "deploy-contract", "package"],
+  "self_hosted_jobs": ["docs-static", "portal", "ci-contract", "core-ubuntu", "core-asan", "core-coverage", "web-toolchain-conformance", "web-runtime-host", "creator-web", "web-runtime-lab", "deploy-contract", "package"],
   "known_top_levels": ["demos", ".agents", ".claude", ".codex", ".gitattributes", ".github", ".gitignore", "AGENTS.md", "CLAUDE.md", "CMakeLists.txt", "CMakePresets.json", "LICENSE", "README.md", "apps", "cmake", "contracts", "docs", "netlify.toml", "wrangler.json", ".node-version", "output", "packages", "packaging", "products", "providers", "references", "scripts", "testdata", "tests", "third_party", "tools", "workers"],
   "full_rules": [
     {"match": {"kind": "prefix", "value": "build/dev/"}, "reason": "retired generated output deletion; never active source"},

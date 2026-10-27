@@ -73,7 +73,6 @@ CORE_ROLE = (
 WEB_HEAVY_LANES = {
     "web-toolchain-conformance": "web_toolchain",
     "creator-web": "creator",
-    "creator-web-serial": "creator",
     "web-runtime-host": "web_runtime_host",
     "web-runtime-lab": "web_runtime_lab",
 }
@@ -255,7 +254,6 @@ class CiBuildAccelerationTest(unittest.TestCase):
             "web-toolchain-conformance": SELECTED_WEB_QUEUE,
             "web-runtime-host": SELECTED_WEB_QUEUE,
             "creator-web": SELECTED_WEB_QUEUE,
-            "creator-web-serial": SELECTED_WEB_QUEUE,
             "web-runtime-lab": SELECTED_WEB_QUEUE,
         }
         self.assertEqual(
@@ -390,7 +388,7 @@ class CiBuildAccelerationTest(unittest.TestCase):
                     )
         self.assertEqual(
             members,
-            14,
+            13,
             "why: the heavy queue membership changed without this pin; remedy: "
             "confirm the new member's host and update the count",
         )
@@ -493,7 +491,6 @@ class CiBuildAccelerationTest(unittest.TestCase):
             "web-toolchain-conformance",
             "web-runtime-host",
             "creator-web",
-            "creator-web-serial",
         ):
             with self.subTest(job=job_name):
                 job = self.workflow_job(job_name)

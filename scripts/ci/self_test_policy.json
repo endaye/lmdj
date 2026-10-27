@@ -20,7 +20,7 @@
     },
     {"id": "web_toolchain", "origin": {"kind": "scope_lane", "lane": "web_toolchain"}, "jobs": ["web-toolchain-conformance"], "required": true},
     {"id": "web_runtime_host", "origin": {"kind": "scope_lane", "lane": "web_runtime_host"}, "jobs": ["web-runtime-host"], "required": true},
-    {"id": "creator", "origin": {"kind": "scope_lane", "lane": "creator"}, "jobs": ["creator-web", "creator-web-serial"], "required": true},
+    {"id": "creator", "origin": {"kind": "scope_lane", "lane": "creator"}, "jobs": ["creator-web"], "required": true},
     {"id": "web_runtime_lab", "origin": {"kind": "scope_lane", "lane": "web_runtime_lab"}, "jobs": ["web-runtime-lab"], "required": true},
     {"id": "deploy_contract", "origin": {"kind": "scope_lane", "lane": "deploy_contract"}, "jobs": ["deploy-contract"], "required": true},
     {"id": "package", "origin": {"kind": "scope_lane", "lane": "package"}, "jobs": ["package"], "required": true},
