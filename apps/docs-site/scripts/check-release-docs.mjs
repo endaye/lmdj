@@ -1,10 +1,10 @@
 import path from 'node:path';
-import {access, readFile} from 'node:fs/promises';
+import {access, readdir, readFile} from 'node:fs/promises';
 import {execFile} from 'node:child_process';
 import {promisify} from 'node:util';
 import {fileURLToPath} from 'node:url';
 import {readRepoFacts} from './lib/repo-facts.mjs';
-import {validateReleaseSnapshot} from './lib/version-docs.mjs';
+import {SNAPSHOT_STORAGE, snapshotInventory, validateReleaseSnapshot, validateSnapshotRetention} from './lib/version-docs.mjs';
 import {verifySnapshotProvenance} from './lib/snapshot-provenance.mjs';
 
 const execFileAsync = promisify(execFile);
@@ -21,7 +21,18 @@ const metadata = await readFile(metadataPath, 'utf8').then(JSON.parse, (error) =
 });
 const snapshotPath = path.join(portalRoot, 'versioned_docs', `version-${productBuild}`, 'overview', 'index.mdx');
 const snapshotExists = await access(snapshotPath).then(() => true, () => false);
-let errors = validateReleaseSnapshot({facts, versions, metadata, snapshotExists});
+const inventories = {};
+for (const storageClass of Object.keys(SNAPSHOT_STORAGE)) {
+  const names = await readdir(path.join(portalRoot, storageClass)).catch((error) => {
+    if (error.code === 'ENOENT') return [];
+    throw error;
+  });
+  inventories[storageClass] = snapshotInventory(storageClass, names);
+}
+let errors = [
+  ...validateReleaseSnapshot({facts, versions, metadata, snapshotExists}),
+  ...validateSnapshotRetention({productBuild, versions, inventories}),
+];
 if (!errors.length && metadata?.schema_version === 2) {
   errors = await verifySnapshotProvenance({
     repoRoot,
