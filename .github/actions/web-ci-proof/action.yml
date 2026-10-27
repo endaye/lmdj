@@ -16,13 +16,6 @@ inputs:
     description: Maximum concurrent CMake build jobs.
     required: false
     default: "3"
-  creator-part:
-    description: >-
-      Creator Proof part this job owns: all, pool (independent Chromium
-      journeys) or serial (reproducibility, unit tests, serial browser
-      groups and the deployment journey). Other lanes must use all.
-    required: false
-    default: "all"
 
 runs:
   using: composite
@@ -33,16 +26,11 @@ runs:
         LANE: ${{ inputs.lane }}
         VERIFICATION: ${{ inputs.verification }}
         INSTALL_SYSTEM_DEPS: ${{ inputs.install-system-deps }}
-        CREATOR_PART: ${{ inputs.creator-part }}
       run: |
         set -euo pipefail
         case "$LANE" in
           web_toolchain|web_runtime_host|creator) ;;
           *) echo "unsupported Web CI lane: $LANE" >&2; exit 64 ;;
-        esac
-        case "$LANE:$CREATOR_PART" in
-          *:all|creator:pool|creator:serial) ;;
-          *) echo 'why: only the creator lane is split; remedy: use creator-part all for this lane' >&2; exit 64 ;;
         esac
         case "$LANE:$VERIFICATION" in
           web_toolchain:full|web_runtime_host:full|creator:full|web_runtime_host:journey|creator:journey|creator:quick) ;;
@@ -228,7 +216,6 @@ runs:
       env:
         LANE: ${{ inputs.lane }}
         VERIFICATION: ${{ inputs.verification }}
-        LMDJ_CREATOR_WEB_PROOF_PART: ${{ inputs.creator-part }}
       run: |
         set -euo pipefail
         source build/toolchains/emsdk/emsdk_env.sh
@@ -254,7 +241,7 @@ runs:
       if: failure()
       uses: actions/upload-artifact@v6
       with:
-        name: web-ci-failure-${{ inputs.lane }}${{ inputs.creator-part != 'all' && format('-{0}', inputs.creator-part) || '' }}
+        name: web-ci-failure-${{ inputs.lane }}
         path: tests/platform/web/test-results
         if-no-files-found: ignore
         retention-days: 14

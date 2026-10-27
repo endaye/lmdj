@@ -12,7 +12,6 @@ JOB_NAMES = {
     "package": "Core package",
     "web-toolchain-conformance": "web-toolchain-conformance",
     "web-runtime-host": "web-runtime-host", "creator-web": "creator-web",
-    "creator-web-serial": "creator-web-serial",
     "web-runtime-lab": "web-runtime-lab", "core-ubuntu": "core (ubuntu-latest)",
     "select-macos-runner": "Select macOS runner", "macos-primary": "macOS gates (primary)",
     "macos-fallback": "macOS gates (GitHub-hosted fallback)",
