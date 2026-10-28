@@ -62,7 +62,7 @@ def shell_function(text: str, name: str) -> str:
 
 
 class WebVerificationModes(unittest.TestCase):
-    def invoke(self, host, mode, *, browser_status=0, diff_status=0):
+    def invoke(self, host, mode, *, browser_status=0, diff_status=0, part="all"):
         name = "proof_creator" if host == "creator" else "proof_host"
         filename = "creator-web.sh" if host == "creator" else "web-runtime-host.sh"
         body = shell_function((REPO_ROOT / "scripts" / filename).read_text(), name)
@@ -93,8 +93,9 @@ fixture_source_root=/fixtures
             result = subprocess.run(["bash", "-c", program], capture_output=True, text=True,
                                     env={**os.environ, "TRACE": str(trace), "MODE": mode,
                                          "DIFF_STATUS": str(diff_status),
-                                         "BROWSER_STATUS": str(browser_status)})
-            return result, trace.read_text().splitlines()
+                                         "BROWSER_STATUS": str(browser_status),
+                                         "proof_part": part})
+            return result, trace.read_text().splitlines() if trace.exists() else []
 
     def test_quick_builds_once_without_cleaning_or_reproducibility_claim(self):
         for host, suffix in (("creator", "creator"), ("runtime", "host")):
@@ -155,6 +156,50 @@ fixture_source_root=/fixtures
             self.assertIn("run_nonbrowser_tests ", calls)
             self.assertIn("verify_proof_fixture_inventory /proof/fixtures", calls)
             self.assertIn("run_browser_gate /proof/dist /proof/fixtures 1", calls)
+
+    def test_creator_pool_part_builds_once_and_skips_reproducibility_and_unit_tests(self):
+        """#2286: the pool job builds once; reproducibility and unit tests are the serial job's."""
+        result, calls = self.invoke("creator", "proof", part="pool")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        names = [call.split()[0] for call in calls]
+        self.assertEqual([n for n in names if n in {"clean_creator", "build_creator", "diff"}],
+                         ["clean_creator", "build_creator"])
+        self.assertNotIn("test_creator", names)
+        self.assertIn("run_browser_gate", names)
+        self.assertIn("Proof: PASS (pool part only)", result.stdout)
+        self.assertNotIn("reproducibility: PASS", result.stdout)
+
+    def test_creator_pool_part_skips_only_the_sample_fixture(self):
+        """Only the serial Sample Editor and Capture groups read the Sample bundle;
+        the pool still needs the main, overview and candidate bundles."""
+        fixtures = {"generate_project_fixture", "generate_sample_editor_fixture", "python3"}
+        _, pool = self.invoke("creator", "proof", part="pool")
+        _, serial = self.invoke("creator", "proof", part="serial")
+        pool = [call.split()[0] for call in pool if call.split()[0] in fixtures]
+        serial = [call.split()[0] for call in serial if call.split()[0] in fixtures]
+        self.assertEqual(pool, ["generate_project_fixture", "generate_project_fixture", "python3"])
+        self.assertEqual(serial, ["generate_project_fixture", "generate_project_fixture",
+                                  "generate_sample_editor_fixture", "python3"])
+
+    def test_creator_serial_part_keeps_reproducibility_and_unit_tests(self):
+        result, calls = self.invoke("creator", "proof", part="serial")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        names = [call.split()[0] for call in calls]
+        self.assertEqual([n for n in names if n in {"clean_creator", "configure_creator", "build_creator", "diff"}],
+                         ["clean_creator", "configure_creator", "build_creator"] * 2 + ["diff"])
+        self.assertIn("test_creator", names)
+        self.assertIn("run_browser_gate", names)
+        self.assertIn("reproducibility: PASS", result.stdout)
+        self.assertIn("Proof: PASS (serial part only)", result.stdout)
+
+    def test_creator_rejects_an_unknown_part_and_a_split_reproducible_leg(self):
+        result, calls = self.invoke("creator", "proof", part="half")
+        self.assertEqual(result.returncode, 64)
+        self.assertIn("LMDJ_CREATOR_WEB_PROOF_PART", result.stderr)
+        self.assertEqual(calls, [])
+        result, calls = self.invoke("creator", "reproducible", part="serial")
+        self.assertEqual(result.returncode, 64)
+        self.assertEqual(calls, [])
 
     def test_browser_failure_is_not_reported_as_quick_or_full_pass(self):
         for host in ("creator", "runtime"):
@@ -283,7 +328,7 @@ class CreatorFixtureWorkloads(unittest.TestCase):
 
 
 class CreatorBrowserWorkloads(unittest.TestCase):
-    def invoke(self, mode, status=0):
+    def invoke(self, mode, status=0, part="all"):
         body = shell_function((REPO_ROOT / "scripts/creator-web.sh").read_text(), "run_browser_gate")
         with tempfile.TemporaryDirectory() as directory:
             trace = Path(directory) / "trace"
@@ -329,8 +374,9 @@ npm() {
             program += "run_browser_gate() {\n" + body + '\n}\nrun_browser_gate /main /sample /candidate "$MODE"\n'
             result = subprocess.run(["bash", "-c", program], capture_output=True, text=True,
                                     timeout=10, env={**os.environ, "ROOT": str(REPO_ROOT),
-                                        "WORK": directory, "TRACE": str(trace), "MODE": mode, "STATUS": str(status)})
-            return result, trace.read_text().splitlines()
+                                        "WORK": directory, "TRACE": str(trace), "MODE": mode, "STATUS": str(status),
+                                        "proof_part": part})
+            return result, trace.read_text().splitlines() if trace.exists() else []
 
     def test_smoke_executes_only_the_complete_deployment_journey(self):
         result, calls = self.invoke("smoke")
@@ -345,6 +391,33 @@ npm() {
         self.assertEqual([call.split("|")[1] for call in calls], [
             "chromium", "catalog-chromium", "sample-chromium", "webkit",
             "capture-chromium", "capture-denied-chromium", "sample-webkit", "deployment-chromium"])
+
+    def test_pool_part_runs_only_the_independent_chromium_pool(self):
+        """#2286: the pool job owns exactly the independent Chromium journeys."""
+        result, calls = self.invoke("journey", part="pool")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual([call.split("|")[1] for call in calls], ["chromium"])
+        self.assertIn("--project=chromium --workers=2", calls[0])
+
+    def test_serial_part_runs_everything_but_the_pool(self):
+        """The serial job owns every other group and the deployment journey."""
+        result, calls = self.invoke("journey", part="serial")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual([call.split("|")[1] for call in calls], [
+            "catalog-chromium", "sample-chromium", "webkit",
+            "capture-chromium", "capture-denied-chromium", "sample-webkit", "deployment-chromium"])
+
+    def test_the_two_parts_cover_the_complete_inventory_once(self):
+        _, complete = self.invoke("journey")
+        _, pool = self.invoke("journey", part="pool")
+        _, serial = self.invoke("journey", part="serial")
+        self.assertEqual(pool + serial, complete)
+
+    def test_smoke_belongs_to_the_serial_part(self):
+        _, pool = self.invoke("smoke", part="pool")
+        _, serial = self.invoke("smoke", part="serial")
+        self.assertEqual(pool, [])
+        self.assertEqual([call.split("|")[1] for call in serial], ["deployment-chromium"])
 
     def test_failure_of_the_durable_smoke_propagates(self):
         result, calls = self.invoke("smoke", status=17)

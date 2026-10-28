@@ -225,6 +225,45 @@ class ScopeTests(unittest.TestCase):
         with self.assertRaisesRegex(scope.ScopeError, "drifts on current lane"):
             scope.parse_policy(*docs, historical=True)
 
+    @staticmethod
+    def single_creator_job_documents():
+        """The documents before the Creator Proof became two jobs (#2507)."""
+        files = ["scope_policy.json", "self_test_policy.json", "test_scope_policy.json"]
+        docs = [json.loads((ROOT / "scripts/ci" / name).read_text()) for name in files]
+        routing, inventory = docs[0], docs[1]
+        routing["lane_jobs"]["creator"] = ["creator-web"]
+        routing["self_hosted_jobs"].remove("creator-web-serial")
+        for suite in inventory["suites"]:
+            if suite["origin"] == {"kind": "scope_lane", "lane": "creator"}:
+                suite["jobs"] = ["creator-web"]
+        return docs
+
+    def test_historical_replay_accepts_the_superseded_single_creator_job(self):
+        """A batch admitted under one Creator job must still authenticate while it
+        drains; rejecting it stopped every controller tick for 19 hours (#2510)."""
+        docs = self.single_creator_job_documents()
+        historical = scope.parse_policy(*docs, historical=True)
+        self.assertEqual(historical.routing["lane_jobs"]["creator"], ["creator-web"])
+        self.assertEqual(historical.digest,
+                         self_test.digest_of({"routing": docs[0], "inventory": docs[1], "scope": docs[2]}))
+
+    def test_current_admission_rejects_the_superseded_creator_grouping(self):
+        docs = self.single_creator_job_documents()
+        with self.assertRaisesRegex(scope.ScopeError, "closed v1 mapping"):
+            scope.parse_policy(*docs)
+
+    def test_historical_replay_rejects_an_unlisted_creator_grouping(self):
+        docs = self.single_creator_job_documents()
+        docs[0]["lane_jobs"]["creator"] = ["creator-web-serial"]
+        with self.assertRaisesRegex(scope.ScopeError, "drifts on current lane job.*creator"):
+            scope.parse_policy(*docs, historical=True)
+
+    def test_superseded_grouping_still_requires_every_other_self_hosted_job(self):
+        docs = self.single_creator_job_documents()
+        docs[0]["self_hosted_jobs"].remove("portal")
+        with self.assertRaisesRegex(scope.ScopeError, "missing current self-hosted job.*portal"):
+            scope.parse_policy(*docs, historical=True)
+
     def test_record_roundtrip(self):
         record = self.record(ai_labels=["test:creator"])
         self.assertEqual(scope.validate_record(record, self.policy, self.identity), record)
