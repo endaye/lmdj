@@ -6704,6 +6704,43 @@ void switch_publication_recomputes_after_audio_wins_the_q_to_a_handoff() {
   LMDJ_CHECK(f.engine.current_pattern_origin_frame() == pc.activation_frame);
 }
 
+// Audio closes Pattern admission for a few instructions on every callback, but
+// a preempted callback can hold it closed for milliseconds. A bounded spin
+// spent inside that window reports a stable owner as unavailable, which the
+// Web Control refused as tempo_clock_unavailable under host load.
+void transport_observation_waits_out_a_preempted_audio_claim() {
+  using namespace lmdj::audio;
+  PatternTransportFixture f;
+  f.apply(1, PatternTransportAction::start);
+  const auto before = f.engine.pattern_transport_observation();
+  LMDJ_CHECK(before && before->current_generation == f.generation);
+  PausedRealtimeHook audio_gate, control_gate;
+  testing::set_realtime_hook(testing::RealtimeHookPoint::pattern_admission_closed, &audio_gate.hook);
+  testing::set_realtime_hook(testing::RealtimeHookPoint::control_pattern_admission_retry, &control_gate.hook);
+  std::array<float, 1> left{}, right{};
+  std::thread audio([&] { f.engine.render(left.data(), right.data(), 1); });
+  audio_gate.wait();
+  std::atomic<bool> returned{false};
+  std::optional<PatternTransportObservation> observed;
+  std::thread control([&] {
+    observed = f.engine.pattern_transport_observation();
+    returned.store(true, std::memory_order_release);
+  });
+  while (!control_gate.entered.load(std::memory_order_acquire) &&
+         !returned.load(std::memory_order_acquire)) {
+    std::this_thread::yield();
+  }
+  const bool returned_inside_claim = returned.load(std::memory_order_acquire);
+  audio_gate.release();
+  audio.join();
+  control_gate.release();
+  control.join();
+  testing::set_realtime_hook(testing::RealtimeHookPoint::control_pattern_admission_retry, nullptr);
+  LMDJ_CHECK(!returned_inside_claim);
+  LMDJ_CHECK(observed && observed->current_generation == f.generation);
+  LMDJ_CHECK(!observed->pending_switches[0] && !observed->pending_switches[1]);
+}
+
 void unclaimed_switch_replacement_keeps_the_boundary_when_control_wins() {
   using namespace lmdj::audio;
   PatternTransportFixture f;
@@ -8777,6 +8814,7 @@ int main() {
   capture_handoff_exposes_origin_and_final_count_before_callback_return();
   render_and_adapter_status_finish_while_observer_holds_reader_lock();
   switch_publication_recomputes_after_audio_wins_the_q_to_a_handoff();
+  transport_observation_waits_out_a_preempted_audio_claim();
   unclaimed_switch_replacement_keeps_the_boundary_when_control_wins();
   admission_retry_recomputes_boundary_without_audio_waiting(false);
   admission_retry_recomputes_boundary_without_audio_waiting(true);

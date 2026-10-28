@@ -2584,7 +2584,16 @@ RealtimeEngine::current_pattern_id() const {
 std::optional<PatternTransportObservation>
 RealtimeEngine::pattern_transport_observation() const {
   for (unsigned attempt = 0; attempt != 8; ++attempt) {
-    if (pattern_claim_closed_.load(std::memory_order_seq_cst) != 0) continue;
+    while (pattern_claim_closed_.load(std::memory_order_seq_cst) != 0) {
+      // Control only, like publication: audio closes admission without
+      // waiting, so the window always reopens. A preempted callback can hold
+      // it for milliseconds; spending the bounded attempts inside it reports
+      // a stable owner as unavailable.
+#if defined(LMDJ_AUDIO_RUNTIME_TESTING) && LMDJ_AUDIO_RUNTIME_TESTING
+      testing::invoke_realtime_hook(
+          testing::RealtimeHookPoint::control_pattern_admission_retry);
+#endif
+    }
     const auto queued = queued_pattern_generation_.load(std::memory_order_acquire);
     const auto pending = audio_pending_pattern_generation_.load(std::memory_order_acquire);
     const auto current = current_pattern_slot_.load(std::memory_order_acquire);
