@@ -4,11 +4,12 @@
 `scripts/ci/release_freeze_check.py` reads the repository variable
 `LMDJ_RELEASE_FREEZE` (set by `scripts/release.sh run` for the request it
 drives, cleared when the request completes or is retired) and the PR's
-changed files from the frozen change-scope manifest. The defects these tests
-catch: passing a frozen PR while a request is active, failing a PR that
+changed files from the frozen change-scope manifest file. The defects these
+tests catch: passing a frozen PR while a request is active, failing a PR that
 touches nothing frozen, failing when no request is active, widening or
-narrowing the frozen path set silently, and treating an unreadable manifest
-as a pass (#2422 item 10, #2404 item 1).
+narrowing the frozen path set silently, treating an unreadable manifest as a
+pass (#2422 item 10, #2404 item 1), and losing a manifest larger than the
+128 KiB argv/env string limit (#2511).
 """
 
 from __future__ import annotations
@@ -17,6 +18,7 @@ import json
 from pathlib import Path
 import subprocess
 import sys
+import tempfile
 import unittest
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -34,8 +36,14 @@ def manifest(*paths: str) -> str:
 
 class ReleaseFreezeCheckTest(unittest.TestCase):
     def run_check(self, freeze: str, manifest_json: str) -> subprocess.CompletedProcess:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "pr-contract-manifest.json"
+            path.write_text(manifest_json, encoding="utf-8")
+            return self.run_check_file(freeze, str(path))
+
+    def run_check_file(self, freeze: str, path: str) -> subprocess.CompletedProcess:
         return subprocess.run(
-            [sys.executable, str(SCRIPT), "--freeze", freeze, "--manifest-json", manifest_json],
+            [sys.executable, str(SCRIPT), "--freeze", freeze, "--manifest-file", path],
             capture_output=True, text=True, check=False, timeout=30)
 
     def test_frozen_paths_are_the_ci_and_release_control_plane(self) -> None:
@@ -82,6 +90,24 @@ class ReleaseFreezeCheckTest(unittest.TestCase):
                 self.assertEqual(result.returncode, 1)
                 self.assertIn("why:", result.stderr)
                 self.assertIn("remedy:", result.stderr)
+
+    def test_a_missing_manifest_file_fails_closed_even_without_a_request(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            result = self.run_check_file("", str(Path(directory) / "absent.json"))
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("why: the change-scope manifest file", result.stderr)
+        self.assertIn("remedy:", result.stderr)
+
+    def test_a_manifest_beyond_the_argv_string_limit_is_read_whole(self) -> None:
+        # The PR #2511 manifest was 276 KB; Linux refuses one argv or env
+        # string above 128 KiB, so the check never ran. The frozen path sits
+        # last so only a complete read can find it.
+        paths = [f"apps/architecture-portal/versioned_docs/version-2.0.{n}.0/page.mdx" for n in range(4000)]
+        document = manifest(*paths, "tools/release/cli.py")
+        self.assertGreater(len(document.encode()), 256 * 1024)
+        result = self.run_check(REQUEST, document)
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("tools/release/cli.py", result.stderr)
 
 
 if __name__ == "__main__":

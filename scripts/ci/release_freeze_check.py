@@ -59,6 +59,16 @@ def changed_paths(manifest_json):
     return paths
 
 
+def read_manifest(path):
+    """The manifest text, read even when no request holds the freeze."""
+    try:
+        with open(path, encoding="utf-8") as manifest:
+            return manifest.read()
+    except (OSError, UnicodeDecodeError):
+        require(False, f"the change-scope manifest file {path} is unreadable",
+                "download the change-scope job's manifest artifact unchanged")
+
+
 def evaluate(freeze, manifest_json):
     """(ok, message). The message says who holds the freeze and what is frozen."""
     holder = (freeze or "").strip()
@@ -79,10 +89,11 @@ def evaluate(freeze, manifest_json):
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--freeze", required=True, help="the LMDJ_RELEASE_FREEZE repository variable (may be empty)")
-    parser.add_argument("--manifest-json", required=True, help="the change-scope manifest JSON")
+    parser.add_argument("--manifest-file", required=True,
+                        help="the change-scope manifest file; a large PR's manifest exceeds the argv/env limit")
     arguments = parser.parse_args(argv)
     try:
-        ok, message = evaluate(arguments.freeze, arguments.manifest_json)
+        ok, message = evaluate(arguments.freeze, read_manifest(arguments.manifest_file))
     except FreezeCheckError as error:
         print(str(error), file=sys.stderr)
         return 1

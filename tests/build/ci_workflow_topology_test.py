@@ -307,9 +307,26 @@ class CiWorkflowTopologyTest(unittest.TestCase):
         job = self.pr_contract_job("release-freeze")
         self.assertIn("name: Release freeze", job)
         self.assertIn("LMDJ_RELEASE_FREEZE: ${{ vars.LMDJ_RELEASE_FREEZE }}", job)
-        self.assertIn("MANIFEST: ${{ needs.change-scope.outputs.manifest }}", job)
         self.assertIn("python3 scripts/ci/release_freeze_check.py", job)
         self.assertIn("needs.change-scope.outputs.metadata-only != 'true'", job)
+
+    def test_pr_contract_release_freeze_reads_the_manifest_from_a_file(self) -> None:
+        # A large PR's manifest exceeds Linux's 128 KiB limit on one env or
+        # argv string, so the job output must not reach the check through
+        # either; the change-scope job's manifest file travels as an artifact
+        # of this run (#2511).
+        job = self.pr_contract_job("release-freeze")
+        self.assertNotIn("needs.change-scope.outputs.manifest", job)
+        self.assertNotIn("--manifest-json", job)
+        self.assertIn("uses: actions/download-artifact@v7", job)
+        self.assertIn("name: pr-contract-manifest-${{ github.run_id }}", job)
+        self.assertIn('--manifest-file "$RUNNER_TEMP/pr-contract-manifest/pr-contract-manifest.json"', job)
+        scope = self.pr_contract_job("change-scope")
+        self.assertIn('--manifest-out "$RUNNER_TEMP/pr-contract-manifest.json"', scope)
+        self.assertIn("uses: actions/upload-artifact@v6", scope)
+        self.assertIn("name: pr-contract-manifest-${{ github.run_id }}", scope)
+        self.assertIn("path: ${{ runner.temp }}/pr-contract-manifest.json", scope)
+        self.assertIn("if-no-files-found: error", scope)
 
     def test_pr_contract_selects_only_the_deterministic_floor(self) -> None:
         scope = self.pr_contract_job("change-scope")

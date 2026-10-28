@@ -90,6 +90,17 @@ jobs:
             --manifest-out "$RUNNER_TEMP/pr-contract-manifest.json" \
             --github-output "$GITHUB_OUTPUT" \
             --summary "$RUNNER_TEMP/pr-contract-scope.md"
+      # A large PR's manifest exceeds Linux's 128 KiB limit on one environment
+      # or argument string, so a consumer that needs the changed paths reads
+      # this file, never the job output through env or argv.
+      - name: Retain the frozen change-scope manifest
+        uses: actions/upload-artifact@v6
+        with:
+          name: pr-contract-manifest-${{ github.run_id }}
+          path: ${{ runner.temp }}/pr-contract-manifest.json
+          if-no-files-found: error
+          overwrite: true
+          retention-days: 1
 
   ci-contract:
     name: CI contract
@@ -181,13 +192,17 @@ jobs:
         env:
           EXPECTED_HEAD: ${{ needs.change-scope.outputs.head-sha }}
         run: test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+      - uses: actions/download-artifact@v7
+        with:
+          name: pr-contract-manifest-${{ github.run_id }}
+          path: ${{ runner.temp }}/pr-contract-manifest
       - name: Refuse frozen control-plane changes while a release request is active
         env:
           LMDJ_RELEASE_FREEZE: ${{ vars.LMDJ_RELEASE_FREEZE }}
-          MANIFEST: ${{ needs.change-scope.outputs.manifest }}
         run: |
           set -euo pipefail
-          python3 scripts/ci/release_freeze_check.py --freeze "$LMDJ_RELEASE_FREEZE" --manifest-json "$MANIFEST"
+          python3 scripts/ci/release_freeze_check.py --freeze "$LMDJ_RELEASE_FREEZE" \
+            --manifest-file "$RUNNER_TEMP/pr-contract-manifest/pr-contract-manifest.json"
 
   docs-static:
     name: Docs / static
