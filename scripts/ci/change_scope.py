@@ -57,10 +57,17 @@ _CANONICAL_LANE_JOBS = {
     # Routed by the static `ci-web-heavy` netcup role, so no runner selector
     # is a support job of this lane.
     "web_runtime_host": ("web-runtime-host",),
-    "creator": ("creator-web",),
+    "creator": ("creator-web", "creator-web-serial"),
     "web_runtime_lab": ("web-runtime-lab",),
     "deploy_contract": ("deploy-contract",),
     "package": ("package",),
+}
+# Exact job tuples a still-current lane carried before a reviewed regrouping.
+# Only historical replay accepts them, so a batch admitted under the earlier
+# grouping still authenticates while it drains; any other difference remains
+# drift. Add an entry in the same change that regroups the lane (#2507).
+_SUPERSEDED_LANE_JOBS = {
+    "creator": (("creator-web",),),
 }
 # The closed set of formal workload jobs a self-hosted role may execute.
 # Change Scope, the aggregate verdict, and the surviving macOS runner selector
@@ -69,7 +76,7 @@ _CANONICAL_LANE_JOBS = {
 _CANONICAL_SELF_HOSTED_JOBS = (
     "docs-static", "portal", "ci-contract", "core-ubuntu", "core-asan",
     "core-coverage", "web-toolchain-conformance", "web-runtime-host",
-    "creator-web", "web-runtime-lab", "deploy-contract",
+    "creator-web", "creator-web-serial", "web-runtime-lab", "deploy-contract",
     "package",
 )
 # The exact reason recorded on a `push` whose event-supplied base range cannot
@@ -179,8 +186,9 @@ def _validate_policy(policy: Mapping[str, object], *, historical: bool = False) 
     ``historical=True`` is only for replaying or authenticating trusted history:
     a policy recorded before a lane retirement is accepted when it is a superset
     of the current canonical lanes, with every still-current lane's jobs
-    unchanged. It never accepts a document missing or drifting on a current
-    lane; current admission (the default) keeps requiring the exact closed sets.
+    unchanged or equal to a grouping listed in ``_SUPERSEDED_LANE_JOBS``. It
+    never accepts a document missing or drifting on a current lane; current
+    admission (the default) keeps requiring the exact closed sets.
     """
     if set(policy) != _POLICY_KEYS:
         raise ValueError("policy schema is not closed")
@@ -210,7 +218,8 @@ def _validate_policy(policy: Mapping[str, object], *, historical: bool = False) 
                for lane, jobs in normalized_jobs.items()):
             raise ValueError("lane jobs do not match the closed v1 mapping")
         drifted = [lane for lane in _CANONICAL_LANES
-                   if normalized_jobs.get(lane) != _CANONICAL_LANE_JOBS[lane]]
+                   if normalized_jobs.get(lane) != _CANONICAL_LANE_JOBS[lane]
+                   and normalized_jobs.get(lane) not in _SUPERSEDED_LANE_JOBS.get(lane, ())]
         if drifted:
             raise ValueError("historical policy drifts on current lane job(s): " + ", ".join(drifted))
         orphaned = sorted(lane for lane in normalized_jobs if lane not in lane_set)
@@ -234,7 +243,11 @@ def _validate_policy(policy: Mapping[str, object], *, historical: bool = False) 
             + ", ".join(non_formal)
         )
     if historical:
-        missing_hosted = sorted(set(_CANONICAL_SELF_HOSTED_JOBS) - set(self_hosted))
+        # A superseded grouping predates the jobs its regrouping introduced.
+        introduced = {job for lane, jobs in _CANONICAL_LANE_JOBS.items()
+                      if normalized_jobs.get(lane) in _SUPERSEDED_LANE_JOBS.get(lane, ())
+                      for job in jobs if job not in normalized_jobs[lane]}
+        missing_hosted = sorted(set(_CANONICAL_SELF_HOSTED_JOBS) - set(self_hosted) - introduced)
         if missing_hosted:
             raise ValueError(
                 "historical policy is missing current self-hosted job(s): "
