@@ -4884,6 +4884,14 @@ void ProjectStore::enable_replay_prefix_cache() {
   if (!replay_cache_) replay_cache_ = std::make_shared<ReplayPrefixCache>();
 }
 
+std::shared_ptr<ReplayPrefixCache> ProjectStore::replay_prefix_cache() const {
+  return replay_cache_;
+}
+
+void ProjectStore::share_replay_prefix_cache(std::shared_ptr<ReplayPrefixCache> cache) {
+  replay_cache_ = std::move(cache);
+}
+
 ProjectStore::ProjectStore()
     : ProjectStore(make_default_project_storage_platform()) {}
 

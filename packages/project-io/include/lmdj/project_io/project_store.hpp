@@ -225,10 +225,17 @@ class ProjectStore {
   // back to a full replay. The head checkpoint is still compared with the
   // replayed state, and Asset bytes are still verified. Enable it only on
   // a store owned by an active recording session (its IO owner) or on the
-  // Web control runtime's Application store (Owner decision 2026-10-30,
-  // #2518); every other store, and every new process, keeps replaying the
-  // full history.
+  // Web control runtime's Application store and the post-close preparation
+  // stores that share its cache (Owner decision 2026-10-30, #2518); every
+  // other store, and every new process, keeps replaying the full history.
   void enable_replay_prefix_cache();
+  // This store's replay prefix cache, or null when it is not enabled.
+  std::shared_ptr<ReplayPrefixCache> replay_prefix_cache() const;
+  // Uses `cache` (null leaves the store uncached) as this store's replay
+  // prefix cache, so a store another thread creates for the same Host
+  // continues from history its owner already replayed (#2518). The cache
+  // serializes its own access.
+  void share_replay_prefix_cache(std::shared_ptr<ReplayPrefixCache> cache);
 
 
   struct ImportArtifactRequest {
