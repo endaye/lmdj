@@ -12098,9 +12098,13 @@ Application::prepare_runtime_snapshot(
 }
 
 RuntimeSnapshotPreparer Application::make_runtime_snapshot_preparer() const {
-  // Capture only the platform, never Application, its mutable authoring
-  // history, session registries or a writer lease acquired on Control.
-  return [platform = impl_->storage_platform](const RuntimeSnapshotRequest& requested)
+  // Capture only the platform and the store's replay prefix cache (null when
+  // not enabled), never Application, its mutable authoring history, session
+  // registries or a writer lease acquired on Control. The shared cache lets
+  // post-close preparation continue from history Control already replayed
+  // (#2518).
+  return [platform = impl_->storage_platform,
+          replay_cache = impl_->projects.replay_prefix_cache()](const RuntimeSnapshotRequest& requested)
       -> foundation::Result<std::shared_ptr<const cooker::RuntimeSnapshot>> {
     using Result = foundation::Result<std::shared_ptr<const cooker::RuntimeSnapshot>>;
     try {
@@ -12111,6 +12115,7 @@ RuntimeSnapshotPreparer Application::make_runtime_snapshot_preparer() const {
                                 "runtime snapshot request is invalid"});
       }
       project_io::ProjectStore projects{platform};
+      projects.share_replay_prefix_cache(replay_cache);
       auto loaded = projects.inspect_committed(request.project_path, true);
       if (!loaded.has_value()) return Result::failure(loaded.error());
       auto cooked = Impl::cook_project_from_store(projects, request.project_path,

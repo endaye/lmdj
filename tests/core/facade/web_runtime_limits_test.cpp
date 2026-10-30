@@ -15,6 +15,7 @@
 #include <iostream>
 #include <iterator>
 #include <memory>
+#include <optional>
 #include <span>
 #include <stdexcept>
 #include <string>
@@ -1198,6 +1199,36 @@ void test_detached_preparation_outlives_application() {
   LMDJ_CHECK(prepared.value()->pads.front().sample->interleaved.size() == 480);
 }
 
+// Post-close preparation runs on a worker with its own store and loaded the
+// Project twice from checkpoint zero, holding the count-in consume past its
+// 1 s window (#2422). With the Application's replay prefix cache on, the
+// preparer shares it: a transaction the Application already replayed,
+// rewritten in place, is not re-read, while an Application without the cache
+// still replays it and refuses.
+void test_detached_preparation_shares_the_application_replay_prefix() {
+  TempDirectory temp;
+  auto cached_config = config(temp.path());
+  cached_config.project_replay_prefix_cache = true;
+  Application application(std::move(cached_config));
+  const auto path = temp.path() / "shared-prefix.lmdj";
+  const auto pattern = uuid(703);
+  create_single_asset_project(application, path, mono_pcm16_wav(480),
+      700, uuid(704), pattern);
+  LMDJ_CHECK(application.inspect_sample({path, PadSlotId{0, 0}}).has_value());
+  std::optional<std::filesystem::path> first;
+  for (const auto& entry : std::filesystem::directory_iterator(path / "history/transactions")) {
+    if (entry.path().filename().string().starts_with("1-")) first = entry.path();
+  }
+  LMDJ_CHECK(first.has_value());
+  { std::ofstream rewritten(*first, std::ios::binary | std::ios::trunc); rewritten << "{}"; }
+  const RuntimeSnapshotRequest request{path, PatternId{pattern}};
+  const auto shared = application.make_runtime_snapshot_preparer()(request);
+  LMDJ_CHECK(shared.has_value() && shared.value()->project_revision == 3);
+  Application plain(config(temp.path()));
+  const auto full = plain.make_runtime_snapshot_preparer()(request);
+  LMDJ_CHECK(!full.has_value() && full.error().code == ErrorCode::invalid_project);
+}
+
 void test_detached_preparation_verifies_unassigned_asset_bytes() {
   // Cooker only resolves assigned Pads: shared cooking could let both routes
   // agree while missing corrupt retained Assets. Reject these actual bytes
@@ -1234,6 +1265,7 @@ int main() {
     test_web_runtime_limits_keep_oversized_projects_inspectable_and_prior_bank();
     test_web_runtime_limits_keep_oversized_projects_inspectable_and_prior_bank(true);
     test_detached_preparation_outlives_application();
+    test_detached_preparation_shares_the_application_replay_prefix();
     test_detached_preparation_verifies_unassigned_asset_bytes();
   } catch (const std::exception& error) {
     std::cerr << error.what() << '\n';

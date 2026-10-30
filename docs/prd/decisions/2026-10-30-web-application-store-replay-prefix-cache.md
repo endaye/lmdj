@@ -23,3 +23,18 @@
   Creator 输入路径；不改任何超时或预算；native/CLI Host 不启用。
 - 影响：`ApplicationConfig` 末尾新增 `project_replay_prefix_cache`（默认 false）；
   `ControlRuntime` 构造时打开；Project I/O portal 页记录该范围。
+
+## 补充：录音结束后的 Runtime 准备共享同一缓存（同日）
+
+- 关联：[#2422](https://github.com/endaye/lmdj/issues/2422)。Owner 于 2026-10-30 在会话中
+  选择“共享重放缓存”，未选择“只在准备内部去重”。
+- 结论：Application 打开 `project_replay_prefix_cache` 时，`make_runtime_snapshot_preparer`
+  返回的分离式准备器捕获 Application store 的缓存句柄（`ProjectStore::replay_prefix_cache`），
+  它在 worker 上新建的 store 通过 `ProjectStore::share_replay_prefix_cache` 共享这份缓存；
+  缓存自带互斥锁。未打开时句柄为空，准备器照旧完整重放。准备器仍不捕获 Application、
+  authoring history、会话登记或 writer lease。
+- 原因：录音关闭后，Host 在 worker 上准备新的 Runtime 视图，期间 `publish_pending` 挡住
+  count-in ticket 的消费。空闲 M1 上该准备耗时 350–650 ms，其中两次从 checkpoint 0 的完整
+  重放占 85–90%（各 150–300 ms），cook 只占 40–70 ms，使 COUNT-IN 录音切换 journey 越过
+  1 秒消费窗口。
+- 接受的取舍、非目标：与上文相同；不改任何超时或预算。

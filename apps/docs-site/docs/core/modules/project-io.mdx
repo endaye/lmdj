@@ -245,6 +245,8 @@ checkpoint 比对通过的重放结果；之后的 load 只要 manifest 的交�
   Application store 打开缓存（`ApplicationConfig::project_replay_prefix_cache`，Owner
   决策 2026-10-30，[#2518](https://github.com/endaye/lmdj/issues/2518)）：每次 pad
   press 先走 `sample.inspect`，此前它每次都从 checkpoint 0 重放录音中不断增长的历史。
+  录音结束后在 worker 上做 Runtime 准备的 store 通过 `ProjectStore::share_replay_prefix_cache`
+  共享同一份缓存（缓存自带互斥锁），不再为每次准备两次完整重放。
   其他 Host 的 store 和每次进程启动仍完整重放。
 
 ### Real OPFS evidence and remaining gaps
