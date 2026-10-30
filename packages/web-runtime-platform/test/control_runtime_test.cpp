@@ -1501,6 +1501,34 @@ void test_assignment_history_restores_whole_truth_pcm_and_reopens() {
   check_success(fixture.runtime->dispatch("audio.suspend", Json::object(), {}));
 }
 
+// Every pad press asks `sample.inspect`, which loaded the Project by replaying
+// its whole history; a recording session grows that history with every flush
+// (#2504). The runtime's own store replays only what was appended since its
+// last verified load, so a transaction it already replayed, rewritten in
+// place, is not re-read, while a store without the cache (and so every new
+// process) still replays it and sees the damage.
+void test_sample_inspect_replays_only_history_appended_since_its_last_load() {
+  RetainedAssignmentFixture fixture;
+  const auto bundle = fixture.temp.path() / "projects" /
+                      (std::string(kProjectId) + ".lmdj");
+  const auto before = check_locked_success_result(fixture.runtime->dispatch(
+      "sample.inspect", {{"slot", slot(0, 1)}}, {}));
+  std::optional<std::filesystem::path> first;
+  for (const auto& entry : std::filesystem::directory_iterator(
+           bundle / "history/transactions")) {
+    if (entry.path().filename().string().starts_with("1-")) first = entry.path();
+  }
+  LMDJ_CHECK(first.has_value());
+  const std::string garbage = "{}";
+  LMDJ_CHECK(fixture.storage_platform->replace_complete(*first,
+      std::as_bytes(std::span{garbage.data(), garbage.size()})).has_value());
+  const auto trusted = check_locked_success_result(fixture.runtime->dispatch(
+      "sample.inspect", {{"slot", slot(0, 1)}}, {}));
+  LMDJ_CHECK(trusted == before);
+  lmdj::project_io::ProjectStore plain{fixture.storage_platform};
+  LMDJ_CHECK(!plain.load(bundle).has_value());  // a full replay sees the damage
+}
+
 void test_same_asset_assignment_retains_destination_playback() {
   RetainedAssignmentFixture fixture;
   const auto before = fixture.truth();
@@ -15138,6 +15166,7 @@ void run_recording_owners_shard() {
 void run_assignment_shard() {
   test_retained_asset_assignment_replaces_the_destination_pcm();
   test_assignment_history_restores_whole_truth_pcm_and_reopens();
+  test_sample_inspect_replays_only_history_appended_since_its_last_load();
   test_same_asset_assignment_retains_destination_playback();
   test_assignment_d16_and_native_null_preserve_materials();
   test_assignment_replay_after_later_edit_publishes_current_truth();
@@ -15366,7 +15395,7 @@ struct Shard {
 // registrations in step.
 constexpr std::array<Shard, 7> kShards{{
     {"recording-owners", 35, run_recording_owners_shard},
-    {"assignment", 30, run_assignment_shard},
+    {"assignment", 31, run_assignment_shard},
     {"project-sequence", 37, run_project_sequence_shard},
     {"pattern-edit", 28, run_pattern_edit_shard},
     {"sample-audio", 31, run_sample_audio_shard},

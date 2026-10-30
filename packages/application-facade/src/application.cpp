@@ -2545,6 +2545,9 @@ struct Application::Impl {
     if (!workspace_root.is_absolute()) {
       throw std::invalid_argument("workspace_root must be absolute");
     }
+    if (config.project_replay_prefix_cache) {
+      projects.enable_replay_prefix_cache();
+    }
     if (!performance_replay_controller) {
       throw std::invalid_argument(
           "performance_replay_controller is required");

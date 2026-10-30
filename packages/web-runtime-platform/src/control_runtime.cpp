@@ -2138,6 +2138,9 @@ struct ControlRuntime::Impl {
     // W1: the typed live-control port reaches the Facade; epoch binding and
     // stale rejection stay Core-side.
     config.performance_live_control = std::move(adapter.live_control);
+    // Every pad press asks `sample.inspect`, and a recording grows the
+    // history each load replayed from checkpoint zero (#2504).
+    config.project_replay_prefix_cache = true;
     service = std::move(adapter.service);
     return facade::Application(std::move(config));
   }
