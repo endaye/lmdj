@@ -19,5 +19,7 @@
 - 接受的取舍：同一进程内被原地破坏的旧交易文件不再被后续 load 发现；下一个进程仍会
   完整重放并发现它。字节比对（选项 B）保留这一检测但只省约一半开销，未采用。
 - 非目标：不改 Project Bundle Contract、交易格式或 manifest；不对普通编辑会话启用。
+  2026-10-30 起 Web control runtime 的 Application store 也启用，见
+  [2026-10-30 决策](2026-10-30-web-application-store-replay-prefix-cache.md)。
 - 影响：`ProjectStore::enable_replay_prefix_cache`（Project I/O 新公开方法）、
   `PatternTransportIoOwner` 在构造时启用；Project I/O portal 页记录该行为。

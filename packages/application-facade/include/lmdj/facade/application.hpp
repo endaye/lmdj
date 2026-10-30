@@ -199,6 +199,12 @@ struct ApplicationConfig {
   // applied live state. Appended last per the positional-init rule above.
   std::shared_ptr<PerformanceLiveControlSink> performance_live_control =
       nullptr;
+  // Lets this Application's Project store start later loads from history it
+  // already replayed (ProjectStore::enable_replay_prefix_cache, #2504). Off
+  // by default; the Web control runtime turns it on so every pad press's
+  // `sample.inspect` stops replaying a recording's whole history. Appended
+  // last per the positional-init rule above.
+  bool project_replay_prefix_cache = false;
 };
 
 struct RuntimeSnapshotRequest {

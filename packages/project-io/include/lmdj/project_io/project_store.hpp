@@ -224,8 +224,10 @@ class ProjectStore {
   // than re-read; any other manifest change, and every failed load, falls
   // back to a full replay. The head checkpoint is still compared with the
   // replayed state, and Asset bytes are still verified. Enable it only on
-  // a store owned by an active recording session (its IO owner); every
-  // other store, and every new process, keeps replaying the full history.
+  // a store owned by an active recording session (its IO owner) or on the
+  // Web control runtime's Application store (Owner decision 2026-10-30,
+  // #2518); every other store, and every new process, keeps replaying the
+  // full history.
   void enable_replay_prefix_cache();
 
 
