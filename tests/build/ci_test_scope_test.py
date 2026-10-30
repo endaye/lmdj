@@ -247,6 +247,21 @@ class ScopeTests(unittest.TestCase):
         self.assertEqual(historical.digest,
                          self_test.digest_of({"routing": docs[0], "inventory": docs[1], "scope": docs[2]}))
 
+    def test_interval_selection_classifies_under_the_superseded_creator_job(self):
+        """The next batch's interval selects under every policy it crosses; a
+        strict re-check of the frozen single-job policy stopped every
+        controller tick for 45 hours after #2514."""
+        historical = scope.parse_policy(*self.single_creator_job_documents(), historical=True)
+        selection = scope.select_across_policies(
+            ["packages/audio-runtime/src/realtime_engine.cpp"], [self.policy, historical])
+        self.assertEqual(selection, scope.select(self.policy, ["packages/audio-runtime/src/realtime_engine.cpp"]))
+
+    def test_current_selection_still_rejects_the_superseded_creator_grouping(self):
+        docs = self.single_creator_job_documents()
+        policy = scope.ScopePolicy(docs[0], self_test.parse_policy(docs[1]), docs[2], "0" * 64)
+        with self.assertRaisesRegex(scope.ScopeError, "closed v1 mapping"):
+            scope.select(policy, ["packages/audio-runtime/src/realtime_engine.cpp"])
+
     def test_current_admission_rejects_the_superseded_creator_grouping(self):
         docs = self.single_creator_job_documents()
         with self.assertRaisesRegex(scope.ScopeError, "closed v1 mapping"):

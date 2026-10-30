@@ -8,7 +8,7 @@ No PR text, model output, Git code, or shell command from a record is executed.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import json
 from pathlib import Path
 import re
@@ -59,6 +59,10 @@ class ScopePolicy:
     inventory: self_test.Policy
     config: dict
     digest: str
+    # Set only by parse_policy(historical=True). It does not enter the digest
+    # or equality: it records which validation the snapshot passed, so
+    # selection re-checks it in that same mode.
+    historical: bool = field(default=False, compare=False)
 
     @property
     def suite_ids(self):
@@ -107,7 +111,8 @@ def parse_policy(routing, inventory, config, *, historical=False):
                 "dependency references an unknown suite")
         require(len(targets) == len(set(targets)), "duplicate dependency")
     return ScopePolicy(routing, inventory_policy, config,
-                       self_test.digest_of({"routing": routing, "inventory": inventory, "scope": config}))
+                       self_test.digest_of({"routing": routing, "inventory": inventory, "scope": config}),
+                       historical)
 
 
 def load_policy(root):
@@ -239,7 +244,8 @@ def select(policy, paths, ai_labels=(), complete=True):
     if active:
         try:
             manifest = change_scope.classify(policy.routing, active, base_sha="0" * 40,
-                                            head_sha="1" * 40, event_name="push", draft=False, labels=[])
+                                            head_sha="1" * 40, event_name="push", draft=False, labels=[],
+                                            historical=policy.historical)
         except ValueError as error:
             raise ScopeError(f"why: classification failed: {error}; remedy: restore canonical routing inputs") from error
         if manifest["mode"] == "full":
