@@ -479,6 +479,7 @@ def classify(
     trusted_head: bool = True, unverifiable_base: str | None = None,
     policy_edit_preserving: bool = False,
     self_test_skip: str | None = None,
+    historical: bool = False,
 ) -> dict[str, object]:
     """Return a deterministic closed v2 scope manifest as a dictionary.
 
@@ -501,8 +502,11 @@ def classify(
     base is an untrusted event field rather than a resolved Pull Request base,
     and it forces full with no path inventory at all: an unverifiable range is
     never used to guess which lanes a change owns.
+
+    ``historical`` selects under a trusted policy snapshot that was itself
+    parsed for replay (see :func:`_validate_policy`); admission never sets it.
     """
-    _validate_policy(policy)
+    _validate_policy(policy, historical=historical)
     if not isinstance(trusted_head, bool):
         raise ValueError("trusted head must be a boolean")
     if unverifiable_base is not None:

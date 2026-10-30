@@ -12,6 +12,9 @@ recurrences:
   - date: 2026-10-26
     occurrence: https://github.com/endaye/lmdj/pull/2510
     observed_by: Claude Opus 5.5
+  - date: 2026-10-30
+    occurrence: https://github.com/endaye/lmdj/issues/2516
+    observed_by: Claude Opus 5.5
 exit: gate:tests/build/ci_test_scope_test.py
 ---
 
@@ -56,3 +59,11 @@ the self-hosted jobs only the regrouping introduced, and still rejects any
 other grouping. `tests/build/ci_test_scope_test.py` pins both directions.
 Before merging a change to `lane_jobs`, also replay the policies recorded
 at recent `main` revisions with `test_scope.parse_policy(..., historical=True)`.
+
+Parsing is not the last layer. #2514 made those policies parse, but the
+next batch's interval selection classified paths under each of them, and
+`change_scope.classify` re-validated the routing strictly: every tick
+failed again for about 45 hours (#2516). A `ScopePolicy` now carries the
+mode it was parsed in and `select` classifies in that mode. The replay
+check before such a merge therefore runs `test_scope.select_across_policies`
+over the policies a pending interval crosses, not only `parse_policy`.
