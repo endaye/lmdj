@@ -840,7 +840,9 @@ Project publication releases eligibility and permits a later durable discard.
 `facade.candidate_store_recovery` checks interruption before/after lifecycle
 replacement, terminal retention, restart and the actual adoption interleavings.
 `facade.candidate_store_stress` repeats synchronized independent-process ownership,
-cancel, discard and retry/adoption cases 100 times. The test fence releases the
+cancel, discard and retry/adoption cases 100 times. The iterations share no
+state, so they run as slices in parallel child processes, and any worker that
+fails, is signalled or cannot start fails the registration (#2306). The test fence releases the
 real Project input-reader lease before pausing the Provider, preserving the lock
 behavior exercised by the product. Every completed adoption is reopened with its
 full Artifact identity, retained source and terminal-derived lineage.

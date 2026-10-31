@@ -9,6 +9,7 @@
 #include <span>
 #include <string>
 #include <vector>
+#include <unistd.h>
 
 #include <lmdj/facade/application.hpp>
 #include <lmdj/facade/assembly_loader.hpp>
@@ -116,8 +117,10 @@ class ObservedStorage final : public ProjectStoragePlatform {
 };
 
 struct Fixture {
+  // The process id keeps parallel stress workers from sharing one workspace.
   std::filesystem::path root = std::filesystem::temp_directory_path() /
-      ("lmdj-facade-owner-" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+      ("lmdj-facade-owner-" + std::to_string(::getpid()) + "-" +
+       std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
   std::filesystem::path project = root / "source.lmdj";
   std::shared_ptr<ObservedStorage> storage = std::make_shared<ObservedStorage>();
   std::unique_ptr<lmdj::facade::Application> app;

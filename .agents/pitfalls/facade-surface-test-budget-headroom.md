@@ -42,6 +42,9 @@ recurrences:
   - date: 2026-10-26
     occurrence: https://github.com/endaye/lmdj/actions/runs/40120366652
     observed_by: Claude Code (Opus 5.5)
+  - date: 2026-10-31
+    occurrence: https://github.com/endaye/lmdj/actions/runs/41027926505
+    observed_by: Claude Code (Opus 5.5)
 exit: none
 escalation: https://github.com/endaye/lmdj/issues/657
 ---
@@ -158,6 +161,15 @@ the reduced worker count, so do not run local heavy work while it serves a
 batch.
 Before adding a stress registration, multiply its Release time by twenty and
 measure it under TSan.
+The M1 `macOS gates (primary)` job crossed its 40-minute limit on two
+consecutive main batches (41005326341, 41027926505) with every test passing:
+its native ASan CTest runs one test at a time and took 1999 s, of which
+`facade.candidate_store_stress` took 405 s running 100 independent iterations
+in sequence. Its iterations synchronize through pipes and exit codes and hold
+no wall-clock deadline, so #2306 runs them as parallel slices (81 s on the
+M1). `facade.pattern_count_in_stress` does not scale the same way: on the M1
+its rounds stop gaining at about four workers, because the 1024-input journey
+is bound by the per-input durable path walk and Journal reread (#2284).
 
 Do not read a quiet `tests/quality/test_budget_report.py` as headroom. On
 2026-10-14 a Linux coverage run of unmodified `main` timed out

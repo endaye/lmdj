@@ -2,6 +2,13 @@
 #include <lmdj/project_io/project_store.hpp>
 #include <lmdj/foundation/artifact.hpp>
 #include "tests/core/facade/candidate_fixture.hpp"
+#include "tests/core/support/child_process.hpp"
+
+#include <algorithm>
+#include <cerrno>
+#include <optional>
+#include <thread>
+#include <utility>
 
 #include <spawn.h>
 #include <sys/wait.h>
@@ -496,6 +503,80 @@ void live_job_is_not_recovered_or_reentered() {
   LMDJ_CHECK(f.snapshot() == truth);
 }
 
+// --stress repeats the process race family kStressIterations times. Each
+// iteration builds its own Fixtures, workspaces and spawned roles, so
+// iterations share no state and run in parallel child processes. In sequence
+// they cost ~58 s Release, ~405 s ASan on the M1 and ~500 s TSan, and kept the
+// macOS gates job past its 40-minute limit (#2306).
+constexpr unsigned kStressIterations = 100;
+struct Iterations { unsigned first; unsigned last; };
+constexpr std::string_view kIterationsFlag{"--stress-iterations="};
+std::optional<Iterations> parse_iterations(std::string_view text) {
+  const auto dash = text.find('-');
+  if (dash == std::string_view::npos) return std::nullopt;
+  try {
+    const auto first = std::stoul(std::string{text.substr(0, dash)});
+    const auto last = std::stoul(std::string{text.substr(dash + 1)});
+    if (first < 1 || first > last || last > kStressIterations) return std::nullopt;
+    return Iterations{static_cast<unsigned>(first), static_cast<unsigned>(last)};
+  } catch (const std::exception&) {
+    return std::nullopt;
+  }
+}
+unsigned run_iterations(Iterations iterations) {
+  unsigned executed{};
+  for (unsigned iteration = iterations.first; iteration <= iterations.last; ++iteration) {
+    live_job_is_not_recovered_or_reentered();
+    cancellation_wins_over_live_success(); cross_process_eligibility_exclusion();
+    adoption_excludes_discard_until_commit();
+    retry_finishes_during_adoption(false); retry_finishes_during_adoption(true);
+    ++executed;
+  }
+  return executed;
+}
+// Every iteration must run and pass in some worker: a worker that exits
+// nonzero, is signalled or cannot be started fails the whole registration.
+bool run_iterations_in_workers() {
+  // No more workers than iterations, so every slice is non-empty. The slices
+  // are checked to partition 1..kStressIterations before any worker starts.
+  const auto workers = std::min(std::clamp(std::thread::hardware_concurrency(), 1U, 8U), kStressIterations);
+  std::vector<Iterations> slices;
+  for (unsigned worker = 0; worker != workers; ++worker)
+    slices.push_back({worker * kStressIterations / workers + 1, (worker + 1) * kStressIterations / workers});
+  unsigned next = 1;
+  for (const auto& slice : slices) {
+    LMDJ_CHECK(slice.first == next && slice.first <= slice.last);
+    next = slice.last + 1;
+  }
+  LMDJ_CHECK(next == kStressIterations + 1);
+  std::vector<std::pair<Iterations, pid_t>> children;
+  bool passed = true;
+  for (const auto& iterations : slices) {
+    try {
+      children.emplace_back(iterations, lmdj::test::process::spawn(
+          {std::string{kIterationsFlag} + std::to_string(iterations.first) + "-" + std::to_string(iterations.last)}));
+    } catch (const std::exception& e) {
+      std::cerr << "stress iterations " << iterations.first << '-' << iterations.last
+                << " could not start: " << e.what() << '\n';
+      passed = false;
+      break;  // The verdict is already failed: start no more, reap the rest.
+    }
+  }
+  for (const auto& [iterations, child] : children) {
+    int status{};
+    pid_t reaped{};
+    do { reaped = ::waitpid(child, &status, 0); } while (reaped == -1 && errno == EINTR);
+    if (reaped != child || !WIFEXITED(status) || WEXITSTATUS(status) != 0) {
+      std::cerr << "stress iterations " << iterations.first << '-' << iterations.last << " failed: "
+                << (reaped != child ? "not reaped"
+                    : WIFSIGNALED(status) ? "signal " + std::to_string(WTERMSIG(status))
+                    : "exit " + std::to_string(WEXITSTATUS(status))) << '\n';
+      passed = false;
+    }
+  }
+  return passed;
+}
+
 }
 int main(int argc, char** argv) {
   try {
@@ -507,14 +588,18 @@ int main(int argc, char** argv) {
       run_child(argv[2], f, Json::parse(argv[4]), ready, resume);
       return 99;
     }
+    // Internal worker mode for --stress only: it runs a slice of the
+    // iterations. It is deliberately absent from the CTest registrations.
+    if (argc == 2 && std::string_view(argv[1]).starts_with(kIterationsFlag)) {
+      const auto iterations = parse_iterations(std::string_view(argv[1]).substr(kIterationsFlag.size()));
+      if (!iterations) { std::cerr << "invalid --stress-iterations range\n"; return 2; }
+      LMDJ_CHECK(run_iterations(*iterations) == iterations->last - iterations->first + 1);
+      return 0;
+    }
     if (argc == 2 && std::string_view(argv[1]) == "--stress") {
-      for (int iteration = 0; iteration < 100; ++iteration) {
-        live_job_is_not_recovered_or_reentered();
-        cancellation_wins_over_live_success(); cross_process_eligibility_exclusion();
-        adoption_excludes_discard_until_commit();
-        retry_finishes_during_adoption(false); retry_finishes_during_adoption(true);
-      }
-      std::cout << "candidate process stress: PASS\n"; return 0;
+      lmdj::test::process::initialize(argv[0]);
+      if (!run_iterations_in_workers()) return 1;
+      std::cout << "candidate process stress: " << kStressIterations << " iterations PASS\n"; return 0;
     }
     LMDJ_CHECK(argc == 1);
     adoption_excludes_discard_until_commit();

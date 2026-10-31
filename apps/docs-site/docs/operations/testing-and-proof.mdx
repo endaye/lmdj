@@ -571,7 +571,9 @@ ASan `full` 通过 262/262 用时 1145.7 秒，其后串行 `stress` 层还需�
 （`facade.candidate_store_stress` 580.8 秒、`facade.pattern_count_in_stress` 201.8 秒），
 连同构建约 42 分钟，自 2026-10-15 06:46Z 起每个 main 批次都在 35 分钟处被取消。
 该上限同为 hang 检测而非目标；缩短 `facade.candidate_store_stress` 的 ASan 用时且不削弱其覆盖
-由 [#2306](https://github.com/endaye/lmdj/issues/2306) 跟进。
+由 [#2306](https://github.com/endaye/lmdj/issues/2306) 跟进：它的 100 次迭代互不共享状态，
+现分片在并行子进程中运行，迭代与断言不变；M1 上 ASan 用时从 CI 的 405 秒降至约 81 秒，
+Release 从 43 秒降至约 20 秒。
 浏览器调用各自保留独立的结果目录，覆盖同一份 Git tracked spec 清单。最后一腿以
 `creator-deployment` project 对同一份隔离 dist 运行 deployment journey（冻结 fixture
 导入、手势激活、System 报告导出、Sample 替换、Sequence 就绪与 durable reload）：
