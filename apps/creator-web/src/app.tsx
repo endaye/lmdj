@@ -615,6 +615,8 @@ function Workspace({
     (assignmentSettling && assignmentAttempt?.session === session);
   const assignmentTail = useRef<Promise<void> | null>(null);
   const sequenceAuthoringTail = useRef<Promise<void>>(Promise.resolve());
+  // Sequence settings edits whose commit or follow-up refresh is unfinished (#2522).
+  const [sequenceSettingsInFlight, setSequenceSettingsInFlight] = useState(0);
   const sequenceAuthoringRevision = useRef(0);
   const sequenceAuthoringProjectId = useRef<string | null>(null);
   // The Sequence status object current when the open Project last changed.
@@ -2642,6 +2644,10 @@ function Workspace({
     quantizeEnabled?: boolean;
     swingPercent?: number;
   }>): Promise<void> => {
+    // #2522: Pattern selection stays locked from this request until its
+    // follow-up refresh settles; that refresh locks it again only after the
+    // commit, and a picker opened in between would be closed under the user.
+    setSequenceSettingsInFlight((count) => count + 1);
     const operation = sequenceAuthoringTail.current.then(async () => {
       const project = stateRef.current.project.current;
       const currentSequence = sequenceRef.current;
@@ -2682,7 +2688,8 @@ function Workspace({
         swingPercent: result.swingPercent,
       });
       await refreshSequence();
-    }).catch((error) => sequenceFailure("Update Sequence settings", error));
+    }).catch((error) => sequenceFailure("Update Sequence settings", error))
+      .finally(() => setSequenceSettingsInFlight((count) => count - 1));
     sequenceAuthoringTail.current = operation;
     return operation;
   };
@@ -3034,8 +3041,17 @@ function Workspace({
     state.runtime.phase !== "ready" || state.projectProjectionRefresh !== null ||
     state.transfer.phase !== "idle";
   const sequenceSettingsLocked = countIn.active || recording || sequenceWorkspaceLocked;
-  const patternSelectionLocked = countInLocksPatternSelection(countIn) || sequenceWorkspaceLocked ||
-    transport.status?.phase === "error" || transport.lastFailed !== null;
+  const patternSelectionLockReason = countInLocksPatternSelection(countIn) ? "count-in"
+    : transportBusy ? "transport"
+    : sequenceSettingsInFlight > 0 ? "sequence-settings"
+    : state.project.phase !== "ready" ? "project"
+    : state.runtime.phase !== "ready" ? "runtime"
+    : state.projectProjectionRefresh !== null ? "projection-refresh"
+    : state.transfer.phase !== "idle" ? "transfer"
+    : transport.status?.phase === "error" ? "transport-error"
+    : transport.lastFailed !== null ? "transport-failed"
+    : null;
+  const patternSelectionLocked = patternSelectionLockReason !== null;
   // Core refuses a Pad colour change while recording or while the transport
   // settles; playing is fine. A pending Project change would leave the
   // controls naming a stale revision.
@@ -3612,6 +3628,7 @@ function Workspace({
                 countInLocked={countIn.active}
                 onToggleMetronome={onToggleMetronome}
                 patternSelectionLocked={patternSelectionLocked}
+                patternSelectionLockReason={patternSelectionLockReason}
                 seqSnap={seqSnap}
                 onSeqSnapChange={onSeqSnapChange}
                 onRefresh={() => {

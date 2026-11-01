@@ -595,6 +595,25 @@ test("the Pattern picker stays available while playing and recording, but closes
   expect(picker.hasAttribute("disabled")).toBe(true);
 });
 
+// #2522: a selection lock closes the picker; the selector names its reason
+// so a journey can wait for the lock it caused to end before opening it.
+test("the Pattern selector names the reason its selection is locked", () => {
+  const view = renderSurface(false, {transport: transportStatus({playing: true})});
+  const selector = screen.getByTestId("sequence-pattern");
+  expect(selector.getAttribute("data-selection-lock")).toBe("none");
+  view.update({transport: transportStatus({phase: "preparing"})});
+  expect(selector.getAttribute("data-selection-lock")).toBe("transport");
+  view.update({transport: transportStatus({playing: true}), settingsActive: false});
+  expect(selector.getAttribute("data-selection-lock")).toBe("system");
+  view.update({transport: transportStatus({playing: true}), settingsActive: true,
+    patternSelectionLocked: true, patternSelectionLockReason: "projection-refresh"});
+  expect(selector.getAttribute("data-selection-lock")).toBe("projection-refresh");
+  expect(screen.getByRole("button", {name: "Choose Pattern"}).hasAttribute("disabled")).toBe(true);
+  view.update({transport: transportStatus({playing: true}), patternSelectionLocked: false,
+    patternSelectionLockReason: null});
+  expect(selector.getAttribute("data-selection-lock")).toBe("none");
+});
+
 // #1958: while the transport plays, the header names the Pattern the engine
 // plays and, while a switch is queued, the queued target (`GROOVE / 01 → 02`).
 test("the GROOVE header names the playing Pattern and the queued switch target", () => {

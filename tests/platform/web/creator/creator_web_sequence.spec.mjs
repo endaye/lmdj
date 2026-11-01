@@ -1513,6 +1513,9 @@ test("GROOVE current selection cancels a queued switch and preserves Truth throu
   await showSequenceLayer(page, "SETUP");
   await page.getByRole("slider", {name: "BPM", exact: true}).press("Home");
   await expect.poll(async () => (await inspectTruth(page)).bpm).toBe(40);
+  // The tempo edit locks Pattern selection until its follow-up refresh
+  // settles, and a lock closes an open picker (#2522).
+  await expect(sequencePattern(page)).toHaveAttribute("data-selection-lock", "none");
   await showSequenceLayer(page, "EDIT");
   const truthAtRest = await inspectTruth(page);
   const trigger = page.getByRole("button", {name: "Choose Pattern", exact: true});

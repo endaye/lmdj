@@ -64,6 +64,8 @@ interface SequenceTouchWorkspaceProps {
   onToggleMetronome(): void;
   // Pattern selection stays independent of recording authoring locks.
   patternSelectionLocked?: boolean;
+  // Why `patternSelectionLocked` holds, for the selector's observable (#2522).
+  patternSelectionLockReason?: string | null;
   countInBars?: CountInBars;
   onCountInBarsChange?(bars: CountInBars): void;
   countInLocked?: boolean;
@@ -117,8 +119,11 @@ export function SequenceTouchWorkspace(props: SequenceTouchWorkspaceProps) {
   // failed commit resyncs the base to the committed truth.
   const requestedBpmRef = useRef<number | null>(null);
   const requestedSwingRef = useRef<number | null>(null);
-  const selectionDisabled = selectTransportBusy(transport) || props.settingsActive === false ||
-    props.patternSelectionLocked === true;
+  const selectionLock = selectTransportBusy(transport) ? "transport"
+    : props.settingsActive === false ? "system"
+    : props.patternSelectionLocked === true ? props.patternSelectionLockReason ?? "locked"
+    : null;
+  const selectionDisabled = selectionLock !== null;
   const disabled = selectTransportBusy(transport) || selectTransportRecording(transport) ||
     props.settingsActive === false || props.countInLocked === true;
   // Grid editing is refused while the transport records (the Core refuses it
@@ -193,7 +198,8 @@ export function SequenceTouchWorkspace(props: SequenceTouchWorkspaceProps) {
         {/* Playing and opened recording queue the same selected SNAP boundary;
             authoring controls retain their separate recording lock. */}
         <PatternSelector index={patternIndex} patternIds={project.patterns.map((item) => item.patternId)}
-          patternId={headerPatternId} disabled={selectionDisabled} queuedIndex={queuedIndex}
+          patternId={headerPatternId} disabled={selectionDisabled} lockReason={selectionLock}
+          queuedIndex={queuedIndex}
           onSelect={props.onSwitch} />
         {layer === "edit" ? <span className="sequence-edit-tempo" aria-label="Project tempo">
           {project.bpm} BPM

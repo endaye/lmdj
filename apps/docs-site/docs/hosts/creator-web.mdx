@@ -838,7 +838,11 @@ reload; playing or an already opened recording queues the transport's Pattern sw
 at the engine's selected SEQ SNAP boundary（[#1958](https://github.com/endaye/lmdj/issues/1958)：旧 Pattern 播到边界才换，标题在排队期间显示
 `GROOVE / 01 → 02`，上屏继续命名真正在播的 Pattern，生效后选择跟随新
 Pattern）。Busy transport phases and the existing owner selection lock still
-disable selection; grid note editing keeps its separate recording lock. In EDIT, the
+disable selection, and so does a Tempo/Swing/Quantize edit from its request until
+its follow-up refresh settles ([#2522](https://github.com/endaye/lmdj/issues/2522)):
+a lock closes an open picker, so selection never looks free while one is still
+coming. The selector names the active lock in `data-selection-lock` (`none` when
+free). Grid note editing keeps its separate recording lock. In EDIT, the
 Pattern heading and read-only Project BPM share the first row; full-width
 EDIT/SETUP tabs sit below. SETUP retains its existing header. EDIT is the
 default, and a mode change returns to it.

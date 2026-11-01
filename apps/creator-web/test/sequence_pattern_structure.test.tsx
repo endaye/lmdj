@@ -181,3 +181,45 @@ test("a committed copy is selected even when making it runtime-current fails", a
   // The reload failure is still reported, not swallowed.
   expect(await screen.findByRole("alert")).toBeTruthy();
 });
+
+// #2522: a tempo edit locks Pattern selection from its request until its
+// follow-up Sequence refresh settles. Between the commit and that refresh the
+// picker must not look free, or a lock that is still coming closes it.
+test("a tempo edit keeps Pattern selection locked until its refresh settles", async () => {
+  const fixture = structureFixture();
+  let commit!: () => void;
+  let resumeRefresh!: () => void;
+  let holdRefresh = false;
+  const updateSequenceSettings = vi.fn(async (request: {bpm: number | null}) => {
+    await new Promise<void>((resolve) => { commit = resolve; });
+    fixture.truth.revision += 1;
+    holdRefresh = true;
+    return {
+      committedRevision: fixture.truth.revision, bpm: request.bpm ?? 120,
+      quantizeEnabled: true, swingPercent: 50, patternPublication: null,
+    };
+  });
+  const status = (fixture.session as unknown as {querySequenceStatus: () => Promise<unknown>})
+    .querySequenceStatus;
+  const querySequenceStatus = vi.fn(async () => {
+    if (holdRefresh) {
+      holdRefresh = false;
+      await new Promise<void>((resolve) => { resumeRefresh = resolve; });
+    }
+    return status();
+  });
+  Object.assign(fixture.session, {updateSequenceSettings, querySequenceStatus});
+  await openSetup(fixture);
+  const selector = screen.getByTestId("sequence-pattern");
+  await waitFor(() => expect(selector.getAttribute("data-selection-lock")).toBe("none"));
+  await userEvent.click(screen.getByRole("button", {name: "Decrease BPM"}));
+  await waitFor(() => expect(updateSequenceSettings).toHaveBeenCalledTimes(1));
+  // The commit is in flight.
+  expect(selector.getAttribute("data-selection-lock")).toBe("sequence-settings");
+  commit();
+  // Committed; its follow-up refresh has not finished yet.
+  await waitFor(() => expect(resumeRefresh).toBeDefined());
+  expect(selector.getAttribute("data-selection-lock")).not.toBe("none");
+  resumeRefresh();
+  await waitFor(() => expect(selector.getAttribute("data-selection-lock")).toBe("none"));
+});
