@@ -33,12 +33,55 @@ mergeInto(LibraryManager.library, {
       return `/lmdj-workspace/${parts.join("/")}`;
     },
 
+    // Resolved directory handles by path. Each getDirectoryHandle is a round
+    // trip to the browser's storage process, and one Project load resolves
+    // the same bundle ancestors for every file it touches (#2524). A hit
+    // never stands in for the requested directory itself: resolution starts
+    // at its deepest cached proper ancestor and always asks the browser for
+    // the remaining levels, and a missing entry below a cached ancestor is
+    // retried from the root, so a directory that this or another realm
+    // removed or replaced is never reported from memory.
+    handles: new Map(),
+    handleLimit: 1024,
+
     async directory(parts, create) {
-      let directory = await this.workspace();
-      for (const part of parts) {
-        directory = await directory.getDirectoryHandle(part, {create});
+      const start = this.cachedAncestor(parts);
+      try {
+        return await this.resolveDirectory(parts, start, create);
+      } catch (error) {
+        if (start.depth === 0 || !this.isMissingEntry(error)) throw error;
+        // Absence is only ever concluded from the root; this also replaces
+        // every cached level of the path.
+        return await this.resolveDirectory(
+            parts, {depth: 0, handle: null}, create);
+      }
+    },
+
+    cachedAncestor(parts) {
+      for (let depth = parts.length - 1; depth > 0; --depth) {
+        const handle = this.handles.get(parts.slice(0, depth).join("/"));
+        if (handle) return {depth, handle};
+      }
+      return {depth: 0, handle: null};
+    },
+
+    async resolveDirectory(parts, start, create) {
+      let directory = start.handle ?? await this.workspace();
+      for (let depth = start.depth; depth < parts.length; ++depth) {
+        directory = await directory.getDirectoryHandle(parts[depth], {create});
+        if (this.handles.size >= this.handleLimit) this.handles.clear();
+        this.handles.set(parts.slice(0, depth + 1).join("/"), directory);
       }
       return directory;
+    },
+
+    forgetDirectory(parts) {
+      const key = parts.join("/");
+      for (const cached of [...this.handles.keys()]) {
+        if (cached === key || cached.startsWith(`${key}/`)) {
+          this.handles.delete(cached);
+        }
+      }
     },
 
     async parent(parts, create) {
@@ -354,6 +397,7 @@ mergeInto(LibraryManager.library, {
     },
 
     async removeTreeParts(parts) {
+      this.forgetDirectory(parts);
       try {
         const [parent, name] = await this.parent(parts, false);
         await parent.removeEntry(name, {recursive: true});
@@ -1291,8 +1335,9 @@ mergeInto(LibraryManager.library, {
   lmdj_opfs_remove__deps: ["$LmdjOpfs"],
   lmdj_opfs_remove: (path, length) => LmdjOpfs.suspend(async () => {
     try {
-      const [parent, name] = await LmdjOpfs.parent(
-          LmdjOpfs.parts(path, length), false);
+      const parts = LmdjOpfs.parts(path, length);
+      LmdjOpfs.forgetDirectory(parts);
+      const [parent, name] = await LmdjOpfs.parent(parts, false);
       await parent.removeEntry(name).catch((error) => {
         if (!(error instanceof DOMException) || error.name !== "NotFoundError") {
           throw error;
@@ -1335,8 +1380,9 @@ mergeInto(LibraryManager.library, {
   lmdj_opfs_remove_tree__deps: ["$LmdjOpfs"],
   lmdj_opfs_remove_tree: (path, length) => LmdjOpfs.suspend(async () => {
     try {
-      const [parent, name] = await LmdjOpfs.parent(
-          LmdjOpfs.parts(path, length), false);
+      const parts = LmdjOpfs.parts(path, length);
+      LmdjOpfs.forgetDirectory(parts);
+      const [parent, name] = await LmdjOpfs.parent(parts, false);
       await parent.removeEntry(name, {recursive: true}).catch((error) => {
         if (!(error instanceof DOMException) || error.name !== "NotFoundError") {
           throw error;

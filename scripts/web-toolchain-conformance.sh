@@ -327,6 +327,7 @@ case "$command_name" in
     python3 "$web_test_root/toolchain/toolchain_identity_test.py"
     python3 "$web_test_root/project_io/project_io_web_timeout_policy_test.py"
     node --test "$web_test_root/project_io/opfs_writer_error_test.mjs"
+    node --test "$web_test_root/project_io/opfs_directory_cache_test.mjs"
     node --test "$web_test_root/project_io/opfs_browser_environment_test.mjs"
     node --test "$web_test_root/project_io/opfs_browser_process_state_test.mjs"
     node "$web_test_root/toolchain/playwright_webkit_abort_patch.mjs" check

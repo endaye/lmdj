@@ -249,6 +249,20 @@ checkpoint 比对通过的重放结果；之后的 load 只要 manifest 的交�
   共享同一份缓存（缓存自带互斥锁），不再为每次准备两次完整重放。
   其他 Host 的 store 和每次进程启动仍完整重放。
 
+### OPFS 目录句柄缓存
+
+OPFS 上每次 `getDirectoryHandle` 都要往返浏览器的存储进程，而每个 Web storage 调用
+原本都从 OPFS 根逐级解析目录。录音切换的 segment 工作一次要做约九次 Journal 读取、两次
+Truth load 和一次 flush 提交，每次都重新解析同一批 bundle 祖先目录，使切换后的第一次输入在
+netcup 上越过 1 秒等待（[#2524](https://github.com/endaye/lmdj/issues/2524)）。
+
+- Web storage 库按路径保留已解析的目录句柄。查找从最深的已缓存真祖先开始，其余各级仍向
+  浏览器请求，所以缓存命中从不代替被请求的目录本身。
+- 缓存祖先之下的缺失一律从根重新确认，因此本 realm 或其他 realm 删除或替换的目录不会从
+  内存里报告为存在；删除一个路径会清掉它的缓存子树。
+- Core 的校验规则、存储调用次数与持久化顺序不变（Owner 决策 2026-10-28 选项 A，
+  2026-11-02 随 #2524 启用）。
+
 ### Real OPFS evidence and remaining gaps
 
 `project_io_web_conformance.spec.mjs` 的 S2 fixture 调用实际 C++ journal API，
