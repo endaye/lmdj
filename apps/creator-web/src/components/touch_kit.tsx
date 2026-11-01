@@ -58,17 +58,21 @@ interface PatternSelectorProps {
   // queued target, shown after the current one (`GROOVE / 01 → 03`). Null or
   // omitted when nothing is queued.
   queuedIndex?: number | null;
+  // #2522: why selection is locked, exposed as `data-selection-lock` ("none"
+  // when free). A lock closes the picker, so observers can wait it out.
+  lockReason?: string | null;
   onSelect(patternId: string): void;
 }
 
-export function PatternSelector({index, patternIds, patternId, disabled, queuedIndex, onSelect}: PatternSelectorProps) {
+export function PatternSelector({index, patternIds, patternId, disabled, queuedIndex, lockReason, onSelect}: PatternSelectorProps) {
   const [open, setOpen] = useState(false);
   const trigger = useRef<HTMLButtonElement | null>(null);
   const hasQueuedSwitch = queuedIndex !== undefined && queuedIndex !== null && queuedIndex > 0;
   useEffect(() => { if (disabled) setOpen(false); }, [disabled]);
   return (
     <div className="pattern-selector" data-testid="sequence-pattern"
-      data-pattern-id={patternId} data-pattern-count={patternIds.length}>
+      data-pattern-id={patternId} data-pattern-count={patternIds.length}
+      data-selection-lock={disabled ? lockReason ?? "locked" : "none"}>
       <button ref={trigger} type="button" className="touch-control"
         aria-label="Choose Pattern" aria-haspopup="dialog" disabled={disabled}
         onClick={() => setOpen(true)}>
