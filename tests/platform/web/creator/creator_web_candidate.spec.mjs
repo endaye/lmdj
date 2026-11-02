@@ -501,8 +501,15 @@ for (const bank of [0, 1]) {
     await page.getByRole("combobox", {name: "Slice source"}).selectOption(sourceId);
     // Prepare this Pattern while stopped: a live Pattern change deliberately
     // takes effect at a later musical boundary, after Bank acknowledgement.
+    // An earlier publication already carries the empty Pattern, so wait for
+    // the reload this Refresh sends; its Pads stay unavailable until it lands.
+    const reloads = (await evidence(page, "snapshot.reload")).length;
     await page.getByRole("button", {name: "Refresh slices and Project"}).click();
-    await expect.poll(async () => success((await last(page, "snapshot.reload")).response).pattern_id).toBe(emptyId);
+    await expect.poll(async () => {
+      const entries = await evidence(page, "snapshot.reload");
+      return entries.length > reloads ? success(entries.at(-1).response).pattern_id : null;
+    }).toBe(emptyId);
+    await expect(page.getByRole("region", {name: "Project audio status"})).toHaveCount(0);
     await wakeAudioWithPad(page);
     await expect(page.getByTestId("audio-state")).toHaveText("Audio running");
     await target(page, 1, set.recipes[1].candidate_id, 0, bank);
