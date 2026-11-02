@@ -183,6 +183,14 @@ test("published Creator completes authoring, playback, and durable reload", asyn
     buffer: pcm16Wav(),
   });
   await page.getByRole("button", {name: "Confirm replace"}).click();
+  // Every Host since #411 decodes the file into the Long Source editor and
+  // replaces the Sample only on Commit selection; the editor closes only when
+  // that commit lands. Replace Sample stays enabled throughout the decode, so
+  // it cannot stand in for either step (#2528).
+  const longSource = page.getByRole("dialog", {name: /^Pad A0?1 Long Source$/});
+  await expect(longSource).toBeVisible({timeout: 120_000});
+  await longSource.getByRole("button", {name: "Commit selection"}).click();
+  await expect(longSource).toBeHidden({timeout: 120_000});
   await expect(page.getByRole("button", {name: "Replace Sample"}))
     .toBeEnabled({timeout: 120_000});
 
