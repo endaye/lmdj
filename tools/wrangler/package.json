@@ -3,6 +3,6 @@
   "version": "0.0.0",
   "private": true,
   "dependencies": {
-    "wrangler": "4.150.0"
+    "wrangler": "4.153.0"
   }
 }
